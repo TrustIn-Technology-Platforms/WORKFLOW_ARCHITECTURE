@@ -17,11 +17,15 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Chromium (noon, Loxo) with all OS deps — required.
-RUN playwright install --with-deps chromium
-# Google Chrome channel (Juicebox) — best-effort so a channel hiccup can't block
-# the whole deploy; noon and Loxo still work on bundled Chromium.
-RUN playwright install chrome || true
+# Browsers + OS deps. `python:3.12-slim` has no apt package lists, so
+# `apt-get update` must run before playwright's `--with-deps` shells out to apt
+# (its absence is the exit-code-100 failure). Chromium (noon, Loxo) is required;
+# the Chrome channel (Juicebox) is best-effort so a channel hiccup can't block
+# the whole deploy.
+RUN apt-get update \
+    && playwright install --with-deps chromium \
+    && (playwright install --with-deps chrome || true) \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
