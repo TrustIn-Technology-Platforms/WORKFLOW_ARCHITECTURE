@@ -11,6 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
     HEADLESS=true \
     LOG_JSON=true \
     SESSION_DIR=/data/sessions \
+    BROWSER_PROFILE_DIR=/data/profiles \
     ARTIFACT_DIR=/data/artifacts
 
 COPY requirements.txt .
