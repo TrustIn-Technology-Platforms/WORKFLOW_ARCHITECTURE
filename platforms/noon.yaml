@@ -153,8 +153,9 @@ steps:
     value: "{{ emails[0].subject | noon_tokens }}"
 
   - action: fill
+    description: the InMail's subject - the document's own InMail section when it has one, else email 1's
     selector: "input.absolute.inset-0 >> nth=1"
-    value: "{{ emails[0].subject | noon_tokens }}"
+    value: "{{ inmail.subject | noon_tokens }}"
 
   # -------------------------------------------------------------------------
   # 5. Bodies - Draft.js, paste event, Ctrl+A first so the template copy goes
@@ -172,10 +173,13 @@ steps:
     value: "{{ emails[1].body_text | noon_tokens }}"
 
   - action: fill_rich
-    description: step 4, LinkedIn InMail - the first email again, on the other channel
+    description: >-
+      step 4, LinkedIn InMail - the document's own InMail section when it has
+      one (documents carry channel sections since 2026-08-28), else the first
+      email again on the other channel, as before.
     selector: ".public-DraftEditor-content >> nth=2"
-    value_html: "{{ emails[0].body_html | noon_tokens }}"
-    value: "{{ emails[0].body_text | noon_tokens }}"
+    value_html: "{{ inmail.body_html | noon_tokens }}"
+    value: "{{ inmail.body_text | noon_tokens }}"
 
   - action: fill_rich
     description: step 5, closing email in the same thread
@@ -184,10 +188,13 @@ steps:
     value: "{{ emails[2].body_text | noon_tokens }}"
 
   - action: fill_rich
-    description: the "If accepted -> then send" message, sent after a connection request is accepted
+    description: >-
+      the "If accepted -> then send" message, sent after a connection request
+      is accepted - the document's Connect/LinkedIn section when it has one,
+      else the first email, as before.
     selector: ".public-DraftEditor-content >> nth=4"
-    value_html: "{{ emails[0].body_html | noon_tokens }}"
-    value: "{{ emails[0].body_text | noon_tokens }}"
+    value_html: "{{ connection_note.body_html | noon_tokens }}"
+    value: "{{ connection_note.body_text | noon_tokens }}"
 
   - action: wait
     description: let the last autosave go out

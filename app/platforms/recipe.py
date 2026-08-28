@@ -24,7 +24,8 @@ KINDS = ("advert", "email_sequence")
 # Kept in step with build_context() in engine.py - `steps` is the all-channel
 # list and `role_name` the resolved role/sequence name.
 CONTEXT_ROOTS = {
-    "advert", "email", "emails", "email_count", "steps", "role_name", "row", "now"
+    "advert", "email", "emails", "email_count", "steps", "role_name",
+    "inmail", "connection_note", "row", "now",
 }
 
 

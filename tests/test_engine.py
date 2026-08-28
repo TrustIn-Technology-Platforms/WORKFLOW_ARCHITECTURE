@@ -227,3 +227,24 @@ def test_build_context_role_name_falls_back_for_emails_only_document():
         url="", document_url="", status="", platforms=[], raw_properties={},
     )
     assert build_context(doc, row, {})["role_name"] == "Abundant - Staff Platform Engineer - SF-DUB"
+
+
+def test_channel_slots_use_document_copy_with_email_fallback():
+    """noon's InMail slot and connection message take the document's own
+    channel sections when present, and fall back to email 1 for the
+    emails-only documents that posted before channels existed."""
+    from app.platforms.engine import build_context
+
+    ctx = build_context(_multichannel_document(), None, {})
+    assert ctx["inmail"]["body_text"] == "Hi {first_name}, an InMail."
+    assert ctx["connection_note"]["body_text"] == "Hi {first_name}, connecting."
+
+    from app.models import Block
+
+    emails_only = parser.parse_document([
+        Block("heading", 2, "Email 1", "<h2>Email 1</h2>"),
+        Block("body", 0, "Hi there, only email.", "<p>Hi there, only email.</p>"),
+    ])
+    ctx2 = build_context(emails_only, None, {})
+    assert ctx2["inmail"]["body_text"] == "Hi there, only email."
+    assert ctx2["connection_note"]["body_text"] == "Hi there, only email."

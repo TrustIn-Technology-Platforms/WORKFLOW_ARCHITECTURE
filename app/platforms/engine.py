@@ -69,6 +69,24 @@ def _role_name(
     return ""
 
 
+def _channel_step(
+    document: ParsedDocument, channel: str, email_steps: list[EmailStep]
+) -> dict[str, Any]:
+    """The first step of `channel`, else the first email as a stand-in.
+
+    The stand-in keeps a fixed-slot recipe (noon's InMail slot, its
+    connection-accepted message) working on an emails-only document. An empty
+    dict-shaped context would fill the slot with nothing, which the platform
+    saves - worse than repeating the opener.
+    """
+    for step in document.emails:
+        if step.channel == channel:
+            return step.as_context()
+    if email_steps:
+        return email_steps[0].as_context()
+    return EmailStep(order=1, subject="", body_text="", body_html="").as_context()
+
+
 def build_context(
     document: ParsedDocument,
     row: NotionRow | None = None,
@@ -114,6 +132,13 @@ def build_context(
         # Every step, all channels, in document order - for a recipe that needs
         # the LinkedIn or InMail copy rather than an email slot.
         "steps": [e.as_context() for e in document.emails],
+        # The document's own InMail and connection-note copy, for platforms
+        # whose campaign has slots for those channels (noon). Documents used to
+        # carry emails only, so recipes recycled email 1 into these slots; fall
+        # back to that when a document has no such section, so email-only
+        # documents keep posting exactly as before.
+        "inmail": _channel_step(document, "inmail", email_steps),
+        "connection_note": _channel_step(document, "linkedin", email_steps),
         # The name a recipe should give the role/sequence: row title, else a
         # real advert title, else the first email's subject. See _role_name.
         "role_name": _role_name(document.source_name, row, advert, email_steps),
