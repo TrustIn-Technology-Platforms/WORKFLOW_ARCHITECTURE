@@ -9,6 +9,7 @@ identical to a human but reject each other's payloads.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -146,7 +147,15 @@ def build_value(prop_type: str, value: Any) -> dict[str, Any] | None:
     if prop_type in ("title", "rich_text"):
         return {prop_type: rich_text(str(value) if value is not None else "")}
     if prop_type == "url":
-        return {"url": str(value) if value else None}
+        # A url column holds exactly one link. A multi-platform post produces
+        # "platform: url" lines (meant for a rich_text column); writing that
+        # text here is a 400, so keep the first URL rather than fail a row
+        # whose posts all succeeded.
+        text = str(value) if value else ""
+        if text and not text.startswith(("http://", "https://")):
+            found = re.search(r"https?://\S+", text)
+            text = found.group(0) if found else text
+        return {"url": text or None}
     if prop_type == "email":
         return {"email": str(value) if value else None}
     if prop_type == "select":
