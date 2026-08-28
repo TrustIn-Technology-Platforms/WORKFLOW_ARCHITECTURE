@@ -1,8 +1,8 @@
-# Playwright's own image: the matching browser build and every system library
-# are already present, which is the step most often missed on a plain Python
-# base (it fails only at the first browser launch). Pin the tag to the
-# playwright version in requirements.txt (1.48.0).
-FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
+# Plain Python base + explicit browser install. This avoids depending on a
+# specific mcr.microsoft.com/playwright tag existing (a wrong tag fails the
+# build in seconds at FROM). `playwright install --with-deps` pulls the matching
+# browser build AND every system library it needs via apt.
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -17,9 +17,10 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Chromium ships in the base image; Juicebox drives the Chrome *channel*
-# (platforms/juicebox.yaml: browser_channel: chrome), which is a separate
-# install. noon and Loxo use the bundled Chromium.
+# Chromium (noon, Loxo) with all OS deps — required.
+RUN playwright install --with-deps chromium
+# Google Chrome channel (Juicebox) — best-effort so a channel hiccup can't block
+# the whole deploy; noon and Loxo still work on bundled Chromium.
 RUN playwright install chrome || true
 
 COPY . .
