@@ -1,0 +1,197 @@
+# noon.ai - create a role, import the team's shared campaign template, and fill
+# its steps from the document.
+#
+# This replays, step for step, the run done by hand-in-code on 2026-08-27
+# against the throwaway role "ZZ TEST - delete me" - see
+# docs/platforms/noon.md#the-live-run-2026-08-27. Every selector below was
+# used in that run. The UI has no ids, names or data-testids, so selectors are
+# visible text and DOM position; when noon changes copy, the failure screenshot
+# shows the new wording.
+#
+# Facts that shape the recipe:
+#   - The campaign editor AUTOSAVES on every change. There is no Save button.
+#     So the only place a dry run can stop is before the role is created -
+#     which is where `submit: true` sits. A dry run therefore proves login,
+#     navigation and the modal, nothing more.
+#   - The document's emails are mapped onto FIXED slots in Nicholas's template
+#     (connection request -> email -> email same-thread -> InMail -> email
+#     same-thread), not one step per email. A document with fewer than three
+#     emails fails at the first empty slot with a clear message.
+#   - Draft.js editors sit in DOM order: steps 2, 3, 4, 5, then the "If
+#     accepted" trigger message. Step 1 (connection request) has no editor on a
+#     non-Premium LinkedIn account. Subject inputs: step 2, then step 4.
+
+key: noon
+label: noon.ai
+kind: email_sequence
+enabled: true           # proven: `post noon --live` reproduced the hand-driven campaign on a throwaway role, 2026-08-27
+
+login:
+  url: https://www.noon.ai/portal
+  logged_out_pattern: "/log-in"
+  session_file: noon.storage_state.json
+
+defaults:
+  base_url: https://www.noon.ai
+  timeout_ms: 25000
+  template_name: Nicholas Template      # the shared template to import; owned by nicholas@
+
+# ---------------------------------------------------------------------------
+# 1. Create the role
+# ---------------------------------------------------------------------------
+steps:
+  - action: goto
+    url: "{{ base_url }}/portal/sourcing"
+    wait_until: domcontentloaded
+
+  - action: wait
+    ms: 4000
+
+  - action: dismiss
+    description: cookie banner and the "unable to reach our servers" toast - both appear on every load
+    selector:
+      - "text='Accept all'"
+      - "text='Dismiss'"
+
+  - action: click
+    description: opens the "Create New Role" modal
+    selector: "text='Create new role'"
+
+  - action: fill
+    description: >-
+      role name - the one field in the modal. A name matching no Loxo role
+      creates a standalone one. role_name is the Notion row title when posting
+      from a row, and falls back to the advert title or first email subject for
+      an emails-only document (advert.title alone is empty for those).
+    selector: "[placeholder^='Search existing ATS roles']"
+    value: "{{ role_name }}"
+
+  - action: click
+    description: creates the role. Nothing before this point changes anything, so dry-run stops here.
+    selector: "text='Submit'"
+    submit: true
+
+  - action: wait_for
+    description: the role page - no wizard, it lands straight here
+    selector: "text='Review & Contact'"
+    timeout_ms: 40000
+
+  - action: capture_url
+    description: /portal/sourcing?role=<uuid>
+    as: post_url
+
+  # -------------------------------------------------------------------------
+  # 2. Open the campaign editor and import the shared template
+  # -------------------------------------------------------------------------
+  - action: click
+    selector: "text='Review & Contact'"
+
+  - action: wait_for
+    selector: "text='Edit outreach message'"
+    timeout_ms: 40000
+
+  - action: wait
+    ms: 3000
+
+  - action: click
+    description: sits under a floating panel, so a plain click times out
+    selector: "text='Edit outreach message'"
+    force: true
+
+  - action: wait_for
+    selector: "text='Outreach campaign'"
+
+  - action: click
+    selector: "text='Use shared template'"
+
+  - action: click
+    description: exact match, so "Nicholas Template (1)" (a personal copy) is not picked by mistake
+    selector: "text='{{ template_name }}'"
+
+  - action: wait_for
+    description: the import arrives as an alternate campaign tab
+    selector: "text='Add alternate campaign'"
+
+  - action: wait
+    ms: 3000
+
+  # -------------------------------------------------------------------------
+  # 3. Remove the default campaign so the import is the only one. Without this
+  #    noon A/B-splits candidates between placeholder copy and ours.
+  # -------------------------------------------------------------------------
+  - action: click
+    selector: "[aria-label='Remove Main campaign']"
+    force: true
+
+  - action: click
+    description: the confirm dialog offers "Keep campaign" / "Remove from role"
+    selector: "text='Remove from role'"
+
+  - action: wait_for
+    description: Nicholas's five steps are on screen
+    selector: "text='Step 5'"
+
+  - action: wait
+    ms: 2000
+
+  # -------------------------------------------------------------------------
+  # 4. Subjects - the two steps that have one (email step 2, InMail step 4)
+  # -------------------------------------------------------------------------
+  - action: fill
+    selector: "input.absolute.inset-0 >> nth=0"
+    value: "{{ emails[0].subject | noon_tokens }}"
+
+  - action: fill
+    selector: "input.absolute.inset-0 >> nth=1"
+    value: "{{ emails[0].subject | noon_tokens }}"
+
+  # -------------------------------------------------------------------------
+  # 5. Bodies - Draft.js, paste event, Ctrl+A first so the template copy goes
+  # -------------------------------------------------------------------------
+  - action: fill_rich
+    description: step 2, email
+    selector: ".public-DraftEditor-content >> nth=0"
+    value_html: "{{ emails[0].body_html | noon_tokens }}"
+    value: "{{ emails[0].body_text | noon_tokens }}"
+
+  - action: fill_rich
+    description: step 3, email in the same thread
+    selector: ".public-DraftEditor-content >> nth=1"
+    value_html: "{{ emails[1].body_html | noon_tokens }}"
+    value: "{{ emails[1].body_text | noon_tokens }}"
+
+  - action: fill_rich
+    description: step 4, LinkedIn InMail - the first email again, on the other channel
+    selector: ".public-DraftEditor-content >> nth=2"
+    value_html: "{{ emails[0].body_html | noon_tokens }}"
+    value: "{{ emails[0].body_text | noon_tokens }}"
+
+  - action: fill_rich
+    description: step 5, closing email in the same thread
+    selector: ".public-DraftEditor-content >> nth=3"
+    value_html: "{{ emails[2].body_html | noon_tokens }}"
+    value: "{{ emails[2].body_text | noon_tokens }}"
+
+  - action: fill_rich
+    description: the "If accepted -> then send" message, sent after a connection request is accepted
+    selector: ".public-DraftEditor-content >> nth=4"
+    value_html: "{{ emails[0].body_html | noon_tokens }}"
+    value: "{{ emails[0].body_text | noon_tokens }}"
+
+  - action: wait
+    description: let the last autosave go out
+    ms: 4000
+
+# The emails are mapped onto fixed slots above, so nothing repeats per email.
+per_email: []
+
+finalise:
+  - action: press
+    description: closes the editor - autosave already happened
+    key: Escape
+
+  - action: wait
+    ms: 1500
+
+  - action: capture_url
+    as: post_url

@@ -1,0 +1,40 @@
+# Loxo Outreach — the email-sequence half, driven by a hand-written Python
+# adapter (app/platforms/loxo.py), not YAML steps. The editor is too stateful
+# for the recipe engine: slow boot with a "Try again" card, create-before-name
+# (no dry run past creation, like noon), stages grown one modal at a time, and a
+# per-stage "reply in email thread" toggle. See docs/platforms/loxo.md and
+# docs/07-platform-recipes.md (the escape hatch).
+#
+# The JOB half (POST jobs/create) is a separate API call, not this recipe —
+# added when a Loxo Open API key exists.
+
+key: loxo
+label: Loxo
+kind: email_sequence
+enabled: true
+driver: loxo
+
+login:
+  # The homepage boots the SPA and, logged in, shows the "Outreach" nav. Cold
+  # deep-links to a campaign sometimes hit an in-app "Try again" card, so the
+  # driver always starts here. Logged out it redirects to /login (Continue with
+  # Google / Microsoft / work-email).
+  url: https://app.loxo.co/
+  ready_selector: "text=Outreach"
+  logged_out_pattern: "/login"
+  session_file: loxo.storage_state.json
+
+defaults:
+  base_url: https://app.loxo.co
+  # Numeric agency id in app URLs (/agencies/28356/...), distinct from the API
+  # slug `trustin-ltd`. The campaigns route uses this id.
+  agency_id: "28356"
+  agency_slug: trustin-ltd
+  # Appended to the end of every Loxo email body (Sohaib's request, 2026-08-28).
+  # The stage editor is typed into as plain text, so this is plain text; "Book
+  # time to meet with me" has no booking URL yet.
+  signature: |-
+    Marcus Gardiner-Hill
+    Founder at TrustIn
+    https://www.trust-in.co.uk/
+    Book time to meet with me

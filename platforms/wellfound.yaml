@@ -1,0 +1,40 @@
+# Wellfound (formerly AngelList Talent) — job advert posting.
+#
+# STUB. `enabled: false`, one placeholder step. It exists so
+# `python -m app.cli login wellfound` has somewhere to send the browser and so
+# the Notion `Platforms` option has a recipe key to resolve to. The real steps
+# come from a recording of one post done by hand — see
+# docs/platforms/wellfound.md, which also records the reason nothing has been
+# recorded yet: Wellfound's Recruiter Code of Conduct bans third-party
+# recruiters and staffing agencies, so which account posts is a decision that
+# has to be taken before any live run.
+#
+# This is the first `kind: advert` recipe. The others post outreach sequences;
+# this one posts the job advert half of the document, and the advert-only
+# documents (Alembic, real-advert-only.docx) are exactly its input.
+
+key: wellfound
+label: Wellfound
+kind: advert
+enabled: false
+
+login:
+  # Plain Rails form (#user_email / #user_password / "Continue with Google").
+  # Anonymous probe 2026-08-28: every /recruit URL bounces a logged-out visitor
+  # to /login?after_sign_in=..., so the landing URL is the session check.
+  # `ready_selector` is deliberately unset until a logged-in page has been seen
+  # (see docs/platforms/juicebox.md for why a guessed selector is worse than
+  # none — it fails a perfectly valid session).
+  url: https://wellfound.com/login
+  logged_out_pattern: "/login"
+  session_file: wellfound.storage_state.json
+
+defaults:
+  base_url: https://wellfound.com
+  # Where the help centre says "Post a Job" lives for a logged-in recruiter.
+  jobs_url: https://wellfound.com/recruit/jobs-beta
+
+steps:
+  - action: goto
+    url: "{{ jobs_url }}"
+    description: placeholder — replaced by the recording

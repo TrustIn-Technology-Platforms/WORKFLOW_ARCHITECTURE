@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.local
+
+# Browser sessions contain live auth cookies - never commit these.
+.sessions/
+*.storage_state.json
+
+# Chrome profiles hold the same credentials, and a great deal more besides.
+.profiles/
+
+# Recorder drafts. Written from a live session, so they can contain values
+# typed during the recording. Finish one, review it, then rename to <key>.yaml.
+platforms/*.recorded.yaml
+platforms/*.recorded.yml
+
+# Playwright traces / screenshots from failed runs.
+artifacts/
+!artifacts/.gitkeep
+
+.pytest_cache/
+.ruff_cache/

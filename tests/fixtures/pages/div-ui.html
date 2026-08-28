@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Div-built portal</title>
+<!--
+  A UI with no semantic markup whatsoever: no <button>, no role, no label, no id
+  and no test id. Every control is a div made clickable with a pointer cursor.
+  This is not a strawman - it is how noon.ai's portal is built, and a recorder
+  that only listens for buttons captures precisely nothing from it.
+-->
+<style>
+  .cursor-pointer { cursor: pointer; }
+  .row { padding: 8px; }
+</style>
+
+<div class="px-4 py-2 text-sm font-medium cursor-pointer">Home</div>
+<div class="px-4 py-2 rounded-md bg-blue-500 text-white cursor-pointer">Create new role</div>
+
+<div class="row">
+  <div class="text-xs text-gray-500">Role title</div>
+  <input class="w-full px-4 py-2 text-sm rounded-md border">
+</div>
+
+<div class="row">
+  <div class="text-xs text-gray-500">Description</div>
+  <div class="prose min-h-[80px] border" contenteditable="true"></div>
+</div>
+
+<div class="px-4 py-2 rounded-md cursor-pointer">Accept all</div>
+
+<script>
+  // The controls do something, so a click is not a no-op - but nothing about
+  // the behaviour is what the recorder keys off.
+  document.querySelectorAll('.cursor-pointer').forEach((el) => {
+    el.addEventListener('click', () => { el.dataset.clicked = 'yes'; });
+  });
+</script>

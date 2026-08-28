@@ -1,0 +1,16 @@
+# Never bake secrets or live sessions into the image — sessions belong on the
+# mounted volume, and .env is set as Railway variables.
+.env
+.env.*
+.sessions/
+.profiles/
+artifacts/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+tests/
+scratchpad/
+*.trace.zip

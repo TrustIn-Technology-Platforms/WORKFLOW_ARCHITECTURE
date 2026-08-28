@@ -1,0 +1,39 @@
+# Juicebox (PeopleGPT) — email sequence creation.
+#
+# Juicebox is driven by a hand-written Python adapter, not YAML steps: the step
+# body is a TinyMCE editor inside an iframe reached through its own JS API, only
+# the active step is mounted, steps are grown one at a time with an "Add step"
+# button, and only the first step has a Subject. That is more than the recipe
+# actions can express, so this file names a `driver` and the flow lives in
+# app/platforms/juicebox.py. See docs/platforms/juicebox.md and
+# docs/07-platform-recipes.md (the escape hatch).
+
+key: juicebox
+label: Juicebox
+kind: email_sequence
+enabled: true
+driver: juicebox
+
+# Playwright's bundled Chromium crashed the renderer here (STATUS_ACCESS_VIOLATION)
+# mid-login and saved a profile with no session. The installed Chrome loads the
+# heavily-instrumented page without dying. Per-platform on purpose: a profile
+# belongs to the browser that wrote it, so noon and Loxo keep bundled Chromium.
+browser_channel: chrome
+
+login:
+  # The app root handles auth itself (/login is 404 on both hosts). Logged in it
+  # redirects to /project/<id>/home; the "Sequences" nav item only the logged-in
+  # shell renders is the session check. The app paints blank for ~20-30s and
+  # never fires domcontentloaded, so the driver waits on `commit` and polls for
+  # "Sequences" rather than a fixed selector timeout.
+  url: https://app.juicebox.ai/
+  ready_selector: "text=Sequences"
+  session_file: juicebox.storage_state.json
+
+defaults:
+  base_url: https://app.juicebox.ai
+  marketing_url: https://juicebox.ai
+  # Where the sequence list lives. Optional: if unset, the driver clicks the
+  # "Sequences" nav item instead. Project-scoped in the URL, but the list shows
+  # every sequence regardless of project.
+  sequences_url: https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW/sequences

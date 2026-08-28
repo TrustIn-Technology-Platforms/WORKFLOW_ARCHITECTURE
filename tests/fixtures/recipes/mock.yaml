@@ -1,0 +1,94 @@
+# Drives tests/fixtures/pages/mock-sequence.html.
+#
+# Structurally identical to platforms/noon.yaml - create a role, open the
+# sequence, add one step per email, save. The selectors here are real, so this
+# is what proves the engine works before a live platform is involved.
+
+key: mock
+label: Mock ATS
+kind: email_sequence
+enabled: true
+
+defaults:
+  timeout_ms: 8000
+
+steps:
+  - action: fill
+    description: role title
+    selector: "#title"
+    value: "{{ advert.title }}"
+
+  - action: combobox
+    description: location autocomplete
+    selector: "#location"
+    value: "{{ advert.location }}"
+    option_selector: "#location-options [role=option]"
+    optional: true
+
+  - action: select
+    description: employment type
+    selector: "#employmentType"
+    value: "{{ advert.employment_type }}"
+    map:
+      Permanent: FULL_TIME
+      Contract: CONTRACT
+    default: FULL_TIME
+    optional: true
+
+  - action: fill_rich
+    description: role description
+    selector: "#description"
+    value_html: "{{ advert.body_html }}"
+    value: "{{ advert.body_text }}"
+
+  - action: click
+    selector: "#save-role"
+
+  - action: wait_for
+    selector: "#tab-sequence"
+
+  - action: click
+    description: open the sequence tab
+    selector: "#tab-sequence"
+
+  - action: wait_for
+    selector: "#add-step"
+
+per_email:
+  - action: click
+    selector: "#add-step"
+
+  - action: wait_for
+    selector: "#step-dialog[open]"
+
+  - action: fill
+    selector: "#subject"
+    value: "{{ email.subject }}"
+
+  - action: fill_rich
+    description: the email body - the point of the whole run
+    selector: "#step-dialog .ProseMirror"
+    value_html: "{{ email.body_html }}"
+    value: "{{ email.body_text }}"
+
+  - action: fill
+    selector: "#delay"
+    value: "{{ email.delay_days }}"
+    optional: true
+
+  - action: click
+    selector: "#save-step"
+
+  - action: wait_for_hidden
+    selector: "#step-dialog[open]"
+
+finalise:
+  - action: click
+    selector: "#save-sequence"
+    submit: true
+
+  - action: wait_for
+    selector: "#saved-banner"
+
+  - action: capture_url
+    as: post_url

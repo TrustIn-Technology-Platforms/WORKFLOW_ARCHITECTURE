@@ -1,0 +1,145 @@
+<!doctype html>
+<!--
+  Stands in for a real sequence editor while a platform's markup is unknown.
+
+  The editors below behave the way Quill, ProseMirror and TipTap do: they are
+  contenteditable, they ignore direct DOM writes from outside, and they build
+  their content from the `paste` event's text/html. That is exactly the
+  behaviour `fill_rich` has to cope with, so a recipe that drives this page is
+  exercising the same code path a real platform will.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock sequence editor</title>
+  <style>
+    body { font: 15px system-ui, sans-serif; margin: 24px; max-width: 780px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input, select { width: 100%; padding: 8px; }
+    .editor { border: 1px solid #999; min-height: 90px; padding: 8px; }
+    button { margin-top: 12px; padding: 8px 14px; }
+    dialog { width: 620px; }
+    #steps li { margin: 6px 0; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Mock ATS</h1>
+
+  <section id="role-form">
+    <label for="title">Role title</label>
+    <input id="title" name="title">
+
+    <label for="location">Location</label>
+    <input id="location" name="location" role="combobox" autocomplete="off">
+    <ul id="location-options" class="hidden"></ul>
+
+    <label for="employmentType">Employment type</label>
+    <select id="employmentType" name="employmentType">
+      <option value="">-</option>
+      <option value="FULL_TIME">Full time</option>
+      <option value="CONTRACT">Contract</option>
+    </select>
+
+    <label>Description</label>
+    <div id="description" class="editor ql-editor" contenteditable="true"></div>
+
+    <button id="save-role">Create role</button>
+  </section>
+
+  <section id="role-page" class="hidden">
+    <h2 id="role-heading"></h2>
+    <button id="tab-sequence" role="tab">Contact email sequence</button>
+
+    <div id="sequence" class="hidden">
+      <button id="add-step">Add step</button>
+      <ol id="steps"></ol>
+      <button id="save-sequence">Save sequence</button>
+      <p id="saved-banner" class="hidden">Sequence is active</p>
+    </div>
+  </section>
+
+  <dialog id="step-dialog">
+    <label for="subject">Subject</label>
+    <input id="subject" name="subject">
+
+    <label>Body</label>
+    <div id="step-body" class="editor ProseMirror" contenteditable="true"></div>
+
+    <label for="delay">Delay days</label>
+    <input id="delay" name="delay" type="number">
+
+    <button id="save-step">Save step</button>
+  </dialog>
+
+  <script>
+    // Editors keep their own model and only accept content through a paste
+    // event, the way every real rich-text editor does.
+    for (const editor of document.querySelectorAll('.editor')) {
+      editor.addEventListener('paste', (event) => {
+        event.preventDefault();
+        const html = event.clipboardData.getData('text/html');
+        const text = event.clipboardData.getData('text/plain');
+        editor.innerHTML = html || text.replace(/\n/g, '<br>');
+        editor.dataset.wrote = 'paste';
+      });
+    }
+
+    const LOCATIONS = ['Manchester (hybrid)', 'London', 'Remote - UK'];
+    const locationInput = document.getElementById('location');
+    const options = document.getElementById('location-options');
+    locationInput.addEventListener('input', () => {
+      const typed = locationInput.value.toLowerCase();
+      const hits = LOCATIONS.filter((l) => l.toLowerCase().includes(typed));
+      options.innerHTML = hits
+        .map((l) => `<li role="option" tabindex="0">${l}</li>`)
+        .join('');
+      options.classList.toggle('hidden', hits.length === 0 || !typed);
+    });
+    options.addEventListener('click', (event) => {
+      if (event.target.matches('[role=option]')) {
+        locationInput.value = event.target.textContent;
+        locationInput.dataset.committed = 'true';
+        options.classList.add('hidden');
+      }
+    });
+
+    document.getElementById('save-role').addEventListener('click', () => {
+      const title = document.getElementById('title').value;
+      if (!title) { return; }
+      document.getElementById('role-form').classList.add('hidden');
+      document.getElementById('role-page').classList.remove('hidden');
+      document.getElementById('role-heading').textContent = title;
+      history.replaceState({}, '', '?role=8842');
+    });
+
+    document.getElementById('tab-sequence').addEventListener('click', () => {
+      document.getElementById('sequence').classList.remove('hidden');
+    });
+
+    const dialog = document.getElementById('step-dialog');
+    document.getElementById('add-step').addEventListener('click', () => {
+      document.getElementById('subject').value = '';
+      document.getElementById('delay').value = '';
+      document.getElementById('step-body').innerHTML = '';
+      dialog.showModal();
+    });
+
+    document.getElementById('save-step').addEventListener('click', (event) => {
+      event.preventDefault();
+      const item = document.createElement('li');
+      item.dataset.subject = document.getElementById('subject').value;
+      item.dataset.delay = document.getElementById('delay').value;
+      item.dataset.body = document.getElementById('step-body').innerHTML;
+      item.textContent = item.dataset.subject;
+      document.getElementById('steps').appendChild(item);
+      dialog.close();
+    });
+
+    document.getElementById('save-sequence').addEventListener('click', () => {
+      document.getElementById('saved-banner').classList.remove('hidden');
+      history.replaceState({}, '', '?role=8842&sequence=live');
+    });
+  </script>
+</body>
+</html>
