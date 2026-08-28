@@ -1,8 +1,10 @@
-# Plain Python base + explicit browser install. This avoids depending on a
-# specific mcr.microsoft.com/playwright tag existing (a wrong tag fails the
-# build in seconds at FROM). `playwright install --with-deps` pulls the matching
-# browser build AND every system library it needs via apt.
-FROM python:3.12-slim
+# Plain Python base + explicit browser install, avoiding a dependency on a
+# specific mcr.microsoft.com/playwright tag. Pin to bookworm (Debian 12): the
+# bare `slim` tag now resolves to trixie (Debian 13), which Playwright 1.48
+# doesn't recognize — it falls back to an Ubuntu dep list naming font packages
+# (ttf-unifont, ttf-ubuntu-font-family) that don't exist there, and apt exits
+# 100. bookworm is a Playwright-supported release, so `--with-deps` resolves.
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
