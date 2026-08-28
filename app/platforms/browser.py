@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -235,6 +236,44 @@ class BrowserRunner:
         context.set_default_timeout(settings.action_timeout_ms)
         context.set_default_navigation_timeout(settings.nav_timeout_ms)
         await context.add_init_script(_STEALTH_JS)
+
+        # Chrome encrypts the profile's cookie store with an OS-bound key
+        # (DPAPI on Windows), so a profile captured on a laptop arrives on a
+        # Linux server with unreadable cookies - localStorage/IndexedDB survive,
+        # cookies do not (noon and Loxo authenticate by cookie; Juicebox does
+        # not, which is why only it survived the move). The upload endpoint
+        # drops an `.import-cookies` flag next to freshly imported profiles;
+        # when present, inject the decrypted cookies Playwright exported into
+        # <session_dir>/<profile>.storage_state.json, then consume the flag so
+        # a server-side cookie refresh is not overwritten on later runs.
+        flag = directory / ".import-cookies"
+        if flag.exists():
+            state_path = Path(settings.session_dir) / f"{profile}.storage_state.json"
+            try:
+                if state_path.exists():
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    cookies = state.get("cookies") or []
+                    if cookies:
+                        await context.add_cookies(cookies)
+                    log.info(
+                        "cookies imported into profile",
+                        extra={"profile": profile, "cookies": len(cookies)},
+                    )
+                else:
+                    log.warning(
+                        "import-cookies flag set but no storage_state file",
+                        extra={"profile": profile, "path": str(state_path)},
+                    )
+            except Exception as exc:
+                log.warning(
+                    "cookie import failed",
+                    extra={"profile": profile, "error": str(exc)[:200]},
+                )
+            finally:
+                try:
+                    flag.unlink()
+                except OSError:
+                    pass
 
         tracing = False
         try:

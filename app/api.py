@@ -79,6 +79,7 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
+            "version": "1.1",  # bumped with the cookie-import mechanism
             "notion_configured": settings.notion_configured,
             "webhook_secret_set": bool(settings.webhook_secret),
             "dry_run": settings.dry_run,
@@ -153,6 +154,12 @@ def create_app() -> FastAPI:
                         if target.exists():
                             shutil.rmtree(target)
                         shutil.copytree(item, target)
+                        if name == "profiles":
+                            # Cookies in the copied store are encrypted with the
+                            # capturing OS's key and unreadable here. Flag the
+                            # profile so the next browser launch injects the
+                            # decrypted cookies from its storage_state file.
+                            (target / ".import-cookies").touch()
                     else:
                         shutil.copy2(item, target)
                     written.append(str(target))
