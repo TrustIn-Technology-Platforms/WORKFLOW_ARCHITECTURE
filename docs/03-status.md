@@ -8,12 +8,22 @@
 
 ## Headline
 
-**noon.ai posts for real (2026-08-27).** `python -m app.cli post noon --doc
-<file> --live` creates the role, imports the team's shared campaign template,
-removes the placeholder campaign, and fills the five steps from the document's
-emails — verified in the portal on a throwaway role. What is left is the
-plumbing around it: Notion credentials, the webhook service, and a Railway
-deploy. Two test roles (`ZZ TEST…`) are waiting to be deleted.
+**The full chain runs in production (2026-08-28).** A Notion row set to
+`Ready to Post` is picked up by n8n, POSTed to the Railway-deployed webhook,
+and the document is fetched from SharePoint, parsed, and posted to **noon,
+Loxo and Juicebox** — campaign named from the `.docx` filename, threaded
+follow-ups where the platform supports it, URL written back, row marked
+`Posted`. Proven twice the same day on two roles with two different document
+styles (heading-styled and `=== Email 1 ===` fenced). Sessions live on a
+Railway volume (`/data`); cookies are injected from locally-exported
+storage_state because Chrome's cookie store is OS-encrypted. What remains is
+hygiene: deleting test roles/campaigns from the platforms, and the recurring
+local session refresh when a platform logs the bot out.
+
+*Earlier headline, kept for the record:* **noon.ai posts for real
+(2026-08-27)** via `post noon --doc <file> --live`, verified on a throwaway
+role, with Notion credentials, the webhook service and the Railway deploy
+still to come.
 
 *Earlier headline, kept for the record:* the full chain was built and tested
 end to end against a mock platform; what was missing was noon's real UI.
