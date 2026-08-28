@@ -42,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover
 log = get_logger(__name__)
 
 FLYOUT = "[data-testid=flyout_container]"
+SHARE_LABEL = "Shared with team"
 # A visible text input that is not a checkbox/hidden/number — Loxo's name and
 # subject fields carry no `type` attribute, so `[type=text]` never matches them.
 TEXT_INPUT = "input:not([type=checkbox]):not([type=hidden]):not([type=number])"
@@ -142,6 +143,8 @@ class LoxoAdapter(RecipeAdapter):
         if existing:
             count = await self._stage_count(page)
             if count > 0:
+                # Content stays as-is, but make sure the team can see it.
+                await self._share_campaign(page)
                 report.warnings.append(
                     f"campaign already has {count} stage(s); left unchanged "
                     "(re-posting does not replace existing stages yet)."
@@ -169,6 +172,13 @@ class LoxoAdapter(RecipeAdapter):
                 continue
             delay = step.delay_days or DEFAULT_FOLLOWUP_DELAY_DAYS
             await self._finalise_stage(page, n, delay)
+
+        # Visible to the whole agency, not just the bot's login.
+        if not await self._share_campaign(page):
+            report.warnings.append(
+                "could not switch 'Shared with team' on - share the campaign "
+                "by hand from its settings."
+            )
 
         log.info(
             "loxo campaign ready",
@@ -266,6 +276,53 @@ class LoxoAdapter(RecipeAdapter):
             if await close.count():
                 await close.first.click()
                 await page.wait_for_timeout(1_500)
+
+    async def _share_campaign(self, page: "Page") -> bool:
+        """Switch the campaign's "Shared with team" on, via the settings flyout.
+
+        Campaigns are private to their creator by default, so a campaign the
+        bot builds is invisible to the rest of the agency until shared
+        (Sohaib's request, 2026-08-28 - the list row's "..." -> Share does the
+        same thing). Best-effort: a failure to share must not fail a post that
+        already succeeded, so return False rather than raise.
+        """
+        try:
+            await page.get_by_text("settings", exact=True).first.click()
+            await page.wait_for_selector("text=Campaign name", timeout=20_000)
+            await page.wait_for_timeout(1_000)
+
+            label = page.get_by_text(SHARE_LABEL, exact=True)
+            if not await label.count():
+                log.warning("share toggle not found in settings flyout")
+                await self._close_flyout(page)
+                return False
+            toggle = page.locator(
+                f"xpath=//*[normalize-space(text())='{SHARE_LABEL}']"
+                "/ancestor::div[.//input[@type='checkbox']][1]//input[@type='checkbox']"
+            ).first
+            if not await toggle.is_checked():
+                await toggle.click()
+                await page.wait_for_timeout(800)
+            shared = await toggle.is_checked()
+            await page.locator(FLYOUT).get_by_text("Save", exact=True).first.click()
+            await page.wait_for_timeout(3_000)
+            await self._close_flyout(page)
+            log.info("loxo campaign shared with team", extra={"shared": shared})
+            return shared
+        except Exception as exc:
+            log.warning("sharing failed", extra={"error": str(exc)[:200]})
+            try:
+                await self._close_flyout(page)
+            except Exception:
+                pass
+            return False
+
+    async def _close_flyout(self, page: "Page") -> None:
+        if await page.locator(FLYOUT).count():
+            close = page.locator(FLYOUT).get_by_text("close", exact=True)
+            if await close.count():
+                await close.first.click()
+                await page.wait_for_timeout(1_200)
 
     async def _name_box(self, page: "Page", name: str):
         by_label = page.get_by_label("Campaign name")
