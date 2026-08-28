@@ -67,8 +67,15 @@ steps:
     value: "{{ role_name }}"
 
   - action: click
-    description: creates the role. Nothing before this point changes anything, so dry-run stops here.
-    selector: "text='Submit'"
+    description: >-
+      creates the role. Nothing before this point changes anything, so dry-run
+      stops here. When the typed name matches an existing role, the modal
+      replaces Submit with "Create a new role anyway" (seen 2026-08-28 after a
+      failed run left a half-configured role) - accept either, or a re-post
+      after any failure dead-ends here.
+    selector:
+      - "text='Submit'"
+      - "text='Create a new role anyway'"
     submit: true
 
   - action: wait_for
