@@ -202,3 +202,48 @@ def test_fenced_lines_are_headings():
     document = parser.parse_document(blocks)
     assert [(e.order, e.delay_days) for e in document.emails] == [(1, 1), (2, 3)]
     assert document.emails[0].subject == "Platform Engineer / AWS"
+
+
+def test_generator_vocabulary_and_merge_tripwire():
+    """The AI-generator dialect: "(Day N)" suffixes on channel headings,
+    "Connect" for the connection request, and "Ad · <site>" advert sections.
+    Live failure 2026-08-28: "InMail (Day 5)" was not recognised and its copy
+    was absorbed into Email 2 - two messages posted as one email.
+    """
+    channel_of = parser._channel_of
+    assert channel_of("InMail (Day 5)") == "inmail"
+    assert channel_of("Connect (Day 7)") == "linkedin"
+    assert channel_of("Connection request") == "linkedin"
+    assert channel_of("Wellfound (Anonymised)") == "wellfound"
+
+    from app.models import Block
+
+    def h(t):
+        return Block("heading", 2, t, f"<h2>{t}</h2>")
+
+    def b(t):
+        return Block("body", 0, t, f"<p>{t}</p>")
+
+    document = parser.parse_document([
+        h("Email 1 (Day 1)"), b("Hi {{first_name}}, first."),
+        h("Email 2 (Day 3)"), b("Hi {{first_name}}, second."),
+        h("InMail (Day 5)"), b("Hi {{first_name}}, the inmail."),
+        h("Connect (Day 7)"), b("Hi {{first_name}}, connecting."),
+        h("Ad · LinkedIn (Anonymised)"), b("Title: Platform Engineer"), b("About the role."),
+    ])
+    assert [(e.channel, e.order, e.delay_days) for e in document.emails] == [
+        ("email", 1, 1), ("email", 2, 3), ("inmail", 1, 5), ("linkedin", 1, 7),
+    ]
+    # Nothing merged: exactly one greeting per step, and the ad went to the advert.
+    for e in document.emails:
+        assert sum(1 for l in e.body_text.splitlines() if l.startswith("Hi ")) == 1
+    assert document.advert is not None
+    assert "About the role." in document.advert.body_text
+    assert not any("merged" in w for w in document.warnings)
+
+    # An unknown heading between emails is still absorbed - but no longer silently.
+    merged = parser.parse_document([
+        h("Email 1"), b("Hi {{first_name}}, first."),
+        h("Mystery Section (Day 4)"), b("Hi {{first_name}}, a stray message."),
+    ])
+    assert any("merged into one" in w for w in merged.warnings)

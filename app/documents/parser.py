@@ -52,6 +52,14 @@ _CHANNEL_HEADINGS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
         ),
     ),
     (
+        # "Connect (Day 7)" - generator shorthand for the connection request.
+        "linkedin",
+        re.compile(
+            r"^\s*connect(?:ion)?(?:\s+request|\s+note)?\s*[#:\-–]?\s*(\d+)?\s*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "wellfound",
         re.compile(
             r"^\s*(?:wellfound|angel\s*list)\s*[#:\-–]?\s*(\d+)?\s*$",
@@ -65,6 +73,10 @@ _CHANNEL_HEADINGS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
 _SHARED_SUBJECT_HEADING = re.compile(
     r"^\s*(?:subject|subject\s*line)\s*[:\-–]?\s*$", re.IGNORECASE
 )
+
+# "Ad · LinkedIn (Anonymised)", "Ad - Wellfound": a per-site job advert section.
+# Classified as advert content so it never gets absorbed into an email body.
+_AD_SECTION = re.compile(r"^\s*ad(?:vert(?:isement)?)?\s*[·•\-–:]\s*\S", re.IGNORECASE)
 _ADVERT_HEADING = re.compile(
     r"""^\s*(?:
         job\s*(?:advert|ad|spec|description)
@@ -243,7 +255,7 @@ def _classify(
             seen_email = True
             continue
 
-        if _ADVERT_HEADING.match(heading):
+        if _ADVERT_HEADING.match(heading) or _AD_SECTION.match(heading):
             advert_sections.append(section)
             seen_advert_heading = True
             continue
@@ -270,6 +282,12 @@ def _classify(
     return advert_sections, email_sections, warnings, shared_subject
 
 
+# Trailing decoration a generator appends to a heading: "InMail (Day 5)",
+# "Connect (Day 7)", "Email 2 · Deeper". The channel patterns anchor on $, so
+# strip it before matching; the full heading still feeds the delay parser.
+_HEADING_SUFFIX = re.compile(r"\s*(?:[(\[][^)\]]*[)\]]|[·•]\s*[^()\[\]]*)\s*$")
+
+
 def _channel_of(heading: str) -> str | None:
     """The channel a heading names, or None when it is not a channel heading.
 
@@ -278,9 +296,11 @@ def _channel_of(heading: str) -> str | None:
     """
     if not heading:
         return None
+    candidates = (heading, _HEADING_SUFFIX.sub("", heading).strip())
     for channel, pattern in _CHANNEL_HEADINGS:
-        if pattern.match(heading):
-            return channel
+        for text in candidates:
+            if text and pattern.match(text):
+                return channel
     return None
 
 
@@ -358,6 +378,20 @@ def _build_email(section: Section, position: int, warnings: list[str]) -> EmailS
 
     if not body_text.strip():
         warnings.append(f"Email {order} ({subject!r}) has no body text.")
+
+    # Two greetings in one step means a section the parser did not recognise
+    # was absorbed into this message - exactly how two emails end up pasted
+    # into one on a platform. Say so loudly; the recruiter can fix the doc's
+    # headings before anything sends.
+    greetings = sum(
+        1 for line in body_text.splitlines() if _GREETING.match(line.strip())
+    )
+    if greetings >= 2:
+        warnings.append(
+            f"Email {order} ({heading!r}) contains {greetings} greetings - it "
+            "looks like two messages merged into one. A heading between them "
+            "was probably not recognised; check the document's section headings."
+        )
 
     return EmailStep(
         channel=channel,
