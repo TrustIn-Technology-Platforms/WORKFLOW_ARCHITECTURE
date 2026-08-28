@@ -174,3 +174,31 @@ def test_shared_subject_heading_applies_to_emails_only():
     assert by_channel["linkedin"].subject != "Staff Platform Engineer / up to $350k"
     # The subject text is consumed, not repeated inside an email body.
     assert "up to $350k" not in by_channel["email"].body_text
+
+
+def test_fenced_lines_are_headings():
+    """`=== Email 1 (Day 1 - Anonymous) ===` marks a section in generator-made
+    documents that use no Word heading styles and no bold. The fences are
+    decoration; the text inside is the heading, and the day number is the delay.
+    """
+    from app.documents.docx_reader import _promote_pseudo_headings
+    from app.models import Block
+
+    def body(text: str) -> Block:
+        return Block("body", 0, text, f"<p>{text}</p>")
+
+    blocks = [
+        body("=== Email 1 (Day 1 - Anonymous) ==="),
+        body("Subject: Platform Engineer / AWS"),
+        body("Hi {{first_name}}, first email."),
+        body("=== Email 2 (Day 3) ==="),
+        body("Hi {{first_name}}, second email."),
+    ]
+    _promote_pseudo_headings(blocks)
+    assert [b.text for b in blocks if b.is_heading] == [
+        "Email 1 (Day 1 - Anonymous)", "Email 2 (Day 3)",
+    ]
+
+    document = parser.parse_document(blocks)
+    assert [(e.order, e.delay_days) for e in document.emails] == [(1, 1), (2, 3)]
+    assert document.emails[0].subject == "Platform Engineer / AWS"

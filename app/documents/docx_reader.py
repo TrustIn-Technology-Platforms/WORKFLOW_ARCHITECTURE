@@ -205,14 +205,31 @@ def _table_blocks(document, element, qn) -> list[Block]:
 # ----------------------------------------------------------------------
 
 
+# A plain-text section fence: `=== Email 1 (Day 1 - Anonymous) ===`. Documents
+# produced by generators mark their sections this way rather than with Word
+# heading styles or bold (seen live 2026-08-28); the fence characters are
+# decoration, the text between them is the heading.
+_FENCE_LINE = re.compile(r"^\s*={2,}\s*(.+?)\s*={2,}\s*$")
+
+
 def _promote_pseudo_headings(blocks: list[Block]) -> None:
-    """Treat fully-bold short lines as headings when the doc has no real ones."""
+    """Treat fully-bold short lines - and `=== fenced ===` lines - as headings
+    when the doc has no real ones."""
     if any(b.is_heading for b in blocks):
         return
 
     for block in blocks:
         if block.style != "body":
             continue
+
+        fence = _FENCE_LINE.match(block.text or "")
+        if fence and len(fence.group(1)) <= _PSEUDO_HEADING_MAX_CHARS:
+            block.text = fence.group(1)
+            block.style = "heading"
+            block.level = 2
+            block.html = f"<h2>{html_lib.escape(block.text)}</h2>"
+            continue
+
         stripped = block.html.strip()
         fully_bold = stripped.startswith("<p><strong>") and stripped.endswith(
             "</strong></p>"
