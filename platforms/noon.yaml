@@ -128,11 +128,15 @@ steps:
     selector: "text='Remove from role'"
 
   - action: wait_for
-    description: Nicholas's five steps are on screen
+    description: >-
+      Nicholas's five steps are on screen. The template import renders slowly -
+      slower still on the Railway container, where the default 25s timed out
+      (2026-08-28) - so give it the same generous window as the other renders.
     selector: "text='Step 5'"
+    timeout_ms: 90000
 
   - action: wait
-    ms: 2000
+    ms: 3000
 
   # -------------------------------------------------------------------------
   # 4. Subjects - the two steps that have one (email step 2, InMail step 4)
