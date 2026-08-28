@@ -16,8 +16,13 @@ from __future__ import annotations
 
 import argparse
 import io
+import pathlib
 import sys
 import tarfile
+
+# Allow `python scripts/push_sessions.py` from the project root (put the repo
+# root on the path so `app` imports without needing -m or PYTHONPATH).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import httpx
 
