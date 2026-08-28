@@ -72,7 +72,9 @@ def main() -> None:
             url,
             content=data,
             headers={"X-Webhook-Secret": args.secret, "Content-Type": "application/gzip"},
-            timeout=600,
+            # Generous per-phase timeouts: a large profile upload over a slow
+            # link can take a while, and we would rather wait than fail.
+            timeout=httpx.Timeout(60.0, read=1800.0, write=1800.0, connect=60.0),
         )
     except httpx.HTTPError as exc:
         sys.exit(f"Upload failed to connect: {exc}")

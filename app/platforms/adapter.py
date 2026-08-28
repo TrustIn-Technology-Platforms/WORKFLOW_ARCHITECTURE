@@ -404,19 +404,27 @@ async def _poll_logged_in(page: "Page", login: Any) -> None:
 
     while True:
         await asyncio.sleep(1.5)
+        if page.is_closed():
+            return
         try:
             if await _looks_logged_out(page, login):
                 continue
             if login.ready_selector:
+                # Require positive evidence the app shell rendered. Being off the
+                # login URL is not enough: a platform whose start URL redirects
+                # to /login (Loxo) is momentarily "not logged out" before the
+                # redirect, and would otherwise be declared logged in instantly
+                # and the browser closed before the operator can sign in.
                 run = StepRun(page=page, params={"selector": login.ready_selector})
                 run.timeout_ms = 1_000
-                if await find(run, required=False) is None and not login.logged_out_pattern:
+                if await find(run, required=False) is None:
                     continue
             return
         except Exception:
-            # The page can navigate or close underneath the poll; that is the
-            # operator working, not a failure.
-            return
+            # The page navigating (an SSO round-trip destroys the execution
+            # context) is the operator working, not proof of login - keep
+            # polling rather than closing the browser out from under them.
+            continue
 
 
 async def _looks_logged_out(page: "Page", login: Any) -> bool:
