@@ -17,8 +17,13 @@ platform health check never spends an API call or a browser.
 from __future__ import annotations
 
 import hmac
+import io
+import shutil
+import tarfile
+import tempfile
+from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -102,5 +107,57 @@ def create_app() -> FastAPI:
         background.add_task(_process, payload.page_id.strip(), None)
         log.info("webhook accepted", extra={"page_id": payload.page_id.strip()})
         return {"status": "accepted", "page_id": payload.page_id.strip()}
+
+    @app.post("/admin/import-sessions")
+    async def import_sessions(
+        request: Request,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """Receive a .tar.gz of `sessions/` and `profiles/` and unpack it onto
+        the volume. This is how the locally-captured 2FA logins reach a headless
+        Railway box, which has no screen to sign in on. Secret-gated like the
+        webhook; the client is scripts/push_sessions.py.
+        """
+        if not settings.webhook_secret:
+            raise HTTPException(503, "WEBHOOK_SECRET is not configured on the server.")
+        if not x_webhook_secret or not hmac.compare_digest(
+            x_webhook_secret, settings.webhook_secret
+        ):
+            raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+
+        body = await request.body()
+        if not body:
+            raise HTTPException(422, "Empty body; expected a .tar.gz of sessions/ and profiles/.")
+
+        written: list[str] = []
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            try:
+                with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tar:
+                    # filter="data" blocks path traversal / absolute members.
+                    tar.extractall(tmp, filter="data")
+            except Exception as exc:  # noqa: BLE001 - report a bad upload cleanly
+                raise HTTPException(422, f"Could not read the archive: {exc}")
+
+            for name, dest in (
+                ("sessions", Path(settings.session_dir)),
+                ("profiles", Path(settings.browser_profile_dir)),
+            ):
+                src = tmp / name
+                if not src.exists():
+                    continue
+                dest.mkdir(parents=True, exist_ok=True)
+                for item in src.iterdir():
+                    target = dest / item.name
+                    if item.is_dir():
+                        if target.exists():
+                            shutil.rmtree(target)
+                        shutil.copytree(item, target)
+                    else:
+                        shutil.copy2(item, target)
+                    written.append(str(target))
+
+        log.info("sessions imported", extra={"files": len(written)})
+        return {"status": "ok", "written_count": len(written), "written": written[:50]}
 
     return app

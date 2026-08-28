@@ -65,13 +65,17 @@ python -m app.cli login juicebox
 Each opens a real browser; sign in (including 2FA) and close it. This writes
 `.profiles/<platform>/` (and `.sessions/<platform>.storage_state.json`).
 
-Then copy `.profiles/` and `.sessions/` onto the Railway volume. Two ways:
+Then upload them to the volume with the bundled tool — one command, no Railway
+file wrangling:
 
-- **Railway CLI:** `railway link`, then `railway run` a shell / use `railway
-  volume` tooling to place the folders under `/data/profiles` and
-  `/data/sessions`.
-- **Recapture on the box:** not possible here — the container is headless, so
-  the local-capture-then-upload route is the only one.
+```bash
+python scripts/push_sessions.py --url https://<app>.up.railway.app --secret <WEBHOOK_SECRET>
+```
+
+It packs `.sessions/` and `.profiles/` (Chrome cache dirs excluded, so the
+upload stays small) and POSTs them to the service's secret-gated
+`/admin/import-sessions` endpoint, which unpacks them onto `/data`. Re-running
+it replaces what's there, which is how you refresh an expired login.
 
 The profiles are the live sessions; they expire (roughly every couple of weeks,
 sooner if a platform invalidates them), so this step recurs. `GET /health` and
