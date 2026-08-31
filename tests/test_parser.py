@@ -90,9 +90,12 @@ def test_field_line_needs_a_colon_or_a_spaced_dash():
 def test_channel_headings_become_steps_with_their_channel():
     """A sequence mixes channels under sibling headings.
 
-    `LinkedIn Connection`, `InMail` and `Wellfound` are steps, not prose that
-    belongs to the email above them. Before channels existed the InMail and
-    Wellfound copy was silently swallowed into the preceding email.
+    `LinkedIn Connection` and `InMail` are steps, not prose belonging to the
+    email above them. Before channels existed their copy was silently swallowed
+    into the preceding email.
+
+    `Wellfound` is deliberately NOT one of them - see
+    `test_a_board_section_is_that_boards_advert_not_a_message`.
     """
     channel_of = parser._channel_of
 
@@ -104,8 +107,9 @@ def test_channel_headings_become_steps_with_their_channel():
     assert channel_of("In-Mail 2") == "inmail"
     # Matches the linkedin pattern too; the narrower reading has to win.
     assert channel_of("LinkedIn InMail") == "inmail"
-    assert channel_of("Wellfound") == "wellfound"
-    assert channel_of("AngelList") == "wellfound"
+    # A board's name is not a message channel. It names an advert.
+    assert channel_of("Wellfound") is None
+    assert channel_of("AngelList") is None
 
     assert channel_of("Email1") is None
     assert channel_of("Follow up") is None
@@ -221,7 +225,7 @@ def test_generator_vocabulary_and_merge_tripwire():
     assert channel_of("InMail (Day 5)") == "inmail"
     assert channel_of("Connect (Day 7)") == "linkedin"
     assert channel_of("Connection request") == "linkedin"
-    assert channel_of("Wellfound (Anonymised)") == "wellfound"
+    assert parser._platform_advert_of("Wellfound (Anonymised)") == "wellfound"
 
     from app.models import Block
 
@@ -453,3 +457,116 @@ def test_a_document_with_a_client_jd_and_no_advert_still_has_something_to_search
     ])
     assert document.advert is None
     assert document.job_description.startswith("8+ years")
+
+
+# ----------------------------------------------------------------------
+# a board's own advert
+# ----------------------------------------------------------------------
+
+
+def _multi_channel_document() -> list:
+    """The real shape: general advert, sequence, then a Wellfound advert."""
+    return [
+        _block("Backend Platform Engineer - NYC / Series A / Kubernetes"),
+        _block("Job Advert", style="heading", level=2),
+        _block("The long advert, written for the client and LinkedIn."),
+        _block("Email 1", style="heading", level=2),
+        _block("Subject: Hello"),
+        _block("Hi {first_name}, we are hiring."),
+        _block("InMail", style="heading", level=2),
+        _block("Short InMail copy."),
+        _block("Wellfound", style="heading", level=2),
+        _block("Anonymised copy, cut for Wellfound."),
+        _block("What you'll do:", style="heading", level=3),
+        _block("Run the platform."),
+    ]
+
+
+def test_a_board_section_is_that_boards_advert_not_a_message():
+    """`Wellfound` names the advert written for that board.
+
+    It used to parse as an outreach step with `channel: wellfound`, on the
+    assumption it meant a message through Wellfound's messaging. Nothing ever
+    read that channel, so it cost nothing until Wellfound started posting - at
+    which point the general advert went up and the copy written for the board
+    was silently dropped. Reported by Sohaib, 2026-08-31.
+    """
+    document = parser.parse_document(_multi_channel_document())
+
+    assert "wellfound" in document.platform_adverts
+    assert [e.channel for e in document.emails] == ["email", "inmail"], (
+        "the board section must not become a step, and must not disturb the ones "
+        "that are"
+    )
+
+    wellfound = document.advert_for("wellfound")
+    assert "Anonymised copy, cut for Wellfound." in wellfound.body_text
+    assert "Run the platform." in wellfound.body_text
+    assert "What you'll do:" in wellfound.body_text, "its sub-headings stay with it"
+    assert "long advert" not in wellfound.body_text
+
+
+def test_the_board_section_does_not_leak_into_the_general_advert():
+    """noon, Loxo and Juicebox must still get the general advert."""
+    document = parser.parse_document(_multi_channel_document())
+
+    assert document.advert is not None
+    assert "The long advert" in document.advert.body_text
+    assert "Anonymised copy" not in document.advert.body_text
+    for platform in ("noon", "loxo", "juicebox"):
+        assert document.advert_for(platform) is document.advert
+
+
+def test_a_board_advert_inherits_what_it_does_not_restate():
+    """Board copy is copy, not a metadata sheet: it rarely repeats the title and
+    never repeats the salary. Its first line is the advert's opening sentence,
+    not a title - promoting it would both lose the line and title the post with
+    it."""
+    document = parser.parse_document(_multi_channel_document())
+    wellfound = document.advert_for("wellfound")
+
+    assert wellfound.title == document.advert.title
+    assert wellfound.body_text.startswith("Anonymised copy")
+
+
+def test_a_document_with_no_board_section_is_unchanged():
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer", style="heading", level=1),
+            _block("The advert."),
+            _block("Email 1", style="heading", level=2),
+            _block("Hi there."),
+        ]
+    )
+    assert document.platform_adverts == {}
+    assert document.advert_for("wellfound") is document.advert
+
+
+def test_an_empty_board_section_falls_back_and_says_so():
+    """Better the general advert than a blank post, but never silently."""
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer", style="heading", level=1),
+            _block("The advert."),
+            _block("Wellfound", style="heading", level=2),
+        ]
+    )
+    assert document.advert_for("wellfound") is document.advert
+    assert any("wellfound" in w.lower() for w in document.warnings)
+
+
+def test_board_heading_spellings():
+    for heading in (
+        "Wellfound",
+        "wellfound:",
+        "Wellfound (Anonymised)",
+        "Ad - Wellfound",
+        "Ad · Wellfound",
+        "Wellfound Ad",
+        "Wellfound Job Post",
+        "AngelList",
+    ):
+        assert parser._platform_advert_of(heading) == "wellfound", heading
+
+    for heading in ("Email 1", "InMail", "LinkedIn", "The Role", "Client JD"):
+        assert parser._platform_advert_of(heading) is None, heading

@@ -248,3 +248,34 @@ def test_channel_slots_use_document_copy_with_email_fallback():
     ctx2 = build_context(emails_only, None, {})
     assert ctx2["inmail"]["body_text"] == "Hi there, only email."
     assert ctx2["connection_note"]["body_text"] == "Hi there, only email."
+
+
+def test_the_context_gives_each_platform_its_own_advert():
+    """`{{ advert.body_html }}` must mean "this platform's advert".
+
+    Resolved in one place so no recipe has to know a board section exists - and
+    so a new board cannot be added while quietly still posting the general
+    advert, which is exactly how Wellfound shipped wrong (2026-08-31).
+    """
+    from app.documents.parser import parse_document
+    from app.models import Block
+    from app.platforms.engine import build_context
+
+    def block(text: str, style: str = "body", level: int = 0) -> Block:
+        return Block(style=style, level=level, text=text, html=f"<p>{text}</p>")
+
+    document = parse_document(
+        [
+            block("Platform Engineer", style="heading", level=1),
+            block("General advert copy."),
+            block("Email 1", style="heading", level=2),
+            block("Hi there."),
+            block("Wellfound", style="heading", level=2),
+            block("Board-specific copy."),
+        ]
+    )
+
+    assert "Board-specific" in build_context(document, None, {}, "wellfound")["advert"]["body_text"]
+    for platform in ("noon", "loxo", "juicebox", ""):
+        context = build_context(document, None, {}, platform)
+        assert "General advert copy." in context["advert"]["body_text"], platform

@@ -145,10 +145,25 @@ class ParsedDocument:
     # heading at the end of the document. Empty when nobody pasted one - which
     # is why the sourcing platforms read `job_description` below and not this.
     client_jd: str = ""
+    # Adverts written for one destination, keyed by platform. A `Wellfound`
+    # section carries copy shaped for Wellfound - anonymised differently, cut to
+    # a different length - and posting the general advert there instead throws
+    # away the version a recruiter wrote on purpose. Empty for a document that
+    # names no platform, which is most of them.
+    platform_adverts: dict[str, Advert] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
         return self.advert is None and not self.emails
+
+    def advert_for(self, platform: str) -> Advert | None:
+        """The advert this platform should post: its own if the document wrote
+        one, the general advert otherwise.
+
+        Every recipe reaches `advert` through this, so a platform section is
+        honoured without any recipe knowing it exists.
+        """
+        return self.platform_adverts.get(platform.strip().lower()) or self.advert
 
     @property
     def job_description(self) -> str:

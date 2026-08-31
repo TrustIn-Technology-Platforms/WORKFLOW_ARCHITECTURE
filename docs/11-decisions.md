@@ -427,3 +427,51 @@ found, and a run whose location comes back empty now says so on the row.
 **Revisit when** documents routinely arrive with the section and the fallback
 stops being exercised — at that point an absent `Client JD` should probably be a
 warning on the row rather than a quiet substitution.
+
+## D-019 · A document section named after a board is that board's advert
+
+**Date** 2026-08-31 · **Status** Accepted
+
+**Context.** The parser read a `Wellfound` heading as an outreach step with
+`channel: wellfound`, on the assumption that a section named after a platform
+meant a message sent *through* it. That assumption was written into
+[platforms/wellfound](platforms/wellfound.md) as though it were established.
+
+It is not what the recruiters mean. They write a version of the advert for that
+board — anonymised differently, cut shorter — and the section holds that copy.
+
+Nothing ever consumed a `wellfound` channel step (only `inmail` and `linkedin`
+are read), so the misreading was free for as long as Wellfound was unbuilt. The
+day Wellfound started posting it became a wrong-copy bug: the general advert
+went up, the board's own copy was dropped, and no warning was raised anywhere.
+The run reported success. Found by reading a posted draft, not by any test.
+
+**Decision.** A section headed with a board's name holds that board's advert.
+`_PLATFORM_ADVERTS` maps the heading to a recipe key;
+`ParsedDocument.platform_adverts` holds one `Advert` per board; and
+`advert_for(platform)` returns the board's advert or the general one.
+
+Selection happens **once**, in `build_context`, so `{{ advert.body_html }}`
+means "this platform's advert" in every recipe. No recipe knows board sections
+exist, and none can be added while quietly still posting the general advert —
+which is precisely how Wellfound shipped wrong.
+
+A board advert inherits what it does not restate: title, location, salary,
+employment type. Board copy is copy, not a metadata sheet. Its first line is the
+opening sentence of the advert and is **not** promoted to a title, unlike the
+general advert's — doing so would lose the line and title the post with it.
+
+An empty board section falls back to the general advert **and warns**. A blank
+advert is worse than the wrong one, but neither should be silent.
+
+**Consequences.**
+
+- `channel: wellfound` no longer exists. Two tests asserted it and were corrected
+  rather than deleted: they are where the wrong assumption lived.
+- Wellfound messaging, if it is ever built, needs a heading that names the
+  message (`Wellfound Message`), not the board.
+- Another board needs one pattern in `_PLATFORM_ADVERTS` and nothing else.
+
+**Revisit when** a platform needs per-destination copy for something that is not
+an advert — the mechanism is deliberately advert-shaped and should not be bent
+into a general per-platform override.

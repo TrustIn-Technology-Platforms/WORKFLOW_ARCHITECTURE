@@ -61,14 +61,44 @@ _CHANNEL_HEADINGS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
             re.IGNORECASE,
         ),
     ),
+)
+
+# A section headed with a job board's name holds the advert written *for that
+# board*, not a message sent through it.
+#
+# This used to read `Wellfound` as an outreach step with `channel: wellfound`,
+# on the assumption it meant a message through Wellfound's messaging. It does
+# not: the recruiters write the Wellfound advert in that section, cut and
+# anonymised for that board. The assumption cost nothing while Wellfound was
+# unbuilt, and became a silent wrong-copy bug the moment it posted - the general
+# advert went up and the section written for the board was ignored, with no
+# warning anywhere. Nothing ever consumed a `wellfound` channel step (only
+# `inmail` and `linkedin` are read), so it was only ever a misreading.
+#
+# `Ad - Wellfound`, `Wellfound Ad` and `AngelList` are the same section. The
+# shape is a dict so a second board needs a pattern, not a redesign.
+_PLATFORM_ADVERTS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     (
         "wellfound",
         re.compile(
-            r"^\s*(?:wellfound|angel\s*list)\s*[#:\-–]?\s*(\d+)?\s*$",
-            re.IGNORECASE,
+            r"""^\s*
+            (?:ad(?:vert(?:isement)?)?\s*[·•\-–:]\s*)?   # "Ad - " prefix
+            (?:wellfound|angel\s*list)
+            (?:\s*(?:ad(?:vert(?:isement)?)?|job\s*(?:ad|post(?:ing)?)|post(?:ing)?))?
+            \s*(?:\(.*?\))?                              # "(Anonymised)"
+            \s*[#:\-–]?\s*$""",
+            re.IGNORECASE | re.VERBOSE,
         ),
     ),
 )
+
+
+def _platform_advert_of(heading: str) -> str | None:
+    """The platform whose advert this heading introduces, if any."""
+    for key, pattern in _PLATFORM_ADVERTS:
+        if pattern.match(heading):
+            return key
+    return None
 
 # A lone "Subject" heading sets the subject for the email steps around it,
 # because authors write it once above a run of emails.
@@ -190,6 +220,10 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
 
     advert = _build_advert(found.advert, warnings)
     client_jd = _build_job_description(found.job_description, warnings)
+    platform_adverts = {
+        key: _build_platform_advert(key, sections_for, advert, warnings)
+        for key, sections_for in found.platform_adverts.items()
+    }
 
     # An email with no subject of its own goes out under the role's title -
     # which is what recruiters write by hand anyway.
@@ -211,6 +245,7 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
         emails=emails,
         warnings=warnings,
         client_jd=client_jd,
+        platform_adverts=platform_adverts,
     )
     log.info(
         "document parsed",
@@ -219,6 +254,7 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
             "emails": len(emails),
             "has_advert": advert is not None,
             "client_jd_chars": len(client_jd),
+            "platform_adverts": sorted(platform_adverts),
             "warnings": len(warnings),
         },
     )
@@ -260,6 +296,7 @@ class _Classified:
     advert: list[Section] = dc_field(default_factory=list)
     emails: list[Section] = dc_field(default_factory=list)
     job_description: list[Section] = dc_field(default_factory=list)
+    platform_adverts: dict[str, list[Section]] = dc_field(default_factory=dict)
     shared_subject: str = ""
     warnings: list[str] = dc_field(default_factory=list)
 
@@ -268,6 +305,12 @@ def _classify(sections: list[Section]) -> _Classified:
     warnings: list[str] = []
     advert_sections: list[Section] = []
     email_sections: list[Section] = []
+    platform_sections: dict[str, list[Section]] = {}
+    # Which platform's advert an unlabelled section continues. A board's advert
+    # carries its own sub-headings ("About the company:", "What you'll do:"),
+    # and without this they would fall through to the "continues the last email"
+    # rule and be appended to the final message.
+    current_platform: str | None = None
     seen_email = False
     seen_advert_heading = False
     shared_subject = ""
@@ -303,20 +346,33 @@ def _classify(sections: list[Section]) -> _Classified:
                 shared_subject = text.strip()
             continue
 
+        # Checked before the channel rule: `Wellfound` names a board, and the
+        # section under it is that board's advert.
+        platform = _platform_advert_of(heading)
+        if platform is not None:
+            platform_sections.setdefault(platform, []).append(section)
+            current_platform = platform
+            continue
+
         if _is_email_heading(heading) or _channel_of(heading):
             email_sections.append(section)
             seen_email = True
+            current_platform = None
             continue
 
         if _ADVERT_HEADING.match(heading) or _AD_SECTION.match(heading):
             advert_sections.append(section)
             seen_advert_heading = True
+            current_platform = None
             continue
 
-        # An unlabelled section continues whatever came before it. Once the
-        # emails have started, a bare heading is a part of the current email
-        # rather than a return to the advert.
-        if seen_email and email_sections:
+        # An unlabelled section continues whatever came before it: a board's
+        # advert if one has started, then the current email, then the advert.
+        if current_platform is not None:
+            target = platform_sections[current_platform]
+            target[-1].blocks.extend(_heading_as_block(section))
+            target[-1].blocks.extend(section.blocks)
+        elif seen_email and email_sections:
             email_sections[-1].blocks.extend(_heading_as_block(section))
             email_sections[-1].blocks.extend(section.blocks)
         else:
@@ -336,6 +392,7 @@ def _classify(sections: list[Section]) -> _Classified:
         advert=advert_sections,
         emails=email_sections,
         job_description=tail,
+        platform_adverts=platform_sections,
         shared_subject=shared_subject,
         warnings=warnings,
     )
@@ -575,6 +632,53 @@ def _build_job_description(sections: list[Section], warnings: list[str]) -> str:
 # ----------------------------------------------------------------------
 # 4d. advert
 # ----------------------------------------------------------------------
+
+
+def _build_platform_advert(
+    platform: str,
+    sections: list[Section],
+    base: Advert | None,
+    warnings: list[str],
+) -> Advert:
+    """One board's own advert copy, falling back to the general advert.
+
+    The section supplies the body - that is the whole reason a recruiter wrote
+    it. Everything it does not restate is inherited: a `Wellfound` section is
+    copy, not a metadata sheet, so it rarely names the title again and never
+    names the salary. The board's name is not a title, so the heading itself is
+    dropped before building; a title is taken only if the section states one of
+    its own.
+    """
+    # The board's name is kept as the leading heading on purpose. `_build_advert`
+    # promotes the first line of a headingless section to the title, and in board
+    # copy that first line is the opening sentence of the advert - dropping it
+    # would both lose a line and title the post with it. With the heading there,
+    # the heading becomes the title instead, and is discarded just below.
+    built = _build_advert([Section(heading=s.heading, level=s.level, blocks=list(s.blocks))
+                           for s in sections], warnings)
+    if built is None or not built.body_text.strip():
+        warnings.append(
+            f"The {platform} section is empty; the general advert will be posted there."
+        )
+        return base or Advert(title="", body_text="", body_html="")
+
+    inherited = base or Advert(title="", body_text="", body_html="")
+    title = built.title
+    # "Wellfound" is the name of a board, not of a job.
+    if not title or title == "(untitled)" or _platform_advert_of(title) is not None:
+        title = inherited.title
+    return Advert(
+        title=title,
+        body_text=built.body_text,
+        body_html=built.body_html,
+        location=built.location or inherited.location,
+        salary=built.salary or inherited.salary,
+        employment_type=built.employment_type or inherited.employment_type,
+        category=built.category or inherited.category,
+        reference=built.reference or inherited.reference,
+        tags=list(built.tags or inherited.tags),
+        fields={**inherited.fields, **built.fields},
+    )
 
 
 def _build_advert(sections: list[Section], warnings: list[str]) -> Advert | None:

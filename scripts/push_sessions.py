@@ -121,9 +121,13 @@ def main() -> None:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
             names = tar.getnames()
         tops = sorted({n.split("/")[1] for n in names if n.count("/") >= 1})
-        print(f"\narchive: {len(data) / 1_000_000:.1f} MB, {len(names)} entries")
-        print("would upload:", ", ".join(tops))
-        print("\nDry run - nothing was uploaded.")
+        # Emphatic on purpose. The old wording led with the archive size, which
+        # reads exactly like a completed upload - the size was reported back as
+        # "uploaded" while the volume never received anything (2026-08-31).
+        print(f"\n*** DRY RUN - NOTHING WAS UPLOADED ***")
+        print(f"built an archive of {len(data) / 1_000_000:.1f} MB, {len(names)} entries")
+        print("it would have contained:", ", ".join(tops))
+        print("\nTo actually upload, run the same command WITHOUT --dry-run.")
         return
     if len(data) < 200:
         sys.exit(
@@ -148,7 +152,26 @@ def main() -> None:
     print(resp.status_code, resp.text[:2000])
     if resp.status_code != 200:
         sys.exit(1)
-    print("Done. Check GET /health, then fire a ZZ TEST row.")
+    # Read the volume back rather than trusting the 200. The upload writing and
+    # the platform being usable are different claims, and /health answers the
+    # second one.
+    print("\nUploaded. Reading the volume back from /health ...")
+    try:
+        health = httpx.get(url.rstrip("/") + "/health", timeout=60.0).json()
+    except Exception as exc:  # noqa: BLE001 - the upload still succeeded
+        print(f"  (could not read /health: {exc})")
+        return
+    missing = [
+        key for key, state in (health.get("profiles") or {}).items()
+        if not state.get("profile")
+    ]
+    print("  on the volume:", ", ".join(health.get("profile_dir_contents") or []) or "nothing")
+    if health.get("profile_dir_on_volume") is False:
+        print("  !! profile_dir is NOT a mounted volume - this will not survive a restart")
+    if missing:
+        print(f"  !! still no profile for: {', '.join(sorted(missing))}")
+        sys.exit(1)
+    print("  all platforms present. Set the row back to Ready to Post and trigger it.")
 
 
 if __name__ == "__main__":

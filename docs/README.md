@@ -27,6 +27,7 @@ Every document here is written to be lifted out and reused. That means:
 | 10 | [Testing](10-testing.md) | Test layout and how to test a platform without posting |
 | 11 | [Decisions](11-decisions.md) | Choices already made in the code, and why |
 | 12 | [Sourcing criteria](12-sourcing-criteria.md) | What a tight search means on each platform, and what is still missing |
+| 13 | [Document sections](13-document-sections.md) | Where each section of a document ends up, and the mistake that made the table necessary |
 
 ## Templates
 

@@ -173,6 +173,7 @@ leading section.
 | `Job Spec`, `Role Spec` — **after the last message** | the same |
 | `Email 1`, `Email 2 - Follow up`, `Follow-up 3`, `Sequence Step 2` | An `EmailStep` |
 | `Job Advert`, `Advert`, `Job Description`, `The Role`, `Role Overview` | The `Advert` |
+| `Wellfound`, `Wellfound Ad`, `Ad - Wellfound`, `AngelList` | That board's own advert, in `platform_adverts` — see [13-document-sections](13-document-sections.md) |
 | Neither, and no email step has been seen yet | Advert body continuation |
 | Neither, after an email step has started | Body of the current email step |
 

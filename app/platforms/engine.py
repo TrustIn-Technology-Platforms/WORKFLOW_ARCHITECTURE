@@ -91,14 +91,22 @@ def build_context(
     document: ParsedDocument,
     row: NotionRow | None = None,
     defaults: dict[str, Any] | None = None,
+    platform: str = "",
 ) -> dict[str, Any]:
     """The values a recipe expression can reach.
 
     `row.property` exposes every Notion column as plain text, so advert metadata
     kept as a real column rather than as prose in the document needs no code
     change to reach a platform field.
+
+    `advert` is the advert *for this platform*: a document with a section named
+    after a board carries copy written for that board, and `advert_for` prefers
+    it over the general advert. Resolved here, once, so `{{ advert.body_html }}`
+    means the right thing in every recipe without any of them knowing.
     """
-    advert = document.advert or Advert(title="", body_text="", body_html="")
+    advert = (
+        document.advert_for(platform) if platform else document.advert
+    ) or Advert(title="", body_text="", body_html="")
 
     # A recipe with fixed slots (noon) maps the email steps onto them by index,
     # so `emails` must be the email-channel steps only: a LinkedIn note or an
@@ -170,7 +178,7 @@ class RecipeEngine:
     async def run(
         self, document: ParsedDocument, row: NotionRow | None = None
     ) -> RunReport:
-        context = build_context(document, row, self.recipe.defaults)
+        context = build_context(document, row, self.recipe.defaults, self.recipe.key)
 
         try:
             await self._run_phase(self.recipe.steps, context)

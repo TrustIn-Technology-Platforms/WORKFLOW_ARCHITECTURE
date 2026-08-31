@@ -222,14 +222,30 @@ once a session exists.
 - Sandbox account: none. Whatever account option A yields is a real client account — use a clearly marked test title (`ZZ TEST - delete me`) and delete afterwards, as with noon.
 - What a successful post looks like: the job listed under *Jobs* with status Published, and visible on the company's public profile.
 
-## What the document's `wellfound` channel is, and is not
+## Which advert this posts
 
-The parser recognises a `Wellfound` heading in the outreach sequence as a step
-with `channel: wellfound` ([parser.py](../../app/documents/parser.py)) — a
-*message* to a candidate through Wellfound's messaging. That is a different
-thing from this recipe, which posts the *advert*. Sending Wellfound messages
-would be a second, `email_sequence`-shaped integration against Wellfound Reach,
-and it is not planned. The two share a login and nothing else.
+**The document's `Wellfound` section, when it has one.** The recruiters write a
+version of the advert for this board - anonymised differently, cut shorter - and
+that section is what goes up. The general `Job Advert` section stands in only
+when no `Wellfound` section exists.
+
+`Wellfound`, `Wellfound Ad`, `Ad - Wellfound`, `Wellfound (Anonymised)` and
+`AngelList` all name it. Its sub-headings stay with it. What it does not restate
+is inherited from the general advert: board copy is copy, not a metadata sheet,
+so it rarely repeats the title and never repeats the salary.
+
+**This was wrong until 2026-08-31**, and wrong in the quietest possible way. The
+parser read a `Wellfound` heading as an outreach *step* with `channel:
+wellfound`, on the assumption it meant a message through Wellfound's messaging.
+Nothing ever read that channel, so the misreading cost nothing while Wellfound
+was unbuilt - and became a silent wrong-copy bug the moment it started posting.
+The general advert went up, the section written for the board was dropped, and
+no warning was raised anywhere. See
+[D-019](../11-decisions.md#d-019--a-document-section-named-after-a-board-is-that-boards-advert)
+and [13-document-sections](../13-document-sections.md).
+
+Selection happens once, in `build_context`, so `{{ advert.body_html }}` means
+"this platform's advert" in every recipe and no recipe has to know.
 
 ## Open questions
 
