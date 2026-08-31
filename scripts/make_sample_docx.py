@@ -97,6 +97,25 @@ def build(path: Path, use_real_headings: bool = True) -> Path:
         "that changes, my details are below."
     )
 
+    # Last, and deliberately blunter than the advert above: the sourcing
+    # platforms read this, and a search needs the years, the stack and the
+    # location stated rather than softened. See docs/12-sourcing-criteria.md.
+    heading("Client JD", 1)
+    document.add_paragraph(
+        "Kepler Talent Group is hiring a Senior Recruitment Consultant for its "
+        "Manchester technology desk. Hybrid, three days on site."
+    )
+    heading("Requirements")
+    for item in (
+        "4+ years of agency recruitment, at least 2 of them 360",
+        "A demonstrable billing history of £150k+ per year",
+        "Technology or engineering desk experience - not generalist",
+        "Must be commutable to Manchester city centre. No relocation budget.",
+    ):
+        document.add_paragraph(item, style="List Bullet")
+    heading("Nice to have")
+    document.add_paragraph("Experience recruiting into venture-backed startups.")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(path))
     return path

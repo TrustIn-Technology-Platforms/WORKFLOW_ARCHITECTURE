@@ -133,6 +133,7 @@ and must never be committed.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `WEBHOOK_SECRET` | *(empty)* | Shared secret for the inbound webhook. Requests are rejected when it is set and does not match. |
+| `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read only by `scripts/push_sessions.py`, so re-uploading expired logins needs nothing pasted on the command line. |
 | `PORT` | `8000` | Railway injects this. |
 | `POLL_LIMIT` | `10` | Maximum rows claimed per poll. Also caps the Notion query page size. |
 | `DRY_RUN` | `false` | Walk every step up to the final submit, then stop. Nothing is published and nothing is written back as posted. |

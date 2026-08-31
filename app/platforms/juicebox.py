@@ -250,12 +250,14 @@ class JuiceboxAdapter(RecipeAdapter):
             )
             return
 
-        advert = document.advert
+        # The document's Client JD, else its advert; the search's own job
+        # description is the last resort, inside `set_criteria`. Same rule on
+        # all three platforms, so the three criteria sets agree.
         try:
             result = await set_criteria(
                 page,
                 search,
-                advert.body_text if advert else "",
+                document.job_description,
                 role_name=document.source_name,
                 settings=self.settings,
                 dry_run=self.dry_run,

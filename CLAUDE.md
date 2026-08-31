@@ -63,10 +63,27 @@ posting once by hand. Format spec:
 
 ## Current priority
 
-noon.ai posts live from a `.docx` (`post noon --live`, proven 2026-08-27). Next
-is the plumbing: Notion credentials and a real database row
-([docs/05-notion-contract.md](docs/05-notion-contract.md)), then `app/api.py`
-and the Railway deploy ([docs/09-operations.md](docs/09-operations.md)). Before
-touching noon again read
-[docs/platforms/noon.md](docs/platforms/noon.md#the-live-run-2026-08-27) — the
-editor autosaves, so there is no harmless dry run past role creation.
+The posting half runs in production. The sourcing half is now code-complete
+except for one surface, and what is left needs a person at a keyboard because
+both platforms sign in through SSO:
+
+1. **One supervised noon run.** `python -m app.cli source --role <uuid> --doc
+   <file> --live --headed` on a throwaway role, to confirm the targeting
+   preamble sets `preferences.location`. Read
+   [docs/platforms/noon.md](docs/platforms/noon.md#the-live-run-2026-08-27)
+   first — the editor autosaves, so there is no harmless dry run past role
+   creation.
+2. **One read-only Loxo probe.** `python scripts/probe_loxo_longlist.py --job
+   <id>` maps the Longlist Agent's similar titles and skills, the last surface
+   the automation has never opened. It saves nothing. Record what it finds in
+   [docs/platforms/loxo.md](docs/platforms/loxo.md) before writing the writer.
+
+[docs/12-sourcing-criteria.md](docs/12-sourcing-criteria.md) is the plan those
+two steps come from, and holds the state of every gap.
+
+**Documents now carry a `Client JD` section** — the client's spec, verbatim,
+last. Every sourcing platform reads `ParsedDocument.job_description`, which is
+that section when present and the advert when not. The advert is marketing copy
+and is the wrong text to build a search from; see
+[D-018](docs/11-decisions.md). The recruiter-facing shape is in
+[docs/templates/sequence-document.md](docs/templates/sequence-document.md).

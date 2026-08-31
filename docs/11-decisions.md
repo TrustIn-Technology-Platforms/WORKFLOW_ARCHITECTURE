@@ -369,3 +369,61 @@ session, but never run against a live role — the saved session had expired and
 Microsoft SSO needs a person at the keyboard. `NOON_SOURCING` therefore defaults
 to off, so an unattended Notion row keeps posting campaigns exactly as it did
 until someone has watched a `source --live --headed` run once.
+
+## D-018 · The document carries the client's JD; the advert is only the pitch
+
+**Status** Accepted · **Date** 2026-08-31 · **Where** [app/documents/parser.py](../app/documents/parser.py), [app/models.py](../app/models.py), [12-sourcing-criteria](12-sourcing-criteria.md), [templates/sequence-document](templates/sequence-document.md)
+
+Three platforms were being pointed at one job and returning three different
+shortlists, because each was reading a different description of it. noon read
+the document's advert. Loxo read the description already on the Loxo job,
+written by a recruiter months earlier. Juicebox read the job description already
+in the Juicebox project. Nobody had chosen this; it was what each platform
+happened to have to hand.
+
+Worse, the one text the system controls — the advert — is the wrong text. It is
+marketing copy, written to attract applicants, so it deliberately softens the
+years, the stack, the non-negotiables and (because location is a Notion column
+rather than prose) usually omits the location entirely. That is why noon's
+`preferences.location` came back empty on every role and searched globally, and
+why the generated criteria read thin.
+
+**The decision.** The document gains a `Client JD` section, last, holding the
+client's job description verbatim. `ParsedDocument.client_jd` holds it and
+`ParsedDocument.job_description` is what every sourcing platform reads — the
+`Client JD` when there is one, the advert when there is not. One JD, parsed
+once, handed to all three platforms, so their criteria are three readings of the
+same text rather than of three texts.
+
+The section is defined by position as well as heading: it starts after the last
+message in the sequence and runs to the end of the document. A client's JD
+carries its own headings — *Requirements*, *The Role*, *Package* — and each of
+those would otherwise read as an advert section or be swallowed by the step
+above it. Reading it as one block is what makes pasting it in safe. A JD heading
+found earlier than that is reported and ignored rather than obeyed, because
+obeying it would read half the sequence as a job spec.
+
+`Job Description` is deliberately not an accepted heading: it already names the
+*advert* in the parser, and reusing it would replace the advert with the spec
+silently. `Job Spec` is accepted only after the last message, because it names
+the advert at the top of a document and the client's spec at the bottom of one.
+
+## Why not the alternatives
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep each platform on the text it already has | The three sets of criteria disagree by construction, and nothing on the row can fix it. The row is the trigger, so the document has to be the source of truth. |
+| Generate a JD from the advert with Claude | Inventing requirements the client never stated is the one failure mode a sourcing filter must not have. The advert's silences are real information. |
+| Put the JD in a Notion column | A JD is pages long, and the recruiters already keep the whole role in one document. A second place to look is a second place to forget. |
+| Reuse the `Job Description` heading | It already maps onto the advert, and the failure would be silent — the advert replaced by a spec, posted to job boards as marketing copy. |
+| Put the section first, next to the advert | Every JD's own internal headings would then have to be told apart from the document's, and a wrong guess would eat the sequence. Last means the tail is unambiguously the client's. |
+
+**Trade-off** It costs the recruiter one paste per document, and a document
+without it silently keeps the old behaviour rather than failing — the fallback
+is what lets every document written before today keep working, and it is also
+what lets somebody forget. `python -m app.cli parse` prints whether a JD was
+found, and a run whose location comes back empty now says so on the row.
+
+**Revisit when** documents routinely arrive with the section and the fallback
+stops being exercised — at that point an absent `Client JD` should probably be a
+warning on the row rather than a quiet substitution.

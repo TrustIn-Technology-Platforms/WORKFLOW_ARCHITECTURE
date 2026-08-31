@@ -77,14 +77,40 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 - health must always answer
             return {"status": "degraded", "recipes_error": str(exc)}
 
+        # Whether the logins actually arrived on the volume. Without this the
+        # only way to find out is to spend a row and read the failure, and the
+        # answer is three cheap filesystem checks per platform.
+        from app.sessions.store import SessionStore
+
+        store = SessionStore(settings)
+        profiles: dict[str, dict] = {}
+        for key in sorted(recipes):
+            info = store.profile_info(key)
+            state_file = Path(settings.session_dir) / f"{key}.storage_state.json"
+            profiles[key] = {
+                # False here is the whole cause of "<Platform> has no browser
+                # profile in ...": nothing was uploaded, or it went elsewhere.
+                "profile": info.exists,
+                "profile_age_days": round(info.age_days, 1) if info.age_days else None,
+                "storage_state": state_file.is_file(),
+                # Set by the upload, consumed by the first browser launch. True
+                # means the profile is fresh off an upload and its cookies have
+                # not been injected yet; False after a run has used it.
+                "cookie_import_pending": (
+                    store.profile_dir(key) / ".import-cookies"
+                ).exists(),
+            }
+
         return {
             "status": "ok",
-            "version": "1.1",  # bumped with the cookie-import mechanism
+            "version": "1.2",  # bumped with per-platform profile reporting
             "notion_configured": settings.notion_configured,
             "webhook_secret_set": bool(settings.webhook_secret),
             "dry_run": settings.dry_run,
             "headless": settings.headless,
             "session_dir": str(settings.session_dir),
+            "profile_dir": str(settings.browser_profile_dir),
+            "profiles": profiles,
             "platforms_enabled": enabled,
             "platforms_total": len(recipes),
         }

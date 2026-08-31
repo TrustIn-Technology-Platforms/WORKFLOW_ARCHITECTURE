@@ -3,7 +3,7 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-08-31
+> **Last reviewed** 2026-08-31 (sourcing targeting)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
@@ -19,6 +19,30 @@ Railway volume (`/data`); cookies are injected from locally-exported
 storage_state because Chrome's cookie store is OS-encrypted. What remains is
 hygiene: deleting test roles/campaigns from the platforms, and the recurring
 local session refresh when a platform logs the bot out.
+
+**Amended 2026-08-31, later: one JD, and noon knows where the job is.**
+The three platforms were building their criteria from three different texts —
+noon from the document's advert, Loxo from the description already on the Loxo
+job, Juicebox from the one already in the project — so three tools pointed at
+one job returned three shortlists. They now all read the same thing: a
+**`Client JD`** section at the end of the document, holding the client's spec
+verbatim, falling back to the advert when nobody pasted one
+([D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)).
+
+The advert was the wrong text for a second reason: it is marketing copy, and it
+never states the location, because the location is a Notion column. So
+`preferences.location` was empty on every noon role and the agent searched
+globally. noon is now handed the location, employment type and skills
+off the row as a preamble above the JD — `generate_params` is the call that
+writes `preferences`, and it writes what it can read — and the filters are read
+back off the role afterwards, with a warning on the Notion row when they are
+still empty.
+
+What is left of the sourcing half is not code. Two sessions at a keyboard, both
+needing a person because both platforms sign in through SSO: one supervised
+`source --live --headed` run to confirm noon takes the preamble, and one
+read-only `scripts/probe_loxo_longlist.py` run to map the Longlist Agent's
+similar titles and skills — the last surface the automation has never opened.
 
 **Amended 2026-08-31: one trigger, both halves, nothing published.** The
 sourcing criteria are no longer a separate command — `CRITERIA_ENABLED`
@@ -89,15 +113,16 @@ write endpoints have been observed.
 | 1 | Trigger — webhook service | **BUILT** | [api.py](../app/api.py): `create_app()` factory, `POST /webhook` (secret-gated, backgrounds `run_page`), `GET /health`. `Dockerfile`, `railway.json`, `.dockerignore` added 2026-08-28 |
 | 2 | Resolve and fetch document | **BUILT and verified live** | [sharelinks.py](../app/documents/sharelinks.py), [fetcher.py](../app/documents/fetcher.py) — a real `-my.sharepoint.com` share link from the Notion row downloaded as `.docx` anonymously on 2026-08-27 via the `sharepoint-download` strategy |
 | 3 | Read `.docx` into blocks | **BUILT** | [docx_reader.py](../app/documents/docx_reader.py) |
-| 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document |
+| 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document. **`Client JD` added 2026-08-31** — the client's spec as the document's last section, on `client_jd`, with `job_description` falling back to the advert ([D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)) |
 | 5 | Post to platforms | **BUILT — noon + Juicebox LIVE** | [platforms/](../app/platforms/) — `post noon --live` saved a five-step campaign on 2026-08-27 ([noon.yaml](../platforms/noon.yaml) `enabled: true`). `post juicebox --live` created and saved a three-email sequence the same day via a Python `driver` ([juicebox.py](../app/platforms/juicebox.py), [juicebox.yaml](../platforms/juicebox.yaml) `enabled: true`) — see [platforms/juicebox](platforms/juicebox.md) |
-| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. See [platforms/noon](platforms/noon.md#the-sourcing-wizard) and [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) |
+| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. **Amended 2026-08-31:** the wizard now reads the document's `Client JD` rather than its advert, a `targeting_preamble` states the location/type/skills off the row above it so `generate_params` sets `preferences.location`, and `_check_preferences` reads the filters back off the role and warns when they are empty. See [platforms/noon](platforms/noon.md#the-search-filters-and-the-preamble-that-sets-them-2026-08-31), [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) and [12-sourcing-criteria](12-sourcing-criteria.md) |
 | 5c | Loxo candidate criteria | **PARSER + DRAFTER BUILT, WRITER UNBUILT** | [loxo_criteria.py](../app/platforms/loxo_criteria.py) parses Loxo's Skill DNA out of a job description (Dealbreaker / Baseline / Nice-to-have / Traits to avoid), promotes every nice-to-have into Dealbreaker, and renders it back with the advert prose intact; [criteria_ai.py](../app/platforms/criteria_ai.py) drafts whichever buckets came back empty from the advert via `claude-opus-5`, proven live 2026-08-31. 19 tests. **Nothing writes to a Loxo job yet.** See [platforms/loxo](platforms/loxo.md#candidate-criteria--the-skill-dna-2026-08-31) |
 | 5d | Juicebox search criteria | **DRY RUN PROVEN, LIVE WRITE UNTESTED** | [juicebox_criteria.py](../app/platforms/juicebox_criteria.py) — reads a search's ranked criteria, drafts a tighter list from its own job description, writes it back through the Criteria dialog. Dry run verified live 2026-08-31 (5 criteria read, 10 drafted); the `--live` write was stopped by a permission gate, not a failure. Backup + `--restore` in place. See [platforms/juicebox](platforms/juicebox.md#search-criteria-2026-08-31) |
+| 5e | Loxo Longlist Agent — similar titles + skills | **NOT STARTED, probe written** | The surface that decides which profiles enter a longlist at all. Never opened; Loxo seeds it from the job title, which is why the 2026-08-31 search had too few titles and no skills. [scripts/probe_loxo_longlist.py](../scripts/probe_loxo_longlist.py) maps it read-only in one live session. See [platforms/loxo](platforms/loxo.md#the-longlist-agent--unmapped-and-the-probe-that-maps-it-2026-08-31) and [12-sourcing-criteria](12-sourcing-criteria.md) gap 2 |
 | 6 | Write back to Notion | **BUILT** | [client.py](../app/notion/client.py) |
 | — | Orchestration | **BUILT** | [pipeline.py](../app/pipeline.py) |
 | — | Sessions / login capture | **BUILT and verified live** | [store.py](../app/sessions/store.py), `capture_login` — the saved noon profile opened `/portal` logged in, headless, on 2026-08-26 |
-| — | Tests | **PARTIAL** | 114 passing; parser (incl. real documents), templating filters, engine and recorder covered, Notion and fetcher are not |
+| — | Tests | **PARTIAL** | 176 passing; parser (incl. real documents and the `Client JD` section), the sourcing wizard's policy and call order, criteria targeting, templating filters, engine and recorder covered. Notion and fetcher are not |
 
 ## Verified working
 

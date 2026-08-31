@@ -115,6 +115,10 @@ class Settings(BaseSettings):
 
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")
+    # Where the deployed service answers. Only the upload script reads it, so
+    # that re-uploading expired logins is one command with nothing to paste -
+    # a secret typed on a command line ends up in the shell history.
+    service_url: str = Field(default="", description="e.g. https://app.up.railway.app")
     port: int = 8000
     poll_limit: int = 10
     dry_run: bool = False

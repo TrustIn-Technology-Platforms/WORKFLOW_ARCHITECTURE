@@ -273,11 +273,61 @@ travels untouched.
 
 ### Where the JD ends up
 
-`preferences.jd` is empty on all 125 roles because nothing writes it. The advert
+`preferences.jd` is empty on all 125 roles because nothing writes it. The text
 goes in through `generate_params`, and noon keeps it as the role's cached job
 description (`cached_job_description`, `get_role_jd`); what it extracts lands on
 `preferences.location`, `preferences.type`, `preferences.experience` and
 `preferences.companySpecs`.
+
+### The search filters, and the preamble that sets them (2026-08-31)
+
+Criteria rank the pool; `preferences` decides the pool. On every role built
+before this, `preferences.location` was **empty** and noon searched globally —
+because the text it was given was the document's advert, and TrustIn's adverts
+state the location nowhere: the location is a Notion column.
+
+Two changes, neither of which needs an endpoint we have not seen:
+
+1. **noon reads the document's `Client JD`**, not its advert. The advert is
+   marketing copy and softens exactly what a search filters on — see
+   [D-018](../11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch).
+2. **`targeting_preamble()` states the facts above that JD**, in the form the
+   wizard's own placeholders use, so noon's extractor picks them up:
+
+   ```
+   Job title: Senior Recruitment Consultant
+   Location: Manchester (hybrid)
+   Employment type: Permanent
+   Key skills: Kubernetes, Terraform
+
+   <the client's JD>
+   ```
+
+   Values come off the row (`Location`, `Employment Type`, `Skills`) through
+   `enrich_advert`; a line whose value is unknown is not written at all.
+
+   **Salary is deliberately not in there** even though the row carries it.
+   noon has no compensation preference, so the only thing it could become is
+   a criterion — and every criterion here is promoted to a non-negotiable and
+   starred. "Will accept £35-45k" is not something a profile can satisfy, so
+   it would narrow the search to nobody while looking like diligence.
+
+**It is checked, not assumed.** `generate_params` returning a location is not
+the same as the location being saved, so `_check_preferences` reads
+`preferences` back off the role immediately afterwards — `generate_params` saves
+on its way through, so the role fetched next already reflects it. Three
+warnings can reach the Notion row:
+
+| Warning | Means |
+|---------|-------|
+| `noon extracted no location from this job description` | nothing stated one — fill the row's `Location` column |
+| `noon read the location as X but did not save it` | extraction worked, the save did not — set it in the Control Panel |
+| `noon extracted no job titles` | the role is matching on criteria alone |
+
+**Still unobserved:** the call that writes `preferences` directly. One probe of
+the role's Control Panel — network tab recording, change the location by hand —
+would give it, and then the preamble becomes a belt-and-braces measure rather
+than the mechanism.
 
 ## The API underneath
 
@@ -319,8 +369,10 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 | Our field | noon | How | Confirmed |
 |-----------|------|-----|-----------|
 | `advert.title` | Role name | `[placeholder^='Search existing ATS roles']` | yes |
-| `advert.body_text` | the job description the sourcing wizard reads | `generate_params` — see [the sourcing wizard](#the-sourcing-wizard) | payload read from noon's bundle, not yet run live |
-| `advert.location` | `preferences.location[]` | extracted from the advert by `generate_params` | same |
+| `document.job_description` | the job description the sourcing wizard reads | `generate_params` — the document's `Client JD`, else its advert | read half confirmed live 2026-08-31 |
+| `advert.location` | `preferences.location[]` | stated in the `targeting_preamble` above the JD, extracted by `generate_params`, read back off the role | preamble built 2026-08-31, not yet run live |
+| `advert.employment_type`, `advert.tags` | `preferences.type`, `preferences.experience` | same preamble | same |
+| `advert.salary` | — | deliberately not given to the sourcing wizard | n/a |
 | `email.subject` | step Subject | `text='Subject' >> nth=-1 >> xpath=following::input[1]` | selector plausible, untested |
 | `email.body_html` | step body (Draft.js) | `.public-DraftEditor-content >> nth=-1`, `fill_rich` | element confirmed, paste untested |
 | `email.delay_days` | `offset` — "N days after previous step" | click `2 days`, then ? | no |

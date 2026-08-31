@@ -2,7 +2,8 @@
 
 > **Purpose** How a share link becomes a `ParsedDocument`, stage by stage.
 > **Audience** Anyone working on `app/documents/`, or debugging a bad parse.
-> **Status** Stages 1–3 BUILT · stage 4 (`parser.py`) NOT STARTED — its spec is below.
+> **Status** Stages 1–4 **BUILT** and verified against real documents. The
+> spec below is what `parser.py` satisfies. `Client JD` added 2026-08-31.
 > **Related** [02-architecture](02-architecture.md) · [10-testing](10-testing.md)
 
 ```
@@ -168,6 +169,8 @@ leading section.
 
 | Heading looks like | Becomes |
 |--------------------|---------|
+| `Client JD`, `Full JD`, `Original JD`, `JD` — **after the last message** | `client_jd`, and so does every section below it |
+| `Job Spec`, `Role Spec` — **after the last message** | the same |
 | `Email 1`, `Email 2 - Follow up`, `Follow-up 3`, `Sequence Step 2` | An `EmailStep` |
 | `Job Advert`, `Advert`, `Job Description`, `The Role`, `Role Overview` | The `Advert` |
 | Neither, and no email step has been seen yet | Advert body continuation |
@@ -178,6 +181,39 @@ ordered — an explicit email marker always wins over an advert marker.
 
 When no section matches an advert pattern, the largest non-email section becomes
 the advert and a warning is recorded.
+
+### 4b-bis. The client's job description
+
+The advert is marketing copy and the platforms that source from it need the
+spec, so the document carries both — see
+[D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)
+and [12-sourcing-criteria](12-sourcing-criteria.md).
+
+**The section is defined by position as much as by heading.** It begins at a JD
+heading that comes *after the last message in the sequence*, and runs to the end
+of the document. Everything below it is taken as one block, headings included: a
+real JD carries `Requirements`, `The Role`, `Package` of its own, and each of
+those would otherwise be read as an advert section or appended to the step above
+it.
+
+- Its own opening heading (`Client JD`) is dropped; every heading inside the
+  spec is kept, because a bullet list under `Must have` means nothing without it.
+- `Job Description` is **not** an accepted heading — it already names the advert
+  above, and reusing it would replace the advert silently.
+- `Job Spec` is accepted only after the last message: it names the advert at the
+  top of a document and the client's spec at the bottom of one.
+- A JD heading found *before* the last message is left to the ordinary rules and
+  a warning says to move it. Obeying it would read half the sequence as a spec.
+- An empty section warns and falls back.
+
+The result is plain text on `ParsedDocument.client_jd`. Text and not HTML
+because every consumer is a search — noon's `generate_params`, Loxo's Skill DNA
+drafter, Juicebox's ranker — and each reads a string.
+
+**`ParsedDocument.job_description`** is the accessor the platforms use: the
+`Client JD` when there is one, `advert.body_text` when there is not. That
+fallback is what keeps every document written before this shape existed working
+unchanged.
 
 ### 4c. Extract email metadata
 
@@ -229,10 +265,12 @@ reference `{{ advert.fields["Start Date"] }}` with no code change.
 - **Never raises for messy input.** Ambiguity is a `warning`, not an exception.
   `DocumentParseError` is reserved for genuinely unreadable input.
 - **Nothing is silently dropped.** Every block ends up in the advert, in an email
-  step, in a field, or named in a warning.
+  step, in the client's JD, in a field, or named in a warning.
 - **Order is preserved.** Email steps come back in send order.
 - **`is_empty` means the run should fail.** No advert and no emails is a parse
   failure worth telling a human about.
+- **`job_description` is never empty when there is an advert.** It falls back,
+  so a platform reading it never has to know whether the section was there.
 
 ### 4f. Test cases to write first
 

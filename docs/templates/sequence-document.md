@@ -61,6 +61,9 @@ Title: <advert title>
 
 Ad · Wellfound
 <advert copy>
+
+Client JD
+<the client's job description, pasted verbatim — last thing in the document>
 ```
 
 Rules the parser applies:
@@ -83,6 +86,37 @@ Rules the parser applies:
   `LinkedIn Connection` / `Connect`, `Wellfound`. Trailing notes in
   parentheses or after `·` are fine: `InMail (Day 5)`, `Email 2 · Deeper`.
 
+## `Client JD` — the section the search reads
+
+**Paste the client's job description at the end of the document, under a
+`Client JD` heading.** This is what noon, Loxo and Juicebox build their sourcing
+criteria from. Without it they fall back to the advert, and the advert is
+marketing copy: it is written to attract applicants, so it softens the years,
+the stack and the non-negotiables, and it usually does not state the location at
+all. A search built from it looks for the wrong people — noon searched globally
+on every role until this section existed.
+
+- **Verbatim.** The client's words, not a rewrite. Its whole value is that it
+  says the things the advert deliberately does not.
+- **Last.** After the final message and after the `Ad ·` sections. Everything
+  below the heading is treated as the JD, headings and all, which is what makes
+  it safe to paste a document that has its own `Requirements` and `The Role`
+  headings inside it.
+- **Accepted headings:** `Client JD`, `Full JD`, `Original JD`, `Client Job
+  Description`, `JD`, and `Job Spec`. **Not** `Job Description` — that one
+  already names the advert.
+- Put it earlier in the document and the parser will say so on the row instead
+  of guessing.
+
+Check it was picked up before the row goes live:
+
+```
+python -m app.cli parse "<document>"      # prints a Client JD section, or says none
+```
+
+There is no harm in a document without one — everything written before this
+existed still works — but the criteria will be as good as the advert was.
+
 ## Prompt block for the generator
 
 Paste this into whatever generates the documents:
@@ -93,7 +127,8 @@ Format the output exactly as follows, as a Word document:
 - Headings, in this order and with these exact first words:
   "Email 1 (Day 1)", "Email 2 (Day N)", "Email 3 (Day N)",
   then optionally "Wellfound (Day N)", "InMail (Day N)", "Connect (Day N)",
-  then job adverts under "Ad · LinkedIn", "Ad · Wellfound", "Ad · Eng Sites".
+  then job adverts under "Ad · LinkedIn", "Ad · Wellfound", "Ad · Eng Sites",
+  and last of all "Client JD" holding the client's job description verbatim.
 - Email 1 starts with a line "Subject: <subject>". Emails 2 and 3 have no
   subject (they reply in the same thread). InMail has its own Subject: line.
 - Use only these merge tokens: {{first_name}}, {{company}}. No other

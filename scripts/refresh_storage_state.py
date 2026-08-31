@@ -70,8 +70,11 @@ async def refresh(key: str) -> bool:
 
 
 async def main() -> None:
-    keys = sys.argv[1:] or ["noon", "loxo", "juicebox"]
-    print("Refreshing decrypted cookie exports:")
+    # Every recipe, not a hand-written list: the list said noon, loxo, juicebox
+    # and Wellfound was added after it, so the one platform being deployed was
+    # the one whose cookies were never re-exported (found 2026-08-31).
+    keys = sys.argv[1:] or sorted(load_recipes(get_settings()))
+    print(f"Refreshing decrypted cookie exports for: {', '.join(keys)}")
     results = [await refresh(k) for k in keys]
     if not any(results):
         sys.exit("nothing exported")

@@ -168,13 +168,16 @@ class LoxoAdapter(RecipeAdapter):
         if not job_id:
             return
 
-        advert = document.advert
-        advert_text = advert.body_text if advert else ""
+        # The client's JD when the document carries one, the advert when it does
+        # not. Loxo's own description used to win by default, which is how the
+        # three platforms ended up sourcing from three different texts
+        # (docs/12-sourcing-criteria.md, gap 4). The row is the trigger, so the
+        # document is the source of truth.
         try:
             result = await set_criteria(
                 page,
                 job_id,
-                advert_text,
+                document.job_description,
                 role_name=document.source_name,
                 agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
                 settings=self.settings,

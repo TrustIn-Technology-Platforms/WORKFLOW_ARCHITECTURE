@@ -223,6 +223,19 @@ def parse(
         if show_html:
             console.print(f"      [dim]{email.body_html[:800]}[/dim]")
 
+    # What the sourcing platforms will read, and which section it came from.
+    # An advert here is the fallback, not the intent - see docs/12.
+    console.print("\n[bold]Client JD[/bold]")
+    if document.client_jd:
+        preview = " ".join(document.client_jd.split())[:180]
+        console.print(f"  {len(document.client_jd)} chars")
+        console.print(f"  [dim]{preview}{'...' if len(preview) == 180 else ''}[/dim]")
+    else:
+        console.print(
+            "  [yellow]none - the criteria will be built from the advert, which "
+            "is marketing copy[/yellow]"
+        )
+
     if document.warnings:
         console.print("\n[bold yellow]Warnings[/bold yellow]")
         for warning in document.warnings:
@@ -246,6 +259,8 @@ def _document_json(document: Any, include_html: bool) -> dict[str, Any]:
             {k: v for k, v in e.as_context().items() if include_html or k != "body_html"}
             for e in document.emails
         ],
+        "client_jd": document.client_jd,
+        "job_description_chars": len(document.job_description),
         "warnings": document.warnings,
     }
     return payload
@@ -441,15 +456,15 @@ async def _search_criteria(
     advert_text, role_name = "", ""
     if doc:
         document = await load_document(doc, settings)
-        advert = document.advert
-        if advert is None or not advert.body_text.strip():
+        advert_text = document.job_description
+        if not advert_text:
             raise PipelineError(
-                f"{doc} has no advert section, so there is nothing to build "
-                "search criteria from."
+                f"{doc} has neither a Client JD section nor an advert, so there "
+                "is nothing to build search criteria from."
             )
-        advert_text = advert.body_text
-        role_name = document.source_name or advert.title
-        console.print(f"[dim]advert: {len(advert_text)} chars from {doc}[/dim]")
+        role_name = document.source_name or (document.advert.title if document.advert else "")
+        origin = "Client JD" if document.client_jd else "advert"
+        console.print(f"[dim]{origin}: {len(advert_text)} chars from {doc}[/dim]")
     else:
         console.print("[dim]advert: the search's own job description[/dim]")
 
@@ -578,12 +593,16 @@ async def _criteria(
     advert_text, role_name = "", ""
     if doc:
         document = await load_document(doc, settings)
-        if document.advert and document.advert.body_text.strip():
-            advert_text = document.advert.body_text
-            role_name = document.source_name or document.advert.title
-            console.print(f"[dim]advert: {len(advert_text)} chars from {doc}[/dim]")
+        advert_text = document.job_description
+        if advert_text:
+            role_name = document.source_name or (document.advert.title if document.advert else "")
+            origin = "Client JD" if document.client_jd else "advert"
+            console.print(f"[dim]{origin}: {len(advert_text)} chars from {doc}[/dim]")
         else:
-            console.print(f"[yellow]{doc} has no advert; using the job's own description[/yellow]")
+            console.print(
+                f"[yellow]{doc} has neither a Client JD nor an advert; using the "
+                "job's own description[/yellow]"
+            )
 
     recipe = resolve("loxo", load_recipes(settings))
     if recipe is None:
@@ -642,21 +661,39 @@ async def _source(
     from app.pipeline import load_document
     from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
     from app.platforms.engine import _role_name
-    from app.platforms.noon_sourcing import set_up_sourcing
+    from app.models import Advert
+    from app.platforms.noon_sourcing import set_up_sourcing, targeting_preamble
 
     role_id = _role_uuid(role)
     document = await load_document(doc, settings)
     advert = document.advert
-    if advert is None or not advert.body_text.strip():
+    jd = document.job_description
+    if not jd:
         raise PipelineError(
-            f"{doc} has no advert section, so there is no job description to give "
-            "noon. Sourcing criteria come from the advert, not from the emails."
+            f"{doc} has neither a Client JD section nor an advert, so there is no "
+            "job description to give noon. Sourcing criteria come from those, not "
+            "from the emails."
         )
 
     emails = [e for e in document.emails if e.is_email]
+    # A Client JD is enough on its own, so the advert may be absent entirely.
+    advert = advert or Advert(title="", body_text="", body_html="")
     role_name = name or _role_name(document.source_name, None, advert, emails)
-    jd = f"{advert.title}\n\n{advert.body_text}".strip()
-    console.print(f"[dim]job description: {len(jd)} chars from {doc}[/dim]")
+    targeting = targeting_preamble(
+        title=advert.title or role_name,
+        location=advert.location or "",
+        employment_type=advert.employment_type or "",
+        skills=advert.tags,
+    )
+    origin = "Client JD" if document.client_jd else "advert"
+    console.print(f"[dim]job description: {len(jd)} chars from the {origin} in {doc}[/dim]")
+    if targeting:
+        console.print(f"[dim]targeting:\n{targeting}[/dim]")
+    else:
+        console.print(
+            "[yellow]no location, type or skills on this document, so noon will "
+            "search globally[/yellow]"
+        )
 
     recipe = resolve("noon", load_recipes(settings))
     if recipe is None:
@@ -689,6 +726,7 @@ async def _source(
                     source=settings.noon_sourcing_source,
                     start_sourcing=start,
                     dry_run=dry_run,
+                    targeting=targeting,
                 )
             except PipelineError:
                 await save_failure(context, page, "noon-sourcing-failed", settings)

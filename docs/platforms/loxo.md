@@ -317,6 +317,51 @@ entire talent pool")** vs **"Do everything myself" (~4 weeks)**. The first is
 the agent that consumes these criteria; it is Loxo's equivalent of noon's
 "start sourcing", and it should never be picked by a test.
 
+## The Longlist Agent — unmapped, and the probe that maps it (2026-08-31)
+
+> **Status** **NOT STARTED.** The panel has never been opened by the
+> automation. A read-only probe is written; the writer is not.
+
+The Skill DNA above sets the criteria that **rank** a longlist. What decides
+which profiles enter it — the *similar titles* and the *skills* — is a different
+surface, and Loxo seeds it from the job title alone. Sohaib's review of the
+search started on 2026-08-31: too few similar titles, no relevant skills.
+
+A job's GraphQL payload carries three agent configurations, not one:
+
+```
+defaultExpandedAgentTypeKeys: ["job_description", "shortlist", "longlist"]
+agentJobLinkIds:              [13305, 13307, 13306]
+```
+
+Only `job_description` is mapped — that is the description field the criteria
+writer edits. `longlist` and `shortlist` have not been read.
+
+**The probe:**
+
+```
+python scripts/probe_loxo_longlist.py --job 3640874
+```
+
+It opens the job with the saved profile, records every GraphQL operation with
+its variables and response, dumps the panel (text, DOM, screenshot, and any
+chip-shaped elements) each time the screen changes, and prints back which calls
+carry a titles- or skills-shaped list. **It writes nothing** — a person expands
+`Longlist Agent`, opens the two fields, types one character into each to see
+whether they autocomplete, and closes the window. Output goes to
+`artifacts/loxo-longlist/<timestamp>/`, which is git-ignored and holds PII.
+
+Read-only on purpose, twice over: the Role Title box is a taxonomy autocomplete
+that **discards free text on blur**, so a field filled by guesswork looks saved
+and is not; and Loxo's own generator discards work that is not accepted in the
+same session. What to record afterwards, here: the mutation name, its variables,
+whether each field is free text or a taxonomy lookup, and the selectors.
+
+The content itself is not the problem — the titles and the stack are already in
+the document's `Client JD`
+([D-018](../11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)).
+Only the write path is missing.
+
 ## The live run (2026-08-27)
 
 Campaign **693495**, `testzz Abundant - Staff Platform Engineer - SF-DUB`,
@@ -345,9 +390,13 @@ Two things the run settled that the docs did not know:
 - [ ] Which `job_type_id` corresponds to Permanent, and where does the company name come from?
 - [ ] Does noon's `Create New Role` ATS picker list Loxo jobs created this way? If so, create the Loxo job **first** so noon's candidates land in it.
 - [ ] What does *Browse templates* offer, and does *Save as template...* on 693495 give the recruiter the template they want?
+- [ ] **Which GraphQL mutation saves the Longlist Agent's similar titles and skills, and are those fields free text or taxonomy lookups?** `scripts/probe_loxo_longlist.py` answers this in one session.
 
 ## Next
 
 1. Turn the run into `platforms/loxo.yaml` steps: search → open-or-`Start new` → rename → one stage per email step. `enabled: true` only after a second `testzz` run through the engine matches this one.
 2. Make the follow-up delay a setting.
 3. Write the adapter for the job half (API).
+4. Run `scripts/probe_loxo_longlist.py` on a real job, record the findings
+   above, then write the Longlist Agent's titles and skills from the
+   document's `Client JD`.

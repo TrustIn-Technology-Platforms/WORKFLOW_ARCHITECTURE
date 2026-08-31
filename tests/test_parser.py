@@ -438,3 +438,18 @@ def test_an_empty_client_jd_section_says_so_and_falls_back():
     assert document.client_jd == ""
     assert document.job_description == "Join a team that ships."
     assert any("is empty" in w for w in document.warnings)
+
+
+def test_a_document_with_a_client_jd_and_no_advert_still_has_something_to_search_on():
+    """An emails-only document is valid, and the JD is then the only description
+    of the job the platforms get - so `job_description` must not depend on an
+    advert existing.
+    """
+    document = parser.parse_document([
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+        _heading("Client JD"),
+        _block("8+ years of production Kubernetes. Manchester, no sponsorship."),
+    ])
+    assert document.advert is None
+    assert document.job_description.startswith("8+ years")

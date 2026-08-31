@@ -22,6 +22,7 @@ from app.platforms.noon_sourcing import (
     parse_criteria,
     run_wizard,
     strictest_answer,
+    targeting_preamble,
     tighten,
 )
 
@@ -126,8 +127,18 @@ class FakeSession(NoonSession):
                 "must_haves": "5+ years on platform teams\nKubernetes",
                 "nice_to_haves": "Terraform",
                 "titles": ["Platform Engineer"],
+                "location": "Manchester, UK",
             },
-            "all_roles": [{"id": "role-1", "name": "Halluminate", "autopilot": {"emailCampaign": {"id": "c1"}}}],
+            "all_roles": [{
+                "id": "role-1",
+                "name": "Halluminate",
+                "autopilot": {"emailCampaign": {"id": "c1"}},
+                # The filters `generate_params` saved on its way through.
+                "preferences": {
+                    "location": ["Manchester, UK"],
+                    "titles": ["Platform Engineer", "Site Reliability Engineer"],
+                },
+            }],
             "gpt_stream": "*Must have 5+ years on platform teams\n*Require Kubernetes\n*Require Terraform",
             "clarifying_questions": {
                 "Is Terraform required?": ["Yes", "No"],
@@ -263,3 +274,96 @@ def test_a_missing_role_is_named_in_the_error():
     session = FakeSession(all_roles=[{"id": "someone-elses-role"}])
     with pytest.raises(PlatformError, match="no role"):
         _run(session)
+
+
+# ----------------------------------------------------------------------
+# the search filters - location and titles
+# ----------------------------------------------------------------------
+
+
+def test_the_preamble_states_the_facts_the_advert_leaves_out():
+    """Only what is known, and only what noon filters on.
+
+    An empty column contributes no line at all - "Location:" with nothing after
+    it is worse than silence. Salary is not offered at all: noon has no
+    compensation preference, so it could only become a criterion, and every
+    criterion here gets starred as a non-negotiable.
+    """
+    assert targeting_preamble(
+        title="Senior Platform Engineer",
+        location="Manchester, UK",
+        employment_type="Permanent",
+        skills=["Kubernetes", "Terraform", ""],
+    ).splitlines() == [
+        "Job title: Senior Platform Engineer",
+        "Location: Manchester, UK",
+        "Employment type: Permanent",
+        "Key skills: Kubernetes, Terraform",
+    ]
+    assert targeting_preamble() == ""
+
+
+def test_the_facts_reach_noon_above_the_job_description():
+    """`generate_params` is the only call that writes the role's filters, and it
+    writes what it can read - so the location has to be in the text.
+    """
+    session = FakeSession()
+    report = _run(session, targeting="Location: Manchester, UK")
+
+    jd = session.payload("generate_params")["jd"]
+    assert jd.startswith("Location: Manchester, UK")
+    assert jd.endswith("JD text")
+    assert report.location == "Manchester, UK"
+    assert report.titles == ["Platform Engineer", "Site Reliability Engineer"]
+    assert "location Manchester, UK" in report.summary
+
+
+def test_a_role_that_would_be_searched_globally_says_so():
+    session = FakeSession(
+        generate_params={
+            "must_haves": "Kubernetes",
+            "nice_to_haves": "",
+            "titles": ["Platform Engineer"],
+            "location": "",
+        },
+        all_roles=[{"id": "role-1", "preferences": {"titles": ["Platform Engineer"]}}],
+    )
+    report = _run(session)
+
+    assert report.location == ""
+    assert any("searched globally" in w for w in report.warnings)
+    assert "no location" in report.summary
+
+
+def test_a_location_read_but_not_saved_is_reported_as_not_saved():
+    """Extracting it and saving it are two different things, and only the second
+    one narrows the search.
+    """
+    session = FakeSession(
+        all_roles=[{"id": "role-1", "preferences": {"titles": ["Platform Engineer"]}}]
+    )
+    report = _run(session, targeting="Location: Manchester, UK")
+
+    assert any("did not save it" in w for w in report.warnings)
+
+
+def test_no_titles_on_the_role_is_worth_a_warning():
+    session = FakeSession(
+        generate_params={
+            "must_haves": "Kubernetes",
+            "nice_to_haves": "",
+            "titles": [],
+            "location": "Manchester, UK",
+        }
+    )
+    report = _run(session)
+    assert any("no job titles" in w for w in report.warnings)
+
+
+def test_a_dry_run_still_reports_the_filters_it_would_have_set():
+    """The cheapest place to find out the location is missing is before the run."""
+    session = FakeSession()
+    report = _run(session, dry_run=True, targeting="Location: Manchester, UK")
+
+    assert report.location == "Manchester, UK"
+    assert report.titles == ["Platform Engineer"]

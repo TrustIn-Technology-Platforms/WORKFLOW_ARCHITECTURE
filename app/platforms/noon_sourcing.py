@@ -123,6 +123,11 @@ class SourcingReport:
     answers: dict[str, str] = field(default_factory=dict)
     started_sourcing: bool = False
     warnings: list[str] = field(default_factory=list)
+    # The search filters, as noon read them back out of the text it was given.
+    # Criteria rank the pool; these decide the pool, so an empty location is
+    # worth saying out loud even on a run that otherwise succeeded.
+    location: str = ""
+    titles: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -132,6 +137,9 @@ class SourcingReport:
             f"{len(self.non_negotiables)} non-negotiable(s)",
             f"{len(self.answers)} question(s) answered",
         ]
+        parts.append(f"location {self.location}" if self.location else "no location")
+        if self.titles:
+            parts.append(f"{len(self.titles)} title(s)")
         parts.append("sourcing started" if self.started_sourcing else "not started")
         return ", ".join(parts)
 
@@ -139,6 +147,63 @@ class SourcingReport:
 # ----------------------------------------------------------------------
 # criteria — pure functions, so the policy is testable without a browser
 # ----------------------------------------------------------------------
+
+
+def targeting_preamble(
+    *,
+    title: str = "",
+    location: str = "",
+    employment_type: str = "",
+    skills: list[str] | None = None,
+) -> str:
+    """The search facts, stated plainly, to sit above the job description.
+
+    noon's `generate_params` is the only call that writes the role's
+    `preferences` — the location, the titles and the years of experience that
+    decide which profiles the agent looks at in the first place. It writes what
+    it can read out of the text it is given, and the text it was being given was
+    the advert, which is marketing copy: TrustIn's adverts do not state the
+    location in prose, because the location is a Notion column. So the location
+    came back empty on every role and the agent searched globally
+    (docs/12-sourcing-criteria.md, gap 1).
+
+    These lines are the fix that needs no new endpoint: the facts the row
+    already holds, written the way a recruiter would type them into the wizard,
+    so noon's own extractor picks them up. `Location:` and `Job title:` are the
+    forms the portal's placeholder text uses.
+
+    Only facts noon actually filters on go in here: it keeps a location, a
+    title list, an experience range and a type, and nothing else. Salary is
+    deliberately left out even though the row carries it — noon has no
+    compensation preference, so the only thing it could become is a criterion,
+    and every criterion here is promoted to a non-negotiable and starred. "Will
+    accept £35-45k" is not a thing a profile can satisfy, so it would narrow the
+    search to nobody while looking like diligence.
+
+    Whether it worked is not assumed — `run_wizard` reads `preferences.location`
+    back off the role afterwards and warns when it is still empty.
+    """
+    lines: list[str] = []
+    if title.strip():
+        lines.append(f"Job title: {title.strip()}")
+    if location.strip():
+        lines.append(f"Location: {location.strip()}")
+    if employment_type.strip():
+        lines.append(f"Employment type: {employment_type.strip()}")
+    if skills:
+        named = ", ".join(s.strip() for s in skills if s.strip())
+        if named:
+            lines.append(f"Key skills: {named}")
+    return "\n".join(lines)
+
+
+def as_text(value: Any) -> str:
+    """noon answers with a string for some fields and a list for the same
+    fields elsewhere (`location` is a string on the way in and a list on the
+    role), so both are read the same way."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
 
 
 def as_lines(value: Any) -> list[str]:
@@ -616,6 +681,47 @@ async def fetch_role(session: NoonSession, role_id: str) -> dict[str, Any]:
     )
 
 
+def _check_preferences(role: dict[str, Any], report: SourcingReport) -> None:
+    """Did the filters actually land on the role?
+
+    `generate_params` extracts the search parameters and saves them itself, so
+    the role read back straight afterwards is the proof. This is the check the
+    location gap was missing: extraction succeeding and the save succeeding are
+    two different things, and only the second one decides who gets searched for.
+    """
+    preferences = role.get("preferences")
+    if not isinstance(preferences, dict):
+        report.warnings.append(
+            "noon's role carries no preferences block, so the location and "
+            "titles could not be confirmed."
+        )
+        return
+
+    saved = as_text(preferences.get("location"))
+    if saved:
+        report.location = saved
+    elif report.location:
+        report.warnings.append(
+            f"noon read the location as {report.location!r} but did not save it "
+            "onto the role, so the search is not restricted to it. Set it in the "
+            "role's Control Panel."
+        )
+
+    titles = [t for t in as_lines(preferences.get("titles")) if t]
+    if titles:
+        report.titles = titles
+
+    log.info(
+        "noon search filters after the save",
+        extra={
+            "role": report.role_id,
+            "location": report.location,
+            "titles": len(report.titles),
+            "experience": as_text(preferences.get("experience")),
+        },
+    )
+
+
 async def set_up_sourcing(
     page: "Page",
     role_id: str,
@@ -625,6 +731,7 @@ async def set_up_sourcing(
     source: str = "public",
     start_sourcing: bool = True,
     dry_run: bool = False,
+    targeting: str = "",
 ) -> SourcingReport:
     """Take the token off the live portal, then run the wizard."""
     session = await capture_session(page)
@@ -636,6 +743,7 @@ async def set_up_sourcing(
         source=source,
         start_sourcing=start_sourcing,
         dry_run=dry_run,
+        targeting=targeting,
     )
 
 
@@ -648,6 +756,7 @@ async def run_wizard(
     source: str = "public",
     start_sourcing: bool = True,
     dry_run: bool = False,
+    targeting: str = "",
 ) -> SourcingReport:
     """Run the whole wizard for one role and report what it was told.
 
@@ -655,6 +764,10 @@ async def run_wizard(
     `dont_save`, so noon parses the text and hands back the criteria it would
     have used without writing anything to the role. That is as far as a
     rehearsal can go — every step after it saves on arrival.
+
+    `targeting` is prepended to the job description — see `targeting_preamble`.
+    It is separate from the description rather than merged into it by the caller
+    so that what noon extracted can be compared against what it was told.
     """
     jd = (job_description or "").strip()
     if not jd:
@@ -662,6 +775,8 @@ async def run_wizard(
             "This document has no advert text, so there is no job description to "
             "give noon. Add an advert section, or set the criteria by hand."
         )
+    if targeting.strip():
+        jd = f"{targeting.strip()}\n\n{jd}"
 
     wizard = SourcingWizard(
         session, role_id, role_name, source=source, start_sourcing=start_sourcing
@@ -674,6 +789,26 @@ async def run_wizard(
     )
     report.must_haves = must_haves
     report.promoted = promoted
+    report.location = as_text(params.get("location"))
+    report.titles = [t for t in as_lines(params.get("titles")) if t]
+
+    # The filters, checked rather than assumed. An empty location means the
+    # agent searches globally and the criteria do the geography badly or not at
+    # all, which is invisible until a recruiter reads the shortlist.
+    if not report.location:
+        report.warnings.append(
+            "noon extracted no location from this job description, so the role "
+            "will be searched globally. Fill the row's Location column, or "
+            "state the location in the client's JD."
+            if not targeting.strip()
+            else "noon extracted no location even though one was given to it - "
+            "check the role's Control Panel and set it by hand."
+        )
+    if not report.titles:
+        report.warnings.append(
+            "noon extracted no job titles from this job description, so it is "
+            "matching on the criteria alone. Check the role's Control Panel."
+        )
 
     if not must_haves:
         raise PlatformError(
@@ -695,6 +830,7 @@ async def run_wizard(
         return report
 
     role = await fetch_role(session, role_id)
+    _check_preferences(role, report)
     autopilot = role.get("autopilot")
     autopilot = dict(autopilot) if isinstance(autopilot, dict) else {}
     autopilot["source"] = wizard.source

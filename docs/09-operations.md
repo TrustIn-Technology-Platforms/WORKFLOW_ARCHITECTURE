@@ -88,36 +88,62 @@ webhook and a poll from double-posting the same row.
 
 **A deployed run cannot log itself in.** `.profiles/` is excluded from git *and*
 from the Docker image, deliberately - it holds live auth cookies. So a fresh
-deploy has an empty `/data/profiles` and every platform fails at the first step
+deploy has an empty `/data/profiles` and every platform fails at its first step
 with `<Platform> has no browser profile in /data/profiles/<key>`.
 
-There is no way around it: three of the four platforms need a human through SSO
-or 2FA, and the server has no display. The profiles are captured on a
-workstation and copied up.
+There is no way around capturing them by hand: three of the four platforms need
+a human through SSO or 2FA, and the server has no screen.
+
+**A raw profile copy is not enough, and this is the part that surprises people.**
+Chrome encrypts its cookie store with a key bound to the OS user that wrote it -
+DPAPI on Windows, the keyring on Linux. Copy a Windows profile into a Linux
+container and the directory arrives intact while every cookie in it is
+undecryptable, which surfaces as an ordinary "please log in" screen with nothing
+pointing at the cause.
+
+The portable form is Playwright's `storage_state` - decrypted cookies as plain
+JSON, read out through the running browser. So the upload carries both: the
+profile for everything else it holds, and the JSON for the cookies. On arrival
+the server drops an `.import-cookies` flag beside each profile, and the next
+browser launch injects the cookies from the JSON.
+
+Two commands, in this order:
 
 ```bash
-# on the workstation, once per platform
-python -m app.cli login wellfound     # opens a visible browser; log in; it saves
-python -m app.cli platforms           # confirms each profile and its age
+# 1. Export decrypted cookies from every local profile. Opens each platform
+#    headless, exercises the session so a rotating one refreshes, writes
+#    .sessions/<key>.storage_state.json
+python scripts/refresh_storage_state.py
+
+# 2. Pack .sessions + the verified profiles and POST them to the volume.
+#    --dry-run first to see the archive without uploading.
+python scripts/push_sessions.py --dry-run
+python scripts/push_sessions.py --url https://myapp.up.railway.app
 ```
 
-Then copy each `.profiles/<key>` directory into `/data/profiles/<key>` on the
-volume, keeping the `.login-verified` marker inside it - without that file the
-directory is treated as absent, because Chrome creates a profile directory the
-moment it starts and an empty one says nothing about being logged in.
+The secret comes from `WEBHOOK_SECRET` in `.env` and should stay there - one
+passed on the command line ends up in the shell history. Set `SERVICE_URL` too
+and the second command is just `python scripts/push_sessions.py`. The Railway
+domain is under your service -> Settings -> Networking -> Public Domain.
 
-**Two things that bite:**
+`push_sessions.py` uploads one directory per platform named in `platforms/`, and
+skips anything else - a retired profile keeps its `.login-verified` marker, so
+the marker alone does not identify a live platform. Chrome's caches are excluded,
+which is the difference between ~4 MB and ~1 MB.
 
-- **A profile belongs to the browser that wrote it** ([D-016](11-decisions.md)).
-  Chrome encrypts its cookie store with a key in `Local State`; opening the
-  directory with a different build re-keys it and every cookie is lost, showing
-  up as an ordinary "please log in" screen. The `.browser-channel` marker inside
-  each profile records which build captured it, and the image installs both
-  Chromium and the Chrome channel for that reason.
-- **Sessions expire** - noon weekly, Juicebox sooner. Re-capturing means
-  repeating the copy. Until that is automated, running the trigger from a
-  workstation (`python -m app.cli run --watch`) uses the local profiles directly
-  and needs no upload at all.
+The receiving end is `POST /admin/import-sessions` in [app/api.py](../app/api.py),
+gated by the same `WEBHOOK_SECRET` as the webhook and unpacking with
+`filter="data"` so no archive member can escape the target directory. A 404 from
+it means the deployed image predates the endpoint - redeploy first.
+
+**Sessions expire** - noon weekly, Juicebox sooner - so both commands are a
+recurring chore, not a one-off. Until that is automated, running the trigger from
+a workstation uses the local profiles directly and needs no upload at all:
+
+```bash
+python -m app.cli run --page <notion page url>   # one row
+python -m app.cli run --watch                    # poll, like the server does
+```
 
 ## Deployment (Railway)
 
