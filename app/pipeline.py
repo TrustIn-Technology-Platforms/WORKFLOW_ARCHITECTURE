@@ -98,31 +98,50 @@ def enrich_advert(
     is orchestrator work by design - the parser knows nothing about Notion and
     the recipes should not each re-implement "column, else document".
     """
-    if row is None or document.advert is None:
+    if row is None:
         return []
     settings = settings or get_settings()
-    advert = document.advert
+    # Every advert, not just the general one. A board advert inherits from the
+    # general advert at *parse* time - before the row is anywhere near the
+    # document - so a gap filled here on the general advert alone never reached
+    # it, and Wellfound failed for want of a location the column plainly held
+    # (2026-09-01, the first row posted with a `Wellfound` section).
+    adverts = [
+        a for a in (document.advert, *document.platform_adverts.values())
+        if a is not None
+    ]
+    if not adverts:
+        return []
+
     filled: list[str] = []
     for attr, column in (
         ("location", settings.prop_location),
         ("salary", settings.prop_salary),
         ("employment_type", settings.prop_employment_type),
     ):
-        if getattr(advert, attr):
-            continue
-        value = _row_text(row, column)
+        value: str | None = None
+        for advert in adverts:
+            if getattr(advert, attr):
+                continue
+            value = value if value is not None else (_row_text(row, column) or "")
+            if value:
+                setattr(advert, attr, value)
         if value:
-            setattr(advert, attr, value)
             filled.append(f"{attr} <- {column}")
 
     # Skills are a list, so they take the same "column fills a gap" rule but a
     # different reader. A recruiter naming the stack beats anything inferred
     # from the prose, which is why the column is consulted before Claude is.
-    if not advert.tags:
-        value = _row_text(row, settings.prop_skills)
-        if value:
-            advert.tags = split_skills(value)
-            filled.append(f"tags <- {settings.prop_skills}")
+    tags: list[str] | None = None
+    for advert in adverts:
+        if advert.tags:
+            continue
+        if tags is None:
+            tags = split_skills(_row_text(row, settings.prop_skills) or "")
+        if tags:
+            advert.tags = list(tags)
+    if tags:
+        filled.append(f"tags <- {settings.prop_skills}")
 
     if filled:
         log.info("advert enriched from row", extra={"filled": filled})

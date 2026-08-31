@@ -93,3 +93,33 @@ def test_skills_already_on_the_advert_are_not_replaced_by_the_column():
 
     assert doc.advert.tags == ["Go"]
     assert filled == []
+
+
+def test_row_columns_reach_a_board_advert_too():
+    """A board advert is built at parse time, before the row exists, so its
+    inherited fields are already frozen. Enrichment must fill it directly:
+    the first live row with a `Wellfound` section failed for want of a
+    location its own column plainly held (2026-09-01)."""
+    from app.documents.parser import parse_document
+    from app.models import Block
+
+    def block(text: str, style: str = "body", level: int = 0) -> Block:
+        return Block(style=style, level=level, text=text, html=f"<p>{text}</p>")
+
+    doc = parse_document(
+        [
+            block("Platform Engineer", style="heading", level=1),
+            block("General advert."),
+            block("Wellfound", style="heading", level=2),
+            block("Board copy."),
+        ]
+    )
+    row = _row(**{"Location": _rich("NY"), "Skills": _rich("Python, Go")})
+
+    enrich_advert(doc, row, _Settings())
+
+    wellfound = doc.advert_for("wellfound")
+    assert wellfound is not doc.advert
+    assert wellfound.location == "NY", "the recipe reads THIS advert"
+    assert wellfound.tags == ["Python", "Go"]
+    assert doc.advert.location == "NY"

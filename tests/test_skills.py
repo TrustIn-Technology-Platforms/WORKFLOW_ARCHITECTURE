@@ -98,3 +98,53 @@ def test_ensure_skills_writes_the_drafted_list_onto_the_advert(monkeypatch):
 def test_ensure_skills_does_nothing_without_an_advert(monkeypatch):
     added = asyncio.run(ensure_skills(ParsedDocument(advert=None, emails=[])))
     assert added == []
+
+
+def test_ensure_skills_covers_a_board_advert(monkeypatch):
+    """Wellfound reads its own advert, so tags left only on the general one
+    would vanish from the single platform that uses them."""
+    from app.documents.parser import parse_document
+    from app.models import Block
+
+    def block(text: str, style: str = "body", level: int = 0) -> Block:
+        return Block(style=style, level=level, text=text, html=f"<p>{text}</p>")
+
+    async def _draft(advert_text, *, title="", settings=None):
+        assert "General advert" in advert_text, "drafted from the fullest text"
+        return ["Python", "Go"]
+
+    monkeypatch.setattr("app.platforms.skills.draft_skills", _draft)
+    document = parse_document(
+        [
+            block("Platform Engineer", style="heading", level=1),
+            block("General advert with Python and Go."),
+            block("Wellfound", style="heading", level=2),
+            block("Short board copy."),
+        ]
+    )
+    added = asyncio.run(ensure_skills(document))
+    assert added == ["Python", "Go"]
+    assert document.advert_for("wellfound").tags == ["Python", "Go"]
+    assert document.advert.tags == ["Python", "Go"]
+
+
+def test_ensure_skills_copies_an_existing_list_instead_of_drafting(monkeypatch):
+    """A list one advert already carries is spread, not re-drafted."""
+    called = False
+
+    async def _fail(*args, **kwargs):
+        nonlocal called
+        called = True
+        return ["Invented"]
+
+    monkeypatch.setattr("app.platforms.skills.draft_skills", _fail)
+    document = _document(tags=["Go"])
+    from app.models import Advert
+
+    document.platform_adverts["wellfound"] = Advert(
+        title="t", body_text="board copy", body_html="<p>board copy</p>"
+    )
+    added = asyncio.run(ensure_skills(document))
+    assert added == []
+    assert document.platform_adverts["wellfound"].tags == ["Go"]
+    assert not called

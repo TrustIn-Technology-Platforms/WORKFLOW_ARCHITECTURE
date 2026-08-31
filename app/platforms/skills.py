@@ -148,15 +148,36 @@ async def ensure_skills(
     Called once per row by the orchestrator, before any platform runs, so that
     the Notion column and the drafted fallback are resolved in one place rather
     than per recipe. A `tags` list already present — from the column — wins.
+
+    Every advert is covered, not just the general one: a board advert built at
+    parse time never sees what enrichment or drafting adds later, and Wellfound
+    reads *its* advert — so tags left only on the general advert would silently
+    vanish from the one platform that uses them (the location equivalent of
+    this failed a live row on 2026-09-01).
     """
-    advert = document.advert
-    if advert is None or advert.tags:
+    adverts = [
+        a for a in (document.advert, *document.platform_adverts.values())
+        if a is not None
+    ]
+    missing = [a for a in adverts if not a.tags]
+    if not missing:
+        return []
+
+    # A list one advert already carries — the Skills column, spread by
+    # enrich_advert — is copied before Claude is asked for anything.
+    donor = next((a.tags for a in adverts if a.tags), None)
+    if donor:
+        for advert in missing:
+            advert.tags = list(donor)
         return []
 
     settings = settings or get_settings()
+    # Drafted from the general advert: it is the fullest statement of the role,
+    # where a board section is deliberately cut down.
+    source = document.advert or missing[0]
     skills = await draft_skills(
-        advert.body_text, title=advert.title, settings=settings
+        source.body_text, title=source.title, settings=settings
     )
-    if skills:
-        advert.tags = skills
+    for advert in missing:
+        advert.tags = list(skills)
     return skills
