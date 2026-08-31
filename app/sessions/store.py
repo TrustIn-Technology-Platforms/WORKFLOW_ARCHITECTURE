@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config import Settings, get_settings
+from app.config import PROJECT_ROOT, Settings, get_settings
 from app.logging_conf import get_logger
 from app.models import AuthenticationRequired
 
@@ -106,12 +106,37 @@ class SessionStore:
         )
 
     def require_profile(self, key: str, label: str) -> Path:
-        if not self.has_profile(key):
+        """The profile directory, or an error saying where it was looked for.
+
+        Naming the directory matters because the same message has two very
+        different causes. On a workstation the login has genuinely not been
+        captured. On the server the profile directory is a mounted volume, and a
+        login cannot be captured there at all - it needs a browser and, on three
+        of the four platforms, a human passing 2FA. The old message told a
+        server to run `login`, which it cannot do, and named no path, so there
+        was nothing to check against (both hit on 2026-08-31).
+        """
+        if self.has_profile(key):
+            return self.profile_dir(key)
+
+        directory = self.profile_dir(key)
+        try:
+            on_volume = PROJECT_ROOT not in directory.parents
+        except Exception:  # pragma: no cover - exotic path, prefer the local hint
+            on_volume = False
+
+        if on_volume:
             raise AuthenticationRequired(
-                f"{label} has no browser profile yet. "
-                f"Run: python -m app.cli login {key}"
+                f"{label} has no browser profile in {directory}. That directory "
+                "is a mounted volume, so the login cannot be captured here: "
+                f"capture it on a workstation with `python -m app.cli login "
+                f"{key}` and upload the resulting .profiles/{key} directory to "
+                "the volume. See docs/09-operations.md."
             )
-        return self.profile_dir(key)
+        raise AuthenticationRequired(
+            f"{label} has no browser profile in {directory}. "
+            f"Run: python -m app.cli login {key}"
+        )
 
     def info(self, key: str, filename: str | None = None) -> SessionInfo:
         path = self.path_for(key, filename)

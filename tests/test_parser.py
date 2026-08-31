@@ -318,3 +318,123 @@ def test_a_dash_still_labels_a_field_we_recognise(line, label, value):
         if getattr(advert, attribute):
             combined[label] = getattr(advert, attribute)
     assert combined.get(label) == value
+
+
+# ----------------------------------------------------------------------
+# the client's job description
+# ----------------------------------------------------------------------
+
+
+def _heading(text: str, level: int = 1) -> Block:
+    return Block(style="heading", level=level, text=text, html=f"<h{level}>{text}</h{level}>")
+
+
+def _document_with_jd(jd_heading: str = "Client JD"):
+    return parser.parse_document([
+        _heading("Job Advert"),
+        _block("Join a team that ships. We move fast and look after each other."),
+        _heading("Email 1 (Day 1)"),
+        _block("Subject: Platform Engineer"),
+        _block("Hi {{first_name}}, we are hiring."),
+        _heading("Email 2 (Day 3)"),
+        _block("Hi {{first_name}}, following up."),
+        _heading(jd_heading),
+        _block("Kepler Systems is hiring a Senior Platform Engineer in Manchester."),
+        _heading("Requirements", level=2),
+        _block("8+ years of production Kubernetes.", style="list_bullet"),
+        _block("Must hold the right to work in the UK - no sponsorship.", style="list_bullet"),
+        _heading("The Role", level=2),
+        _block("Own the platform end to end."),
+    ])
+
+
+def test_the_client_jd_section_is_kept_whole_and_out_of_everything_else():
+    """The one text the recruiter controls that states what a search needs.
+
+    Its own headings travel with it: "Requirements" above a bullet list is what
+    makes the list mean anything, and neither it nor "The Role" may be read as
+    an advert section or appended to the email above.
+    """
+    document = _document_with_jd()
+
+    assert document.client_jd.startswith("Kepler Systems is hiring")
+    assert "Requirements" in document.client_jd
+    assert "8+ years of production Kubernetes." in document.client_jd
+    assert "no sponsorship" in document.client_jd
+    # "The Role" matches the advert heading pattern; inside the JD it is JD.
+    assert "The Role" in document.client_jd
+    assert "Own the platform end to end." in document.client_jd
+    # The heading that opened the section is not part of the client's words.
+    assert not document.client_jd.startswith("Client JD")
+
+    # Nothing leaked upwards.
+    assert document.advert is not None
+    assert "Kubernetes" not in document.advert.body_text
+    assert "Own the platform" not in document.advert.body_text
+    assert len(document.emails) == 2
+    assert "sponsorship" not in document.emails[-1].body_text
+    assert document.emails[-1].body_text == "Hi {{first_name}}, following up."
+
+
+def test_the_search_reads_the_client_jd_and_falls_back_to_the_advert():
+    """`job_description` is what every sourcing platform is handed."""
+    document = _document_with_jd()
+    assert document.job_description == document.client_jd
+
+    without = parser.parse_document([
+        _heading("Job Advert"),
+        _block("Join a team that ships."),
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+    ])
+    assert without.client_jd == ""
+    assert without.job_description == "Join a team that ships."
+
+
+@pytest.mark.parametrize("heading", ["Client JD", "Full JD", "Original JD", "Job Spec", "JD"])
+def test_the_headings_a_recruiter_might_write_all_open_the_section(heading):
+    document = _document_with_jd(heading)
+    assert "8+ years of production Kubernetes." in document.client_jd
+
+
+def test_job_spec_above_the_sequence_is_still_the_advert():
+    """`Job Spec` names the advert at the top and the client's spec at the
+    bottom, so position settles it rather than the word.
+    """
+    document = parser.parse_document([
+        _heading("Job Spec"),
+        _block("Join a team that ships."),
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+    ])
+    assert document.client_jd == ""
+    assert document.advert is not None
+    assert "Join a team that ships." in document.advert.body_text
+
+
+def test_a_client_jd_in_the_wrong_place_is_reported_not_guessed_at():
+    """Read as the JD it would swallow the rest of the sequence, so it is not."""
+    document = parser.parse_document([
+        _heading("Job Advert"),
+        _block("Join a team that ships."),
+        _heading("Client JD"),
+        _block("8+ years of production Kubernetes."),
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+    ])
+    assert document.client_jd == ""
+    assert len(document.emails) == 1
+    assert any("Move that section to the end" in w for w in document.warnings)
+
+
+def test_an_empty_client_jd_section_says_so_and_falls_back():
+    document = parser.parse_document([
+        _heading("Job Advert"),
+        _block("Join a team that ships."),
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+        _heading("Client JD"),
+    ])
+    assert document.client_jd == ""
+    assert document.job_description == "Join a team that ships."
+    assert any("is empty" in w for w in document.warnings)

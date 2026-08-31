@@ -8,10 +8,20 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The checkout root - the parent of the `app` package. A relative directory in
+# the settings belongs to the checkout, not to whichever folder the command was
+# typed in: `.profiles` holds the browser logins and `platforms/` holds the
+# recipes, and neither follows the user around. Resolving against the working
+# directory instead meant a run started from anywhere else reported "Wellfound
+# has no browser profile yet" against a profile that was sitting right there,
+# and quietly created empty `.profiles/`, `.sessions/` and `artifacts/` folders
+# wherever it had been started (seen 2026-08-31, from a Notion-triggered run).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
     )
 
     # --- Notion -------------------------------------------------------------
@@ -117,7 +127,10 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _as_path(cls, value: object) -> Path:
-        return Path(str(value))
+        # An absolute path is taken as given - that is how the Railway volume is
+        # pointed at. A relative one is anchored to the checkout.
+        path = Path(str(value)).expanduser()
+        return path if path.is_absolute() else PROJECT_ROOT / path
 
     @property
     def notion_configured(self) -> bool:

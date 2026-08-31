@@ -9,6 +9,8 @@ Notion row, where a human can see it and decide whether it matters.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 
 from app.logging_conf import get_logger
 from app.models import Advert, Block, EmailStep, ParsedDocument, Section
@@ -94,6 +96,26 @@ _SEQUENCE_HEADING = re.compile(
     re.IGNORECASE,
 )
 
+# The client's own job description, pasted verbatim as the document's last
+# section. `Job Description` is deliberately absent: _ADVERT_HEADING already
+# claims it, and reusing it would replace the advert with the spec without
+# anybody noticing.
+_JD_HEADING = re.compile(
+    r"""^\s*(?:
+        (?:client|full|original|complete|raw|the)\s*
+        (?:job\s*)?(?:description|jd|spec(?:ification)?|brief)
+      | jd
+    )\s*[:\-–]?\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+# `Job Spec` names the advert at the top of a document and the client's spec at
+# the bottom of one, so the word alone cannot settle it. Position does: these
+# only read as the client's JD after the last message in the sequence.
+_LATE_JD_HEADING = re.compile(
+    r"^\s*(?:job\s*spec(?:ification)?|role\s*spec|spec(?:ification)?)\s*[:\-–]?\s*$",
+    re.IGNORECASE,
+)
+
 _SUBJECT_LINE = re.compile(r"^\s*(?:subject|subject\s*line|re)\s*[:\-–]\s*(.+)$", re.I)
 _GREETING = re.compile(
     r"^\s*(?:hi|hello|hey|dear|good\s+(?:morning|afternoon|evening))\b", re.I
@@ -148,13 +170,15 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
     if not sections:
         return ParsedDocument(warnings=["The document had no readable content."])
 
-    advert_sections, email_sections, warnings, shared_subject = _classify(sections)
+    found = _classify(sections)
+    warnings = found.warnings
+    shared_subject = found.shared_subject
     # Steps are numbered within their own channel: "Email1" is the first email
     # and the LinkedIn note is the first linkedin step, so a mixed document does
     # not produce two #1s. Position is counted per channel for the same reason.
     positions: dict[str, int] = {}
     emails: list[EmailStep] = []
-    for section in email_sections:
+    for section in found.emails:
         channel = _channel_of(section.heading.strip()) or "email"
         positions[channel] = positions.get(channel, 0) + 1
         emails.append(_build_email(section, positions[channel], warnings))
@@ -164,7 +188,8 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
     emails.sort(key=lambda e: (channel_order.index(e.channel), e.order))
     _check_orders(emails, warnings)
 
-    advert = _build_advert(advert_sections, warnings)
+    advert = _build_advert(found.advert, warnings)
+    client_jd = _build_job_description(found.job_description, warnings)
 
     # An email with no subject of its own goes out under the role's title -
     # which is what recruiters write by hand anyway.
@@ -181,7 +206,11 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
             )
 
     document = ParsedDocument(
-        sections=sections, advert=advert, emails=emails, warnings=warnings
+        sections=sections,
+        advert=advert,
+        emails=emails,
+        warnings=warnings,
+        client_jd=client_jd,
     )
     log.info(
         "document parsed",
@@ -189,6 +218,7 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
             "sections": len(sections),
             "emails": len(emails),
             "has_advert": advert is not None,
+            "client_jd_chars": len(client_jd),
             "warnings": len(warnings),
         },
     )
@@ -223,15 +253,36 @@ def split_sections(blocks: list[Block]) -> list[Section]:
 # ----------------------------------------------------------------------
 
 
-def _classify(
-    sections: list[Section],
-) -> tuple[list[Section], list[Section], list[str]]:
+@dataclass(slots=True)
+class _Classified:
+    """What each section turned out to be, before any of it is built."""
+
+    advert: list[Section] = dc_field(default_factory=list)
+    emails: list[Section] = dc_field(default_factory=list)
+    job_description: list[Section] = dc_field(default_factory=list)
+    shared_subject: str = ""
+    warnings: list[str] = dc_field(default_factory=list)
+
+
+def _classify(sections: list[Section]) -> _Classified:
     warnings: list[str] = []
     advert_sections: list[Section] = []
     email_sections: list[Section] = []
     seen_email = False
     seen_advert_heading = False
     shared_subject = ""
+
+    jd_at = _job_description_start(sections, warnings)
+    if jd_at is not None:
+        # Everything from the Client JD heading to the end of the document is
+        # the client's spec. It is taken as a block rather than heading by
+        # heading because a real JD carries its own - "The Role",
+        # "Requirements", "Package" - and each of those would otherwise read as
+        # an advert section or be appended to the last message in the sequence.
+        head, tail = sections[:jd_at], sections[jd_at:]
+        sections = head
+    else:
+        tail = []
 
     for section in sections:
         heading = section.heading.strip()
@@ -281,7 +332,49 @@ def _classify(
             "email was used as the advert."
         )
 
-    return advert_sections, email_sections, warnings, shared_subject
+    return _Classified(
+        advert=advert_sections,
+        emails=email_sections,
+        job_description=tail,
+        shared_subject=shared_subject,
+        warnings=warnings,
+    )
+
+
+def _job_description_start(sections: list[Section], warnings: list[str]) -> int | None:
+    """Index of the `Client JD` heading, when it really is the document's tail.
+
+    The section is defined by its position as much as by its heading: it comes
+    after the last message, so that nothing inside it can be mistaken for advert
+    copy or swallowed by the step above it. A JD heading found earlier than that
+    is left to the ordinary rules and reported - moving it is a document fix,
+    and silently reading half the sequence as a job spec would not be.
+    """
+    is_step = [
+        bool(_is_email_heading(s.heading.strip()) or _channel_of(s.heading.strip()))
+        for s in sections
+    ]
+    last_step = max((i for i, step in enumerate(is_step) if step), default=-1)
+
+    found: int | None = None
+    for index, section in enumerate(sections):
+        heading = section.heading.strip()
+        if not heading:
+            continue
+        # `Job Spec` is only the client's when a sequence came before it; the
+        # explicit headings stand on their own in an advert-only document.
+        if _JD_HEADING.match(heading) or (last_step >= 0 and _LATE_JD_HEADING.match(heading)):
+            if index > last_step:
+                return index
+            found = index
+
+    if found is not None:
+        warnings.append(
+            f"{sections[found].heading.strip()!r} appears before the last message "
+            "in the sequence, so it was not read as the client's job description. "
+            "Move that section to the end of the document."
+        )
+    return None
 
 
 # Trailing decoration a generator appends to a heading: "InMail (Day 5)",
@@ -440,6 +533,43 @@ def _check_orders(emails: list[EmailStep], warnings: list[str]) -> None:
             f"Two {channel} steps are both numbered {order}. "
             "They were kept in document order."
         )
+
+
+# ----------------------------------------------------------------------
+# 4c-bis. the client's job description
+# ----------------------------------------------------------------------
+
+
+def _build_job_description(sections: list[Section], warnings: list[str]) -> str:
+    """The client's spec as plain text, its own headings kept in place.
+
+    Text, not HTML: every consumer is a search - noon's `generate_params`,
+    Loxo's Skill DNA drafter, Juicebox's ranker - and each of them reads a
+    string. Nothing is stripped or reordered, because the value of this section
+    is that it is the client's words rather than ours.
+
+    The `Client JD` heading itself is dropped; every heading inside the spec is
+    kept, since a requirements list under "Must have" loses its meaning without
+    it.
+    """
+    if not sections:
+        return ""
+
+    parts: list[str] = []
+    for index, section in enumerate(sections):
+        heading = section.heading.strip()
+        if heading and index > 0:
+            parts.append(heading)
+        parts.extend(b.text.strip() for b in section.blocks if b.text.strip())
+
+    text = "\n\n".join(p for p in parts if p).strip()
+    if not text:
+        warnings.append(
+            f"{sections[0].heading.strip()!r} is empty, so the sourcing criteria "
+            "were built from the advert instead. Paste the client's job "
+            "description under that heading."
+        )
+    return text
 
 
 # ----------------------------------------------------------------------

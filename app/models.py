@@ -141,10 +141,29 @@ class ParsedDocument:
     # convention "Company - Role - Location". This is what every platform names
     # its sequence after, so the name is identical across noon/Loxo/Juicebox.
     source_name: str = ""
+    # The client's own job description, pasted verbatim under a `Client JD`
+    # heading at the end of the document. Empty when nobody pasted one - which
+    # is why the sourcing platforms read `job_description` below and not this.
+    client_jd: str = ""
 
     @property
     def is_empty(self) -> bool:
         return self.advert is None and not self.emails
+
+    @property
+    def job_description(self) -> str:
+        """The text a search is built from.
+
+        The advert is marketing copy: written to attract applicants, so it
+        deliberately softens the years, the stack, the location and the
+        non-negotiables - the very things a sourcing agent filters on. The
+        client's JD states them. So the `Client JD` section wins wherever a
+        recruiter pasted one, and the advert stands in where they did not,
+        which is what every document written before this existed relies on.
+        """
+        if self.client_jd.strip():
+            return self.client_jd.strip()
+        return self.advert.body_text.strip() if self.advert else ""
 
 
 @dataclass(slots=True)

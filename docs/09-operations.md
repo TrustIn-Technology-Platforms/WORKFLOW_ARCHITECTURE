@@ -84,13 +84,49 @@ X-Webhook-Secret: <WEBHOOK_SECRET>
 Both can run together. Claiming a row by setting it to `Posting` is what stops a
 webhook and a poll from double-posting the same row.
 
+## Getting the logins onto the server
+
+**A deployed run cannot log itself in.** `.profiles/` is excluded from git *and*
+from the Docker image, deliberately - it holds live auth cookies. So a fresh
+deploy has an empty `/data/profiles` and every platform fails at the first step
+with `<Platform> has no browser profile in /data/profiles/<key>`.
+
+There is no way around it: three of the four platforms need a human through SSO
+or 2FA, and the server has no display. The profiles are captured on a
+workstation and copied up.
+
+```bash
+# on the workstation, once per platform
+python -m app.cli login wellfound     # opens a visible browser; log in; it saves
+python -m app.cli platforms           # confirms each profile and its age
+```
+
+Then copy each `.profiles/<key>` directory into `/data/profiles/<key>` on the
+volume, keeping the `.login-verified` marker inside it - without that file the
+directory is treated as absent, because Chrome creates a profile directory the
+moment it starts and an empty one says nothing about being logged in.
+
+**Two things that bite:**
+
+- **A profile belongs to the browser that wrote it** ([D-016](11-decisions.md)).
+  Chrome encrypts its cookie store with a key in `Local State`; opening the
+  directory with a different build re-keys it and every cookie is lost, showing
+  up as an ordinary "please log in" screen. The `.browser-channel` marker inside
+  each profile records which build captured it, and the image installs both
+  Chromium and the Chrome channel for that reason.
+- **Sessions expire** - noon weekly, Juicebox sooner. Re-capturing means
+  repeating the copy. Until that is automated, running the trigger from a
+  workstation (`python -m app.cli run --watch`) uses the local profiles directly
+  and needs no upload at all.
+
 ## Deployment (Railway)
 
 The configuration is already shaped for this — `SESSION_DIR`, `ARTIFACT_DIR` and
 `PORT` are all settings, and JSON logging is a flag.
 
-1. **Volume.** Mount one and set `SESSION_DIR=/data/sessions`. Without it, every
-   deploy logs the system out of every platform.
+1. **Volume.** Mount one and set `SESSION_DIR=/data/sessions` and
+   `BROWSER_PROFILE_DIR=/data/profiles` (the Dockerfile already sets both).
+   Without it, every deploy logs the system out of every platform.
 2. **Environment.** `NOTION_TOKEN`, `NOTION_DATABASE_ID`, `WEBHOOK_SECRET`,
    `LOG_JSON=true`, `HEADLESS=true`. `PORT` is injected.
 3. **Browsers.** Playwright's Chromium must be installed in the image —
@@ -126,6 +162,7 @@ so keep row concurrency low on a small instance.
 | `Could not download the document` | Link not shared with anyone-with-the-link, or expired | Re-share and re-run the row |
 | `Could not open the .docx file` | The link points at a PDF or a Google-native doc that did not export | Confirm the source is a real `.docx` |
 | Every platform fails at once | Session expired, or a volume is not mounted | Re-capture logins; check `SESSION_DIR` |
+| `has no browser profile in <dir>` | The message names the directory it looked in. Under the checkout, the login was never captured. Under `/data`, the profile was never uploaded to the volume | Locally: `python -m app.cli login <key>`. On the server: capture on a workstation and copy it up — see [Getting the logins onto the server](#getting-the-logins-onto-the-server) |
 | One platform fails at the same step every time | The UI changed | Update the selector in `platforms/<key>.yaml` |
 | Rows stuck in `Posting` | Process died mid-row | Set them back to `Ready to Post` |
 | Playwright errors on first browser run | Browsers not installed in the image | `playwright install --with-deps chromium` |
