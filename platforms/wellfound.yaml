@@ -157,13 +157,36 @@ steps:
       - "#downshift-1-input"
     value: "{{ advert.location }}"
     description: location (must be picked from Wellfound's list)
+    # The Notion `Location` column is a multi-select of recruiter shorthand -
+    # `NY`, `SF`, `RE` - and Wellfound's autocomplete only offers real places.
+    # Typing "NY" matches nothing, so the field would silently stay empty.
+    # `RE` (remote) is deliberately absent: Wellfound requires a city even for a
+    # remote role ("if fully remote, put the city or state of your
+    # headquarters"), and only a person knows which one that is - so a
+    # remote-only row stops on `required_message` below rather than guessing.
+    map:
+      NY: New York City
+      NYC: New York City
+      SF: San Francisco
+      SFO: San Francisco
+      LA: Los Angeles
+      LDN: London
+      LON: London
+      BOS: Boston
+      SEA: Seattle
+      AUS: Austin
+      CHI: Chicago
+      DEN: Denver
+      MIA: Miami
     # Wellfound marks Location required, and a draft saved without one is a
     # draft nobody can publish. Stopping here with a message the recruiter can
     # act on beats a green run and a silently unusable advert.
     required_message: >-
       Wellfound needs a location for this advert and neither the document nor
-      the row has one. Fill the Location column on the row (or add a
-      "Location: <city>" line to the document), then set the status back.
+      the row has one. Fill the Location column on the row with a real place -
+      Wellfound only accepts one from its own list, so "RE"/remote is not
+      enough; use the city or state of the headquarters. Or add a
+      "Location: <city>" line to the document. Then set the status back.
 
   # The radio inputs themselves are visually hidden (styled radios), so the
   # label is the click target - `check` on the input times out as "not visible".

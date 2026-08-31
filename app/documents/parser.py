@@ -173,6 +173,10 @@ _FIELD_LINE = re.compile(
 # "About Company:" is a section label, not a title.
 _LABEL_LIKE = re.compile(r"[:\-–]\s*$")
 _MAX_LABEL_CHARS = 40
+# Past this an unrecognised "Label: value" is a sentence, not a field. Chosen
+# against the real documents: the longest genuine value seen is a location of
+# 34 characters, and the shortest prose false positive was 64.
+_MAX_FIELD_VALUE_CHARS = 55
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "location": ("location", "based in", "where", "site", "office", "region"),
@@ -785,6 +789,27 @@ def _field_from(block: Block) -> tuple[str | None, str]:
     # nine live shapes, silently, leaving the advert titled "About Company:"
     # (found 2026-08-31 by reading a saved Wellfound draft back).
     if match.group("dash") and label.lower() not in _FIELD_LOOKUP:
+        return None, ""
+    # An unrecognised label in front of a sentence is prose with a colon in it,
+    # not metadata. Advert bullets are written as imperatives and read exactly
+    # like fields: "Run the core infrastructure: services, data pipelines and
+    # distributed AI/ML workloads on AWS." and "Own CI/CD: automated testing,
+    # rollback and release gating." both pass every rule above - four words or
+    # fewer, under forty characters - and were being lifted out of the body into
+    # a field nothing reads, so the lines vanished from the post.
+    #
+    # Two signals separate them, and both bias towards leaving the line in the
+    # body: keeping a line costs a stray sentence in the advert, removing one
+    # loses content silently.
+    #
+    #   - Length. A real value is a city, a band, a reference.
+    #   - A closing full stop. Sentences end with one; values do not.
+    #
+    # The five named fields are exempt from both, so "Location: San Francisco,
+    # CA." and a location that runs long still read correctly.
+    if label.lower() not in _FIELD_LOOKUP and (
+        len(value) > _MAX_FIELD_VALUE_CHARS or value.endswith(".")
+    ):
         return None, ""
     return label, value
 

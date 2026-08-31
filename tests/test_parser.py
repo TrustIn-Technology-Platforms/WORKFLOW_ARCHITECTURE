@@ -570,3 +570,45 @@ def test_board_heading_spellings():
 
     for heading in ("Email 1", "InMail", "LinkedIn", "The Role", "Client JD"):
         assert parser._platform_advert_of(heading) is None, heading
+
+
+def test_prose_with_a_colon_stays_in_the_body():
+    """A sentence is not a field, however short its opening clause.
+
+    "Run the core infrastructure: services, data pipelines and distributed
+    AI/ML workloads on AWS" passes every other rule - four words, under forty
+    characters - and was being lifted out of the advert into a field nothing
+    reads, so the line vanished from the post. Found 2026-08-31 while checking
+    that a Wellfound section survived parsing intact.
+    """
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer", style="heading", level=1),
+            _block("Run the core infrastructure: services, data pipelines and "
+                   "distributed AI/ML workloads on AWS."),
+            _block("Own CI/CD: automated testing, rollback and release gating."),
+        ]
+    )
+    advert = document.advert
+    assert advert is not None
+    assert "Run the core infrastructure" in advert.body_text
+    assert "Own CI/CD" in advert.body_text
+    assert advert.fields == {}
+
+
+def test_real_metadata_is_still_read_however_it_is_written():
+    """The named fields keep no length cap - a location legitimately runs long."""
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer", style="heading", level=1),
+            _block("Location: San Francisco Bay Area, or remote within the United States"),
+            _block("Salary: $200,000 - $260,000 plus equity"),
+            _block("Start Date: ASAP"),
+            _block("We are hiring."),
+        ]
+    )
+    advert = document.advert
+    assert advert is not None
+    assert advert.location == "San Francisco Bay Area, or remote within the United States"
+    assert advert.salary == "$200,000 - $260,000 plus equity"
+    assert advert.fields.get("Start Date") == "ASAP"

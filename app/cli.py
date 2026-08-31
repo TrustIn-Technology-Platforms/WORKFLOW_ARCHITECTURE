@@ -214,6 +214,24 @@ def parse(
         if show_html:
             console.print(f"\n[dim]{advert.body_html[:2000]}[/dim]")
 
+    # Which board gets its own copy. Printed even when there is none, because
+    # "Wellfound posted the general advert" is invisible unless the absence of a
+    # board section is stated somewhere a person looks.
+    console.print("\n[bold]Board adverts[/bold]")
+    if document.platform_adverts:
+        for key, board in sorted(document.platform_adverts.items()):
+            console.print(
+                f"  [green]{key}[/green]  {len(board.body_text)} chars"
+                f"   title: {board.title[:60]}"
+            )
+            preview = " ".join(board.body_text.split())[:110]
+            console.print(f"      [dim]{preview}{'...' if len(preview) == 110 else ''}[/dim]")
+    else:
+        console.print(
+            "  [yellow]none - every platform gets the general advert. A section "
+            "headed 'Wellfound' would be posted there instead.[/yellow]"
+        )
+
     console.print(f"\n[bold]Emails[/bold] ({len(document.emails)})")
     for email in document.emails:
         delay = f"  +{email.delay_days}d" if email.delay_days is not None else ""
