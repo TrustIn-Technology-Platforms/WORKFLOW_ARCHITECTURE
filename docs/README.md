@@ -26,6 +26,7 @@ Every document here is written to be lifted out and reused. That means:
 | 09 | [Operations](09-operations.md) | Run it locally, deploy it, trigger it, debug it |
 | 10 | [Testing](10-testing.md) | Test layout and how to test a platform without posting |
 | 11 | [Decisions](11-decisions.md) | Choices already made in the code, and why |
+| 12 | [Sourcing criteria](12-sourcing-criteria.md) | What a tight search means on each platform, and what is still missing |
 
 ## Templates
 

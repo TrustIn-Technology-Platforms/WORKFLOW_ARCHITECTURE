@@ -23,6 +23,54 @@
 | **Owner** | Sohaib |
 | **Last verified** | 2026-08-27 (created + saved a real 3-step sequence) |
 
+## Search criteria (2026-08-31)
+
+> **Status** Built and **dry-run proven live**: read a real search's five
+> criteria, drafted ten from the search's own job description, ranked them. The
+> live write is untested — the run was stopped by a permission gate, not by a
+> failure. [juicebox_criteria.py](../../app/platforms/juicebox_criteria.py) ·
+> [tests](../../tests/test_juicebox_criteria.py)
+
+A Juicebox **search** scores every candidate against a short list of criteria.
+On the search page they sit behind `Criteria (N)`, beside `Filters (N)`, and the
+candidate cards show each one as a named check with a per-candidate
+justification (`Cloud`, `Python`, `Multicloud`, `Kubernetes`, `Startup`).
+
+**The dialog.** `Criteria` opens a MUI dialog headed *Criteria*, with
+`Select Preset` / `Save Preset`, the list itself between the labels **Most
+Important** and **Least Important**, then `Add Criterion` and `Update`.
+
+- Each criterion is a **`textarea#criterion_N`** inside a drag-and-drop row
+  (`data-rfd-draggable-id`). The ids are positional, so rewriting the list is
+  filling N textareas — no dragging required.
+- The textareas are React-controlled: `.value =` is ignored. The native setter
+  plus an `input` event is what its `onChange` listens to.
+- Nothing is saved until **`Update`**, so reading is free.
+- **The page carries an Osano cookie dialog that is also `role=dialog`**, and it
+  comes first in the DOM — `document.querySelector('[role=dialog]')` returns the
+  cookie banner, not the criteria. Find the dialog by its heading.
+
+**Ranking is the whole policy.** Juicebox has no required/preferred split, so
+there is nothing to promote the way noon's nice-to-haves and Loxo's are
+promoted. Instead the list is built **dealbreakers first, then the baseline,
+then disqualifiers as negative criteria** — Juicebox's own placeholders invite
+those ("Should not be currently working at a defense contractor"). Position is
+the weighting, so the checks that must filter sit where it weighs them hardest.
+
+**The advert comes from the search itself by default.** A search already holds
+the job description it was built from, and that is the right source for its
+criteria; pointing a client's search at another company's advert would be worse
+than leaving it alone. `--doc` overrides.
+
+```bash
+python -m app.cli search-criteria --search <url>                 # rehearsal
+python -m app.cli search-criteria --search <url> --live
+python -m app.cli search-criteria --search <url> --restore <backup.json>
+```
+
+The existing criteria are written to `ARTIFACT_DIR/juicebox-criteria/` before
+anything is saved, and `--restore` puts them back.
+
 ## The sequence editor (2026-08-27)
 
 Mapped live, then packaged into

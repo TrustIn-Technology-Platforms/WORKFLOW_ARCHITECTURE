@@ -29,6 +29,25 @@ class Settings(BaseSettings):
     prop_posted_at: str = "Posted At"
     prop_error: str = "Error"
     prop_title: str = "Name"
+    # Advert fields that live on the row rather than in the document. The
+    # recruiters' adverts are prose with no labelled Location/Salary lines, and
+    # job boards (Wellfound) require both - so the orchestrator fills an empty
+    # advert field from the column of the same name. See pipeline.enrich_advert.
+    prop_location: str = "Location"
+    prop_salary: str = "Salary"
+    prop_employment_type: str = "Employment Type"
+    # Optional. Wellfound's advert form has a Skills tag field and the documents
+    # carry no skills section. Fill this column to say exactly which skills tag
+    # the advert; leave it blank and they are drafted from the advert text
+    # (app/platforms/skills.py), or left empty when no key is configured.
+    prop_skills: str = "Skills"
+    # Optional. Criteria are set on a record the recruiters already made — a Loxo
+    # job, a Juicebox search — and a document filename is not a reliable way to
+    # find it. Fill either column with the record's URL or id and that row's
+    # criteria go exactly where intended; leave it blank and the platform falls
+    # back to matching by name, skipping rather than guessing when unsure.
+    prop_loxo_job: str = "Loxo Job"
+    prop_juicebox_search: str = "Juicebox Search"
 
     # Status values the pipeline transitions between.
     status_ready: str = "Ready to Post"
@@ -63,6 +82,26 @@ class Settings(BaseSettings):
     use_browser_profile: bool = True
     artifact_dir: Path = Path("artifacts")
     platform_config_dir: Path = Path("platforms")
+
+    # --- sourcing criteria --------------------------------------------------
+    # Every platform here has two halves: the outreach a candidate receives, and
+    # the criteria that decide who receives it. One switch governs the second
+    # half everywhere, so a Notion row that posts also gets its sourcing set up.
+    # `post <platform> --no-sourcing` turns it off for a single run.
+    criteria_enabled: bool = True
+    # Which pool noon searches: public (Entire Internet), ats, or inbound.
+    noon_sourcing_source: str = "public"
+    # Send the wizard's final call, the one that sets the agent searching. Off
+    # leaves the criteria saved and the role idle for a recruiter to start.
+    noon_start_sourcing: bool = True
+
+    # --- criteria drafting --------------------------------------------------
+    # A platform's own generator (Loxo's "Write with AI") does not always fill
+    # every criteria bucket. The advert says what the role needs, so the gaps
+    # are drafted from it. Unset key = the gaps are left empty and reported,
+    # never a failed run. See app/platforms/criteria_ai.py.
+    anthropic_api_key: str = Field(default="", description="Fills empty criteria from the advert")
+    criteria_model: str = "claude-opus-5"
 
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")

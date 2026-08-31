@@ -12,7 +12,7 @@
 | **App URL** | `https://app.loxo.co/` → redirects a logged-out visitor to `/login` |
 | **Agency slug** | `trustin-ltd` |
 | **Login** | `/login` offers *Continue with Google*, *Continue with Microsoft*, or a work-email form. Microsoft is the same identity used for noon and SharePoint |
-| **Signed in as** | `marcus@trust-in.co.uk` — **not** the sohaib@ identity noon uses |
+| **Signed in as** | `nicholas@trust-in.co.uk` (confirmed 2026-08-31; the profile was captured as marcus@ and has since been re-captured) — **not** the sohaib@ identity noon uses |
 | **Agency id** | `28356` (numeric, in app URLs) — distinct from the slug `trustin-ltd` used by the API |
 | **Owner** | Sohaib |
 | **Last verified** | 2026-08-27 — saved profile opened `/agencies/28356/people` logged in, headless |
@@ -166,6 +166,156 @@ opens the same modal with the commit button now labelled **Save** instead of
 **Merge tokens.** Loxo's format is `{{first_name}}` and `{{current_company}}`.
 The documents write `{first_name}` and `{company}`; the poster translates them
 before typing. Pasting the document's braces verbatim would send them literally.
+
+## Candidate criteria — the Skill DNA (2026-08-31)
+
+> **Status** **PROVEN LIVE 2026-08-31.** `python -m app.cli criteria --job
+> <id> --live` reads the description, drafts the empty buckets from the advert,
+> tightens, writes and saves — verified by reading the stored value back through
+> `jobDetail` GraphQL (11,412 chars, five dealbreakers, advert intact).
+> [loxo_criteria.py](../../app/platforms/loxo_criteria.py) ·
+> [criteria_ai.py](../../app/platforms/criteria_ai.py) ·
+> [loxo_sourcing.py](../../app/platforms/loxo_sourcing.py)
+
+Loxo has no separate store for candidate criteria. The `Manage` panel on a job
+carries a **`Write with AI (BETA)`** button whose own subtitle reads *"AI can
+generate the complete intelligence stack for this role: Skill DNA mapping,
+market intelligence, sourcing strategy, and job description text."* What it
+produces goes straight into the job's `description` field as ordinary
+paragraphs:
+
+```
+Dealbreaker
+  Work experience  -> Built security infra at a B2B SaaS company in a regulated industry
+  Hard skills      -> Deep hands-on AWS experience
+Baseline
+  Seniority        -> 5-12 years building security programs
+  Hard skills      -> CI/CD pipeline design, monitoring, observability
+Nice-to-have
+  Work experience  -> 0-to-1 experience standing up security infrastructure
+Traits to avoid
+  Legacy/slow companies only (Cisco, JP Morgan...)
+```
+
+Items a human has edited are followed by an `Updated` paragraph. `Traits to
+avoid` lists its items bare, with no criterion-type heading.
+
+**Consequences for the automation:**
+
+- **Setting criteria means rewriting the description.** The advert and the
+  criteria share one field, so a writer must preserve the prose above them.
+  `parse_skill_dna` splits the two and `render` puts them back.
+- **The browser is the only write path.** Loxo's Open API covers `jobs/update`,
+  but it is a paid add-on and no key is configured — see [The API](#the-api).
+- **Attach, do not create.** Every role posted for already has a Loxo job the
+  recruiters made (Abundant, Slash, Axle...). Job titles are also bound to
+  Loxo's own **title taxonomy** — the Role Title box is an autocomplete, free
+  text is discarded when focus leaves it, and Enter picks a suggestion — so a
+  job could not be named from a document filename anyway.
+- **The tightening policy** mirrors noon's: every **Nice-to-have** becomes a
+  **Dealbreaker**. `Baseline` and `Traits to avoid` are left alone — both
+  already filter, so promoting them would say nothing new.
+
+### What `Write with AI` actually does (observed 2026-08-31)
+
+Clicking it opens a confirmation dialog — **"Rewrite with AI"**, *"You will be
+able to compare the generated text against what is already written before
+anything replaces it"* — with `Cancel` / `Rewrite with AI`. Confirming starts a
+server-side generation and the description area shows a progress panel: *"For
+the next 1-2 minutes, our agents are searching in real time to engineer your
+optimized job description."*
+
+Two things worth knowing before automating it:
+
+- **The progress state is server-side.** It survives a page reload and a fresh
+  browser context, so it is not local editor state.
+- **It can take far longer than advertised, and the result is lost if nobody
+  accepts it.** A generation started on job 3640874 was still showing the
+  progress panel after six minutes with no compare/accept controls on screen;
+  when the session closed and the job was re-opened later, the description was
+  back to the original with no criteria and the button had reverted to
+  `Rewrite with AI (BETA)`. So the generation belongs to the open editor
+  session: it must be awaited *and accepted* in the same visit, or it is
+  discarded. **The stored description was verified unchanged throughout** — read
+  back from the `jobDetail` GraphQL response rather than the editor, which is
+  the only reliable way to see the saved value while a generation is pending.
+- **Which is why the gap-fill matters.** Because Loxo's generator cannot be
+  relied on to deliver inside a scripted run, the criteria are drafted from the
+  advert instead whenever a bucket comes back empty — see
+  [criteria_ai.py](../../app/platforms/criteria_ai.py) and
+  [04-configuration](../04-configuration.md#criteria-drafting). Run against the
+  real Pluto advert on 2026-08-31 it produced five dealbreakers, two baseline
+  requirements and five traits to avoid, all traceable to statements in the
+  advert (GPU infrastructure depth, NYC in-person, no visa sponsorship).
+
+### Finding the job a row's criteria belong to
+
+Criteria go onto a job the recruiters already made, and a document filename does
+not name it. The `Loxo Job` Notion column pins it outright; without one, the
+hiring company is taken from the filename's first segment
+("**Abundant** - Staff Platform Engineer - SF-DUB") and matched against the jobs
+list. **Exactly one match is used; anything else is skipped and reported** —
+writing one client's requirements onto another client's job is the failure this
+guards against.
+
+Verified against the live list on 2026-08-31:
+
+| Company | Matches | Outcome |
+|---------|---------|---------|
+| Abundant | 1 — job 3658501, *Member of Technical Staff, Platform Engineering* | used |
+| Pluto | 1 — job 3640874 | used |
+| Slash | 1 — job 3652714 | used |
+| Axle Insurance | 1 — job 3658508 | used |
+| **Decagon** | **2** — *Senior Platform Engineer* and *Engineering Manager* | **skipped**, needs the column |
+| Nonexistent Ltd | 0 | skipped |
+
+Two traps, both found by watching it run rather than by reading the DOM:
+
+- **Every job card contributes about seven `/jobs/` links** — the title plus one
+  per pipeline stage — so 41 jobs render 275 links. Deduplicate by job id.
+- **`closest('div[class*=row]')` from the title link lands on
+  `JobDetails__TitleContainer`**, whose text is the title alone. The company
+  line is not in scope there, so the first version of the matcher returned zero
+  for every company. Climb until the ancestor's text actually contains the
+  `business` glyph line; the company is the line after it.
+- **The `Search Jobs...` box did not filter when typed into.** The scan runs
+  over the list as rendered instead, so a job on a later page can be missed —
+  which surfaces as "0 jobs match" and a skip, never as the wrong job.
+
+### Writing the description: there are two Save buttons
+
+Clicking the read-only description field opens a **Quill editor inside a modal**
+(`[data-testid=modal_container]`) whose own buttons are `close · HTML · Cancel ·
+Save`. The Manage panel behind it has a `Save` of its own. They are not
+interchangeable:
+
+1. the **modal's** Save commits the edited text into the panel's form;
+2. the **panel's** Save commits the job.
+
+Clicking the panel's first saves the form as it was and discards the edit. That
+is not visible in the UI and not visible in the run log either — the first live
+attempt reported "saved" and changed nothing, and only reading the stored value
+back through GraphQL caught it. Both are clicked in JS
+([loxo_sourcing.py](../../app/platforms/loxo_sourcing.py) `CLICK_SAVE`) because
+a dismissed modal lingers in the DOM through its exit animation: `.first` /
+`.last` cannot be trusted to pick the right button, and the leftover overlay
+swallows ordinary clicks (`force=True` is needed even to open the editor).
+
+**Always verify a write by reading the description back from the `jobDetail`
+GraphQL response.** The editor is not evidence.
+
+The editor modal also has an `HTML` button — a source view, unexplored, and
+probably a more direct way to set the description than pasting into Quill.
+
+### The New Job modal
+
+Not needed by the automation (jobs already exist) but mapped while looking:
+Role Title (taxonomy autocomplete), Hiring Company, location, a work-mode
+choice (In-person / Remote / Hybrid), and a sourcing choice — **"Let Loxo handle
+this" (~15 min, "Score, rank, and complete your Longlist and Shortlist from the
+entire talent pool")** vs **"Do everything myself" (~4 weeks)**. The first is
+the agent that consumes these criteria; it is Loxo's equivalent of noon's
+"start sourcing", and it should never be picked by a test.
 
 ## The live run (2026-08-27)
 

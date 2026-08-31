@@ -9,14 +9,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.documents import parser
 from app.documents.docx_reader import read_blocks
+from app.models import Block
 
 FIXTURES = Path(__file__).parent / "fixtures" / "documents"
 
 
 def _parse(name: str):
     return parser.parse_document(read_blocks((FIXTURES / name).read_bytes()))
+
+
+def _block(text: str, *, style: str = "body", level: int = 0) -> Block:
+    return Block(style=style, level=level, text=text, html=f"<p>{text}</p>")
 
 
 def test_real_advert_only_document():
@@ -247,3 +254,67 @@ def test_generator_vocabulary_and_merge_tripwire():
         h("Mystery Section (Day 4)"), b("Hi {{first_name}}, a stray message."),
     ])
     assert any("merged into one" in w for w in merged.warnings)
+
+
+# ----------------------------------------------------------------------
+# a dash-separated job title is a title, not a field
+# ----------------------------------------------------------------------
+
+# TrustIn's live adverts, verbatim. Every one of these is the first line of a
+# real document, and seven of the nine used to be read as advert metadata -
+# which silently cost the advert its title. Found 2026-08-31 by reading a saved
+# Wellfound draft back and finding it titled "About Company:".
+REAL_TITLES = [
+    "Backend Platform Engineer - NYC / AI Infrastructure Startup / Series A / Kubernetes",
+    "Backend Infrastructure Engineer - AI Startup - AWS, Python, K8s, Terraform, FastAPI",
+    "Distributed Systems Engineer - Open Source Runtime for AI - Node, TS, Python, GCP",
+    "Platform Engineering Leader (Hands-on) - AI + Accounting Agents",
+    "Senior Infrastructure Engineer - Founding Team / AI Observability Startup",
+    "Staff Platform Engineer - RL - LLM, Python, AWS, AI - SF",
+    "Cloud DevSecOps Engineer / Onsite / Blockchain, CI/CD, Cloud, Vaults",
+    "Platform Engineer / AWS, Kubernetes, GPU Infra / SF / causal AI platform",
+]
+
+
+@pytest.mark.parametrize("line", REAL_TITLES)
+def test_a_dash_in_a_job_title_does_not_make_it_a_field(line):
+    document = parser.parse_document(
+        [
+            _block(line),
+            _block("About Company:", style="heading", level=2),
+            _block("An early-stage AI company."),
+            _block("What we are looking for:", style="heading", level=2),
+            _block("5+ years of Kubernetes."),
+        ]
+    )
+    assert document.advert is not None
+    assert document.advert.title == line
+    assert document.advert.fields == {}, "nothing in the title became metadata"
+
+
+@pytest.mark.parametrize(
+    "line, label, value",
+    [
+        ("Location - San Francisco", "Location", "San Francisco"),
+        ("Salary - $200k", "Salary", "$200k"),
+        ("Employment Type - Permanent", "Employment Type", "Permanent"),
+        ("Ref - TRN-4821", "Ref", "TRN-4821"),
+    ],
+)
+def test_a_dash_still_labels_a_field_we_recognise(line, label, value):
+    """The names that map onto advert fields keep working with a dash. Only an
+    unrecognised label needs the colon, which is the documented form anyway."""
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer", style="heading", level=1),
+            _block(line),
+            _block("We are hiring."),
+        ]
+    )
+    advert = document.advert
+    assert advert is not None
+    combined = dict(advert.fields)
+    for attribute in ("location", "salary", "employment_type", "reference"):
+        if getattr(advert, attribute):
+            combined[label] = getattr(advert, attribute)
+    assert combined.get(label) == value

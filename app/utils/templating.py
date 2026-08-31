@@ -298,8 +298,189 @@ def juicebox_tokens(value: Any) -> str:
     return text
 
 
+# Wellfound's job description is an EasyMDE editor - Markdown, not HTML. The
+# docx reader gives us clean HTML (<p>, <strong>, <em>, <ul>/<li>, <h2>), so a
+# small structural conversion keeps the bold labels and bullet lists that make
+# an advert readable. Anything Markdown cannot say (underline, colour) is
+# dropped to its text.
+_MD_HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+_MD_BLOCKS = {"p", "div", "ul", "ol", "li", "table", "tr", "blockquote", "pre", *_MD_HEADINGS}
+
+
+def html_to_markdown(value: str) -> str:
+    """Convert the reader's HTML into Markdown for a Markdown-only editor."""
+    if not value or not value.strip():
+        return ""
+    from bs4 import BeautifulSoup  # already a dependency of the docx reader
+
+    soup = BeautifulSoup(value, "html.parser")
+    text = _md_blocks(soup, depth=0)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _md_inline(node: Any) -> str:
+    from bs4 import NavigableString
+
+    if isinstance(node, NavigableString):
+        return re.sub(r"\s+", " ", str(node))
+    name = (node.name or "").lower()
+    inner = "".join(_md_inline(child) for child in node.children)
+    if name == "br":
+        return "\n"
+    if not inner.strip():
+        return inner
+    if name in ("strong", "b"):
+        return f"**{inner.strip()}**" + (" " if inner.endswith(" ") else "")
+    if name in ("em", "i"):
+        return f"*{inner.strip()}*" + (" " if inner.endswith(" ") else "")
+    if name == "a" and node.get("href"):
+        return f"[{inner.strip()}]({node.get('href')})"
+    return inner
+
+
+def _md_blocks(parent: Any, depth: int) -> str:
+    """Walk a container, emitting blocks; stray inline runs become paragraphs."""
+    from bs4 import NavigableString
+
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        para = "".join(run).strip()
+        run.clear()
+        if para:
+            out.append(para + "\n\n")
+
+    for child in parent.children:
+        name = (getattr(child, "name", None) or "").lower()
+        if isinstance(child, NavigableString) or name not in _MD_BLOCKS:
+            run.append(_md_inline(child))
+            continue
+        flush()
+        if name in _MD_HEADINGS:
+            out.append("#" * _MD_HEADINGS[name] + " " + _md_inline(child).strip() + "\n\n")
+        elif name in ("ul", "ol"):
+            out.append(_md_list(child, depth))
+        elif name == "li":  # a loose <li> outside any list
+            out.append("- " + _md_inline(child).strip() + "\n")
+        else:
+            inner = _md_blocks(child, depth)
+            out.append(inner + ("\n\n" if inner and not inner.endswith("\n\n") else ""))
+    flush()
+    return "".join(out)
+
+
+def _md_list(node: Any, depth: int) -> str:
+    ordered = (node.name or "").lower() == "ol"
+    lines: list[str] = []
+    for index, item in enumerate(node.find_all("li", recursive=False), start=1):
+        marker = f"{index}." if ordered else "-"
+        text_parts: list[str] = []
+        nested: list[str] = []
+        for child in item.children:
+            child_name = (getattr(child, "name", None) or "").lower()
+            if child_name in ("ul", "ol"):
+                nested.append(_md_list(child, depth + 1))
+            else:
+                text_parts.append(_md_inline(child))
+        lines.append("  " * depth + f"{marker} " + "".join(text_parts).strip())
+        lines.extend(block.rstrip("\n") for block in nested if block.strip())
+    return "\n".join(lines) + "\n\n"
+
+
+# Salary in the documents and Notion rows is free text - "$180k-$220k",
+# "180,000 - 220,000 USD", "Up to $350k", "£90k". Job boards want two integers
+# and a currency. Wellfound also caps the spread at 80,000, so a wider range is
+# narrowed from the bottom rather than rejected at the form.
+_SALARY_NUMBER = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*([kK])?(?![\d,])")
+_SALARY_MAX_SPREAD = 80_000
+
+
+def _salary_bounds(value: Any) -> tuple[int, int] | None:
+    text = _as_text(value)
+    if not text.strip():
+        return None
+    has_k = bool(re.search(r"\d\s*[kK]\b", text))
+    numbers: list[int] = []
+    for match in _SALARY_NUMBER.finditer(text):
+        amount = float(match.group(1).replace(",", ""))
+        if match.group(2) or (has_k and amount < 1000):
+            amount *= 1000  # "$180-220k": the first number inherits the k
+        if amount < 1000:
+            continue  # a stray "3" or "401" is not a salary
+        numbers.append(int(round(amount)))
+    if not numbers:
+        return None
+    if len(numbers) == 1:
+        return numbers[0], numbers[0]
+    low, high = sorted(numbers[:2])
+    if high - low > _SALARY_MAX_SPREAD:
+        low = high - _SALARY_MAX_SPREAD
+    return low, high
+
+
+def _filter_salary_min(value: Any) -> str:
+    bounds = _salary_bounds(value)
+    return "" if bounds is None else str(bounds[0])
+
+
+def _filter_salary_max(value: Any) -> str:
+    bounds = _salary_bounds(value)
+    return "" if bounds is None else str(bounds[1])
+
+
+_CURRENCY_SIGNS = (("£", "GBP"), ("€", "EUR"), ("$", "USD"))
+_CURRENCY_CODES = re.compile(r"\b(GBP|EUR|USD|CAD|AUD|CHF|INR|SGD)\b", re.IGNORECASE)
+
+
+def _filter_salary_currency(value: Any) -> str:
+    """ISO code from a salary string, or empty to leave the form's default."""
+    text = _as_text(value)
+    code = _CURRENCY_CODES.search(text)
+    if code:
+        return code.group(1).upper()
+    for sign, iso in _CURRENCY_SIGNS:
+        if sign in text:
+            return iso
+    return ""
+
+
+# "15+ years", "5-8 years' experience", "minimum of 3 years". The unit has to be
+# present: a bare number in an advert is a salary, a headcount or a funding round
+# far more often than it is a length of service.
+_YEARS = re.compile(
+    r"(\d{1,2})\s*(?:\+|\s*-\s*\d{1,2})?\s*(?:\+)?\s*year", re.IGNORECASE
+)
+
+
+def _filter_years_min(value: Any) -> str:
+    """The years-of-experience floor an advert states, as a bare number.
+
+    Wellfound offers `0+` through `10+ years of experience` and nothing above, so
+    a 15+ advert becomes 10+ — which is what the recruiters pick by hand anyway.
+
+    A range gives its low end, because the regex captures the first number and
+    swallows the rest: "5-8 years" is a floor of five. Across several separate
+    mentions the *highest* wins, since an advert states its headline seniority as
+    its biggest figure and the skill-specific asides sit below it. The advert is
+    saved as a draft either way, so a recruiter sees this before anyone else does.
+    """
+    matches = _YEARS.findall(_as_text(value))
+    if not matches:
+        return ""
+    stated = max(int(match) for match in matches)
+    return str(max(0, min(stated, 10)))
+
+
 _FILTERS = {
     "truncate": _filter_truncate,
+    "years_min": _filter_years_min,
+    "markdown": lambda v: html_to_markdown(_as_text(v)),
+    "salary_min": _filter_salary_min,
+    "salary_max": _filter_salary_max,
+    "salary_currency": _filter_salary_currency,
     "default": _filter_default,
     "noon_tokens": _filter_noon_tokens,
     "juicebox_tokens": juicebox_tokens,

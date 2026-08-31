@@ -8,6 +8,7 @@ platforms cannot race three updates.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import Settings, get_settings
@@ -23,7 +24,8 @@ from app.models import (
     PostResult,
 )
 from app.notion.client import NotionClient
-from app.platforms import BrowserRunner, get_adapter, load_recipes
+from app.platforms import BrowserRunner, get_adapter, load_recipes, resolve
+from app.platforms.skills import ensure_skills, split_skills
 
 log = get_logger(__name__)
 
@@ -85,6 +87,65 @@ async def load_document(
     return document
 
 
+def enrich_advert(
+    document: ParsedDocument,
+    row: NotionRow | None,
+    settings: Settings | None = None,
+) -> list[str]:
+    """Fill empty advert fields from the row's columns. Returns what was filled.
+
+    The document wins when it carries the value; the row only fills gaps. This
+    is orchestrator work by design - the parser knows nothing about Notion and
+    the recipes should not each re-implement "column, else document".
+    """
+    if row is None or document.advert is None:
+        return []
+    settings = settings or get_settings()
+    advert = document.advert
+    filled: list[str] = []
+    for attr, column in (
+        ("location", settings.prop_location),
+        ("salary", settings.prop_salary),
+        ("employment_type", settings.prop_employment_type),
+    ):
+        if getattr(advert, attr):
+            continue
+        value = _row_text(row, column)
+        if value:
+            setattr(advert, attr, value)
+            filled.append(f"{attr} <- {column}")
+
+    # Skills are a list, so they take the same "column fills a gap" rule but a
+    # different reader. A recruiter naming the stack beats anything inferred
+    # from the prose, which is why the column is consulted before Claude is.
+    if not advert.tags:
+        value = _row_text(row, settings.prop_skills)
+        if value:
+            advert.tags = split_skills(value)
+            filled.append(f"tags <- {settings.prop_skills}")
+
+    if filled:
+        log.info("advert enriched from row", extra={"filled": filled})
+    return filled
+
+
+def _row_text(row: NotionRow, column: str) -> str | None:
+    """`property_text` with the same loose name match the Notion client uses."""
+    exact = row.property_text(column)
+    if exact:
+        return exact.strip() or None
+    wanted = _loose(column)
+    for name in row.raw_properties:
+        if _loose(name) == wanted:
+            text = row.property_text(name)
+            return (text or "").strip() or None
+    return None
+
+
+def _loose(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 async def post_document(
     document: ParsedDocument,
     platforms: list[str],
@@ -101,9 +162,30 @@ async def post_document(
     settings = settings or get_settings()
     recipes = load_recipes(settings)
     results: list[PostResult] = []
+    enrich_advert(document, row, settings)
+    # Once per row, not once per platform: the draft costs an API call and every
+    # advert-kind recipe wants the same answer.
+    await ensure_skills(document, settings)
 
     async with BrowserRunner(settings) as runner:
         for name in platforms:
+            # A Platforms option with no recipe is a tag, not a destination:
+            # the database carries `TrustIn` alongside the four real ones. That
+            # must not fail a row whose actual platforms all posted, so it is
+            # recorded as skipped and named.
+            if resolve(name, recipes) is None:
+                known = ", ".join(sorted(recipes)) or "none"
+                results.append(
+                    PostResult(
+                        platform=name,
+                        outcome=Outcome.SKIPPED,
+                        detail=f"no recipe for {name!r} - nothing to post to (known: {known})",
+                        finished_at=datetime.now(timezone.utc),
+                    )
+                )
+                log.info("platform skipped - no recipe", extra={"platform": name})
+                continue
+
             adapter = get_adapter(
                 name, recipes=recipes, runner=runner, settings=settings, dry_run=dry_run
             )

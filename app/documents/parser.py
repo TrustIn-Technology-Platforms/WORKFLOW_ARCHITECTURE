@@ -114,7 +114,9 @@ _DELAY = re.compile(
 # rule a bullet such as "Hands-on and scrappy, ..." reads as a field called
 # "Hands", which is exactly what happened on the first real document.
 _FIELD_LINE = re.compile(
-    r"^\s*([A-Za-z][A-Za-z /&'()-]{1,38}?)\s*(?::|\s[–-]\s)\s*(.+?)\s*$"
+    r"^\s*(?P<label>[A-Za-z][A-Za-z /&'()-]{1,38}?)"
+    r"\s*(?::|(?P<dash>\s[–-]\s))\s*"
+    r"(?P<value>.+?)\s*$"
 )
 # "About Company:" is a section label, not a title.
 _LABEL_LIKE = re.compile(r"[:\-–]\s*$")
@@ -534,12 +536,21 @@ def _field_from(block: Block) -> tuple[str | None, str]:
     if not match:
         return None, ""
 
-    label, value = match.group(1).strip(), match.group(2).strip()
+    label, value = match.group("label").strip(), match.group("value").strip()
     if len(label) > _MAX_LABEL_CHARS or not value:
         return None, ""
     # A sentence with a colon in it is not a field. Real labels are short and
     # rarely run to several words of prose.
     if len(label.split()) > 4:
+        return None, ""
+    # A dash only labels a field when the label is one we recognise. The colon
+    # form is the documented one and stays open to any label; the dash form is
+    # also how every one of TrustIn's job titles is written — "Backend Platform
+    # Engineer - NYC / Series A / Kubernetes" — and reading those as a field
+    # called "Backend Platform Engineer" swallowed the title on seven of the
+    # nine live shapes, silently, leaving the advert titled "About Company:"
+    # (found 2026-08-31 by reading a saved Wellfound draft back).
+    if match.group("dash") and label.lower() not in _FIELD_LOOKUP:
         return None, ""
     return label, value
 

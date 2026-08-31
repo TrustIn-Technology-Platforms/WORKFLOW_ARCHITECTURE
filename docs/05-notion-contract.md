@@ -5,6 +5,42 @@
 > **Status** BUILT — reflects [app/notion/client.py](../app/notion/client.py) and [app/notion/schema.py](../app/notion/schema.py).
 > **Related** [04-configuration](04-configuration.md)
 
+## The two optional targeting columns
+
+Criteria are written to a record the recruiters already made — a Loxo job, a
+Juicebox search — and a document filename does not reliably identify one. Two
+optional columns remove the guesswork:
+
+| Column | Holds | When it is blank |
+|--------|-------|------------------|
+| `Loxo Job` | the job's URL or id | Loxo falls back to matching on the hiring company, and **skips** when that is not exactly one job |
+| `Juicebox Search` | the search's full URL | Juicebox **skips** the criteria step and says so — nothing in a document names a search |
+
+Neither is required and neither breaks an existing row. A skip is reported in
+the row's detail, never silently.
+
+## Advert columns the document does not carry
+
+The adverts are prose, with no labelled Location or Salary lines, and Wellfound
+requires both. These columns fill an advert field the document left empty — the
+document always wins when it says something.
+
+| Column | Fills | When it is blank |
+|--------|-------|------------------|
+| `Location` | `advert.location` | Wellfound cannot post; noon has no geography to search on |
+| `Salary` | `advert.salary` | Wellfound hides a post without one |
+| `Employment Type` | `advert.employment_type` | Wellfound's form keeps its own default, Full-time employee |
+| `Skills` | `advert.tags` — comma-separated | drafted from the advert text; with no `ANTHROPIC_API_KEY`, Wellfound's Skills field is left empty |
+
+`Skills` is written as one comma-separated list (`Python, Kubernetes, CI/CD`)
+and split on commas, semicolons and pipes — never on `/`, so `CI/CD` survives.
+Wellfound then drops any skill its own vocabulary does not carry, which is
+reported in the log rather than failing the post.
+
+**The `Platforms` option `TrustIn` has no recipe.** It is recorded as *skipped*
+rather than failing the row, so a row tagged `TrustIn, noon` still posts to noon
+and still finishes green.
+
 ## Database shape
 
 One row is one document and one set of destinations.

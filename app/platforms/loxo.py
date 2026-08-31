@@ -29,7 +29,7 @@ boundary noon and Juicebox draw.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.logging_conf import get_logger
 from app.models import Advert, AuthenticationRequired, NotionRow, ParsedDocument, PlatformError
@@ -52,6 +52,61 @@ REPLY_LABEL = "Reply in email thread?"
 # the menu exists for every stage card.
 EDIT_ITEM = "text=/^\\s*(edit)?\\s*Edit\\s*$/ >> visible=true"
 DEFAULT_FOLLOWUP_DELAY_DAYS = 3
+
+
+def job_id_from(value: str | None) -> str | None:
+    """The job id in a Loxo job URL, or a bare id.
+
+    Order matters: a job URL is `/agencies/<agency>/jobs/<job>/...`, so the first
+    long number in it is the *agency*. Reading that as the job id would write one
+    client's criteria onto whatever job happens to carry the agency's number.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    in_path = re.search(r"/jobs/(\d+)", text)
+    if in_path:
+        return in_path.group(1)
+    if "/" in text or "http" in text:
+        return None  # a URL we do not recognise - better to skip than to guess
+    bare = re.fullmatch(r"\D*(\d{4,})\D*", text)
+    return bare.group(1) if bare else None
+
+# A job card on the list renders its title, then a "business" glyph, then the
+# hiring company. Matching the company exactly - never fuzzily - is what keeps
+# criteria off the wrong client's job.
+#
+# Two things this got wrong on the first attempt, both found by watching it run
+# (2026-08-31): every card contributes ~7 `/jobs/` links (the title plus one per
+# pipeline stage), and `closest()` from the title link lands on
+# `JobDetails__TitleContainer`, whose text is the title alone - so the company
+# line was never in scope and every lookup returned nothing. Climbing until the
+# ancestor actually contains the company line is what works.
+_JOB_ROWS = r"""(company) => {
+  const wanted = company.trim().toLowerCase();
+  const out = [];
+  const seen = new Set();
+  for (const link of document.querySelectorAll('a[href*="/jobs/"]')) {
+    const id = (link.getAttribute('href') || '').match(/\/jobs\/(\d+)/);
+    if (!id || seen.has(id[1])) continue;
+    let node = link;
+    let lines = [];
+    for (let hop = 0; hop < 8 && node.parentElement; hop++) {
+      node = node.parentElement;
+      lines = (node.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+      if (lines.indexOf('business') >= 0) break;
+    }
+    const at = lines.indexOf('business');
+    if (at < 0) continue;
+    const hiring = lines[at + 1] || '';
+    if (hiring.toLowerCase() === wanted) {
+      seen.add(id[1]);
+      out.push({id: id[1], title: lines[0] || '', company: hiring});
+    }
+  }
+  return out;
+}"""
+
 
 
 class LoxoAdapter(RecipeAdapter):
@@ -87,6 +142,125 @@ class LoxoAdapter(RecipeAdapter):
     # drive
     # ------------------------------------------------------------------
     async def _drive(
+        self, page: "Page", document: ParsedDocument, row: NotionRow | None
+    ) -> RunReport:
+        """The campaign, then the criteria on the job it sources for.
+
+        Two independent halves: the campaign is what a candidate receives, the
+        criteria decide who receives it. A criteria failure is a warning on a
+        run whose campaign saved, never a lost campaign.
+        """
+        report = await self._drive_campaign(page, document, row)
+        if self.settings.criteria_enabled:
+            await self._set_criteria(page, document, row, report)
+        return report
+
+    async def _set_criteria(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        row: NotionRow | None,
+        report: RunReport,
+    ) -> None:
+        from app.platforms.loxo_sourcing import set_criteria
+
+        job_id = await self._criteria_target(page, document, row, report)
+        if not job_id:
+            return
+
+        advert = document.advert
+        advert_text = advert.body_text if advert else ""
+        try:
+            result = await set_criteria(
+                page,
+                job_id,
+                advert_text,
+                role_name=document.source_name,
+                agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
+                settings=self.settings,
+                dry_run=self.dry_run,
+            )
+        except (PlatformError, AuthenticationRequired) as exc:
+            log.warning(
+                "loxo criteria not set", extra={"job": job_id, "error": str(exc)[:200]}
+            )
+            report.warnings.append(f"criteria not set on job {job_id}: {exc}")
+            return
+
+        report.warnings.extend(result.warnings)
+        report.warnings.append(f"criteria on job {job_id}: {result.summary}")
+
+    async def _criteria_target(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        row: NotionRow | None,
+        report: RunReport,
+    ) -> str | None:
+        """Which Loxo job to set criteria on — the row's, else an exact name match.
+
+        Guessing here would write one client's requirements onto another client's
+        job, so an ambiguous match is refused. The `Loxo Job` column removes the
+        ambiguity for good when a recruiter fills it in.
+        """
+        if row is not None:
+            from app.pipeline import _row_text
+
+            job_id = job_id_from(_row_text(row, self.settings.prop_loxo_job))
+            if job_id:
+                return job_id
+
+        company = (document.source_name or "").split(" - ")[0].strip()
+        if not company:
+            report.warnings.append(
+                "criteria skipped: nothing identifies the Loxo job for this "
+                f"document (fill the {self.settings.prop_loxo_job!r} column)"
+            )
+            return None
+
+        matches = await self._find_jobs(page, company)
+        if len(matches) == 1:
+            log.info("loxo job matched by company", extra={"company": company, "job": matches[0]["id"]})
+            return str(matches[0]["id"])
+
+        report.warnings.append(
+            f"criteria skipped: {len(matches)} Loxo jobs match {company!r}, so the "
+            f"right one is not certain - fill the {self.settings.prop_loxo_job!r} "
+            "column with the job URL"
+        )
+        return None
+
+    async def _find_jobs(self, page: "Page", company: str) -> list[dict]:
+        """Jobs whose hiring company is exactly `company`.
+
+        The `Search Jobs...` box is used to narrow the list, but the scan does
+        not depend on it: typing into it did not filter at all when watched
+        (2026-08-31), so the company match runs over whatever the page renders
+        either way. The consequence is that a job on a later page can be missed,
+        which shows up as "0 jobs match" and a skip — not as the wrong job.
+        """
+        base = self.recipe.defaults.get("base_url", "https://app.loxo.co")
+        slug = self.recipe.defaults.get("agency_id", "28356")
+        try:
+            await page.goto(f"{base}/agencies/{slug}/jobs", wait_until="domcontentloaded", timeout=90_000)
+            await page.wait_for_timeout(16_000)
+            try:
+                box = page.get_by_placeholder("Search Jobs...").first
+                await box.click(timeout=8_000)
+                await page.keyboard.type(company, delay=40)
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(9_000)
+            except Exception as exc:
+                log.info("loxo job search box unusable, scanning the list as rendered",
+                         extra={"error": str(exc)[:120]})
+            found = await page.evaluate(_JOB_ROWS, company)
+            log.info("loxo job scan", extra={"company": company, "matches": len(found)})
+            return found
+        except Exception as exc:
+            log.warning("loxo job search failed", extra={"error": str(exc)[:160]})
+            return []
+
+    async def _drive_campaign(
         self, page: "Page", document: ParsedDocument, row: NotionRow | None
     ) -> RunReport:
         report = RunReport()

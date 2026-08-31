@@ -224,14 +224,26 @@ async def action_combobox(run: StepRun) -> None:
     """
     value = _mapped_value(run)
     optional = bool(run.get("optional", False))
-    if not value and optional:
-        return
+    if not value:
+        if optional:
+            return
+        # A required dropdown with nothing to choose used to type an empty
+        # string and move on, leaving the field blank and the run green. On
+        # Wellfound that is a saved advert with no location, which nobody would
+        # notice until a recruiter opened the draft.
+        raise PlatformError(
+            run.text("required_message")
+            or "this field is required and the document and row both left it empty."
+        )
 
     locator = await find(run, required=not optional)
     if locator is None:
         return
 
-    await locator.click(timeout=run.timeout_ms)
+    # react-select lays its placeholder <div> over the real <input>, so an
+    # actionability-checked click is "intercepted" until it times out. `force`
+    # skips that check, exactly as it does for `click`.
+    await locator.click(timeout=run.timeout_ms, force=bool(run.get("force", False)))
     await locator.fill("", timeout=run.timeout_ms)
     await locator.type(value, delay=40)
 
@@ -257,6 +269,111 @@ async def action_combobox(run: StepRun) -> None:
     # Some comboboxes commit the highlighted option on Enter and expose no
     # clickable list node at all.
     await locator.press("Enter", timeout=run.timeout_ms)
+
+
+def _tag_values(raw: str, separators: str) -> list[str]:
+    """Split a list written for humans, without breaking a skill like `CI/CD`.
+
+    Commas, semicolons, pipes and newlines separate; `/` deliberately does not,
+    because it appears inside skill names far more often than between them.
+    """
+    text = raw or ""
+    for separator in separators:
+        text = text.replace(separator, "\n")
+    seen: set[str] = set()
+    values: list[str] = []
+    for line in text.split("\n"):
+        value = line.strip().strip("-•·").strip()
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            values.append(value)
+    return values
+
+
+async def action_tags(run: StepRun) -> None:
+    """Commit several values into one tag input, skipping any it rejects.
+
+    A tag field bound to the platform's own taxonomy — Wellfound's Skills — takes
+    only what its list offers: typed text matching nothing is discarded when
+    focus leaves, with no error. So each value is typed, given a moment for the
+    list to arrive, and committed by clicking the option that matches it. The
+    input clearing is the platform's own signal that a tag was accepted; a value
+    still sitting in the box was refused, so it is wiped before the next one is
+    typed rather than left to block it or to vanish silently later.
+
+    Refused values are named in the log and are not an error. A skills list is
+    an optional field, and posting eight of the ten skills asked for is a better
+    outcome than failing an advert over vocabulary.
+    """
+    raw = run.text("value") or str(run.get("default", "") or "")
+    optional = bool(run.get("optional", True))
+    wanted = _tag_values(raw, str(run.get("separators", ",;|") or ",;|"))
+    limit = int(run.get("max", 0) or 0)
+    if limit > 0:
+        wanted = wanted[:limit]
+    if not wanted:
+        if optional:
+            return
+        raise PlatformError("tags needs at least one value")
+
+    locator = await find(run, required=not optional)
+    if locator is None:
+        return
+
+    settle_ms = int(run.get("settle_ms", 900) or 900)
+    option_selector = run.params.get("option_selector")
+    added: list[str] = []
+    refused: list[str] = []
+
+    for value in wanted:
+        # Quotes would end the selector string early; a substring match on the
+        # rest of the word finds the option just as well.
+        safe = value.replace("'", "").replace('"', "")
+        await locator.click(timeout=run.timeout_ms, force=bool(run.get("force", False)))
+        try:
+            await locator.fill("", timeout=run.timeout_ms)
+        except Exception:
+            pass  # some tag inputs refuse an empty fill while a chip is forming
+        await locator.type(value, delay=40)
+        await run.page.wait_for_timeout(settle_ms)
+
+        option_run = StepRun(
+            page=run.page,
+            params={
+                "selector": option_selector
+                or [
+                    f"[role=option]:has-text('{safe}')",
+                    f"li:has-text('{safe}')",
+                ],
+                "frame": run.params.get("frame"),
+            },
+            timeout_ms=run.timeout_ms,
+        )
+        option = await find(option_run, required=False)
+        if option is not None:
+            await option.click(timeout=run.timeout_ms)
+        else:
+            await locator.press("Enter", timeout=run.timeout_ms)
+        await run.page.wait_for_timeout(300)
+
+        try:
+            left = (await locator.input_value(timeout=run.timeout_ms)).strip()
+        except Exception:
+            left = ""
+        if left:
+            refused.append(value)
+            try:
+                await locator.fill("", timeout=run.timeout_ms)
+            except Exception:
+                pass
+        else:
+            added.append(value)
+
+    log.info(
+        "tags entered",
+        extra={"added": added, "refused": refused, "asked": len(wanted)},
+    )
 
 
 async def action_check(run: StepRun) -> None:
@@ -348,6 +465,20 @@ _CONTENT_LENGTH = """
 """
 
 
+_CODEMIRROR_SET = """(args) => {
+  const { el, text } = args;
+  const cmEl = el.classList && el.classList.contains('CodeMirror')
+    ? el
+    : (el.closest && el.closest('.CodeMirror')) || (el.querySelector && el.querySelector('.CodeMirror'));
+  const cm = cmEl && cmEl.CodeMirror;
+  if (!cm) return null;
+  cm.setValue(text);
+  if (typeof cm.save === 'function') cm.save();
+  cm.refresh && cm.refresh();
+  return cm.getValue().length;
+}"""
+
+
 async def action_fill_rich(run: StepRun) -> None:
     html = run.text("value_html")
     plain = run.text("value") or html_to_text(html)
@@ -370,6 +501,21 @@ async def action_fill_rich(run: StepRun) -> None:
     # A plain <textarea> needs none of the ceremony below.
     if await run.page.evaluate(_IS_PLAIN_FIELD, handle):
         await locator.fill(plain, timeout=run.timeout_ms)
+        return
+
+    # A CodeMirror editor (EasyMDE/SimpleMDE - Markdown, not HTML) keeps its
+    # document in JS and ignores paste events dispatched at the DOM. Its
+    # instance hangs off the `.CodeMirror` element, and setValue runs through
+    # the editor's own change pipeline, which is what the surrounding React
+    # form listens to. `value` is expected to already be Markdown here - see
+    # the `markdown` filter.
+    written = await run.page.evaluate(
+        _CODEMIRROR_SET, {"el": handle, "text": plain if run.text("value") else html_to_text(html)}
+    )
+    if written is not None:
+        if int(written) <= 0:
+            raise PlatformError("CodeMirror editor stayed empty after setValue")
+        log.info("codemirror written", extra={"chars": int(written)})
         return
 
     replace = bool(run.get("replace", True))
@@ -552,6 +698,7 @@ ACTIONS: dict[str, ActionSpec] = {
     "combobox": ActionSpec(
         action_combobox, ("selector", "value"), ("value", "default")
     ),
+    "tags": ActionSpec(action_tags, ("selector", "value"), ("value", "default")),
     "check": ActionSpec(action_check, ("selector",)),
     "upload": ActionSpec(action_upload, ("selector", "path"), ("path",)),
     "wait_for": ActionSpec(action_wait_for, ("selector",)),

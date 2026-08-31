@@ -207,7 +207,66 @@ class JuiceboxAdapter(RecipeAdapter):
             "juicebox sequence saved",
             extra={"sequence": name, "steps": report.emails_written, "url": report.post_url},
         )
+
+        if self.settings.criteria_enabled:
+            await self._set_criteria(page, document, row, report)
         return report
+
+    async def _set_criteria(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        row: NotionRow | None,
+        report: RunReport,
+    ) -> None:
+        """Tighten the criteria of the search this sequence is for.
+
+        The sequence and the search are separate objects, and nothing in a
+        document says which search a role belongs to — Juicebox names them by
+        hand ("Cloud Infra Engineer"). So the target comes from the row's
+        `Juicebox Search` column, and without it this stage is skipped and said
+        so rather than guessed at: writing criteria onto the wrong client's
+        search would quietly re-score their candidates.
+        """
+        from app.platforms.juicebox_criteria import set_criteria
+
+        search = None
+        if row is not None:
+            from app.pipeline import _row_text
+
+            search = (_row_text(row, self.settings.prop_juicebox_search) or "").strip()
+
+        if not search:
+            report.warnings.append(
+                "search criteria skipped: no "
+                f"{self.settings.prop_juicebox_search!r} on the row, and a "
+                "document does not say which search a role belongs to"
+            )
+            return
+        if not search.startswith("http"):
+            report.warnings.append(
+                f"search criteria skipped: {self.settings.prop_juicebox_search!r} "
+                "should hold the search's full URL"
+            )
+            return
+
+        advert = document.advert
+        try:
+            result = await set_criteria(
+                page,
+                search,
+                advert.body_text if advert else "",
+                role_name=document.source_name,
+                settings=self.settings,
+                dry_run=self.dry_run,
+            )
+        except PlatformError as exc:
+            log.warning("juicebox criteria not set", extra={"error": str(exc)[:200]})
+            report.warnings.append(f"search criteria not set: {exc}")
+            return
+
+        report.warnings.extend(result.warnings)
+        report.warnings.append(f"search criteria: {result.summary}")
 
     # -- page interactions -------------------------------------------------
 

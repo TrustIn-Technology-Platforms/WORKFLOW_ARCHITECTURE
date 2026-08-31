@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mock tag input</title>
+</head>
+<body>
+<!--
+  Wellfound's Skills field, reduced to the two behaviours that matter:
+
+  1. It suggests only from its own vocabulary, and a value that matches nothing
+     offers no option to click.
+  2. A tag commits only when an option is chosen. Enter on an empty suggestion
+     list leaves the typed text sitting in the box - which is how the real form
+     silently discards an unknown skill when focus moves on.
+-->
+<label for="skills">Skills</label>
+<ul id="chips"></ul>
+<input id="skills" type="text" placeholder="e.g. Python, React" autocomplete="off">
+<ul id="menu" role="listbox"></ul>
+
+<script>
+  const VOCABULARY = [
+    'Python', 'Kubernetes', 'PostgreSQL', 'React', 'Terraform', 'Go',
+    'AWS', 'CI/CD', 'TypeScript',
+  ];
+
+  const input = document.getElementById('skills');
+  const menu = document.getElementById('menu');
+  const chips = document.getElementById('chips');
+  const taken = new Set();
+
+  function commit(name) {
+    taken.add(name);
+    const chip = document.createElement('li');
+    chip.className = 'chip';
+    chip.textContent = name;
+    chips.appendChild(chip);
+    input.value = '';
+    render();
+  }
+
+  function render() {
+    const typed = input.value.trim().toLowerCase();
+    menu.innerHTML = '';
+    if (!typed) return;
+    VOCABULARY
+      .filter((name) => !taken.has(name))
+      .filter((name) => name.toLowerCase().startsWith(typed))
+      .forEach((name) => {
+        const option = document.createElement('li');
+        option.setAttribute('role', 'option');
+        option.textContent = name;
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commit(name);
+        });
+        menu.appendChild(option);
+      });
+  }
+
+  input.addEventListener('input', render);
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    // Only a real suggestion commits. Anything else stays in the box.
+    const first = menu.querySelector('[role=option]');
+    if (first) commit(first.textContent);
+  });
+</script>
+</body>
+</html>

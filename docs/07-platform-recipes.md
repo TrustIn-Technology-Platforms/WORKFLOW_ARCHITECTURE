@@ -28,10 +28,23 @@ instead of `steps`. `get_adapter` then hands the recipe to that named driver, a
 subclass of `RecipeAdapter` that overrides `_drive` (and, if the app is
 awkward about it, `_assert_logged_in`) while inheriting all the session, login
 and failure-artifact handling. Load-time validation skips the step-shape rules
-for a driver recipe, since the flow lives in Python. Juicebox is the first and
-only one: [app/platforms/juicebox.py](../app/platforms/juicebox.py), because its
-editor is TinyMCE inside an iframe driven through its own JS API. See
-[platforms/juicebox](platforms/juicebox.md).
+for a driver recipe, since the flow lives in Python. Three exist:
+
+- **Juicebox** ([juicebox.py](../app/platforms/juicebox.py)) — its editor is
+  TinyMCE inside an iframe, driven through its own JS API.
+  [platforms/juicebox](platforms/juicebox.md)
+- **Loxo** ([loxo.py](../app/platforms/loxo.py)) — stages are grown one modal at
+  a time, and threading is a per-stage toggle set only once a stage exists.
+  [platforms/loxo](platforms/loxo.md)
+- **noon** ([noon.py](../app/platforms/noon.py)) — the only one that keeps its
+  YAML steps. The driver runs them for the campaign exactly as before, then adds
+  the role's sourcing criteria, which are set through noon's API rather than its
+  wizard. [platforms/noon](platforms/noon.md#the-sourcing-wizard),
+  [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom)
+
+A driver that keeps its `steps` is worth calling out: `_drive` can run
+`RecipeEngine` itself and add work around it, so a proven recipe does not have to
+be rewritten in Python to gain one extra stage.
 
 ## File layout
 
@@ -164,9 +177,10 @@ Every action takes `selector` unless noted. Common optional keys:
 | `click` | `selector` | Click, scrolling into view first. `force: true` skips actionability checks, for targets under a floating panel or only fully visible on hover |
 | `dismiss` | `selector` | Click if present, **never fail**. For cookie banners and onboarding tours |
 | `fill` | `selector`, `value` | Clear, then write into a plain input |
-| `fill_rich` | `selector`, `value_html` | Write into a rich-text editor, preserving formatting. See below |
+| `fill_rich` | `selector`, `value_html` | Write into a rich-text editor, preserving formatting. See below. A CodeMirror editor (EasyMDE/SimpleMDE, Markdown) is detected and written through its instance, using `value` — pass `{{ advert.body_html \| markdown }}` there |
 | `select` | `selector`, `value` | Choose from a native `<select>`, applying `map` and `default`. Tries by value, then by visible label |
-| `combobox` | `selector`, `value` | Type into a custom autocomplete, then click the matching option. Falls back to Enter |
+| `combobox` | `selector`, `value` | Type into a custom autocomplete, then click the matching option. Falls back to Enter — which is what commits on react-select, whose options carry no `role=option`. `force: true` clicks through react-select's placeholder overlay. A step that is **not** `optional` and whose value renders empty fails the run rather than selecting nothing — give it `required_message` to say what the recruiter should fill in |
+| `tags` | `selector`, `value` | Commit several values into one tag input. `value` is a comma/semicolon/pipe list (never split on `/`, so `CI/CD` survives); each is typed, given `settle_ms` for the suggestions, and committed by clicking its option. A value the platform does not offer is left uncommitted — the input still holding it is the platform's own refusal signal — so it is cleared and named in the log rather than failing the step. `max` caps the list. Optional by default |
 | `check` | `selector` | Tick or untick a checkbox |
 | `upload` | `selector`, `path` | Attach a file |
 | `press` | `key` | Send a keystroke. With no selector it goes to the page |
@@ -223,6 +237,13 @@ A real `<input>` or `<textarea>` skips all of it and is filled directly. Pin one
 strategy with `strategy: paste_event` when a platform needs it, and set
 `replace: false` to append rather than overwrite.
 
+A **CodeMirror** editor (EasyMDE / SimpleMDE — Wellfound's job description) is
+the other exception: its document lives in JS, it ignores DOM paste events, and
+it takes Markdown, not HTML. `fill_rich` looks for the instance on the
+`.CodeMirror` element and calls `setValue` with `value` (falling back to the
+plain text of `value_html`), then `save()` so the backing textarea agrees. Write
+`value: "{{ advert.body_html | markdown }}"` so bold labels and bullets survive.
+
 ### `submit: true`
 
 Exactly one step per recipe carries `submit: true`. It marks the irreversible
@@ -259,9 +280,17 @@ Rules:
 - Nothing is HTML-escaped on the way out — `body_html` is already escaped
   correctly by the docx reader, and re-escaping would publish visible tags.
 - Filters are deliberately limited: `truncate(n)`, `default(text)`, `upper`,
-  `lower`, `strip`, `oneline`, `plain` (HTML to text), and `noon_tokens`
-  (rewrites document placeholders `{{name}}` / `{{job_company}}` into noon's
-  `{first_name}` / `{company}`).
+  `lower`, `strip`, `oneline`, `plain` (HTML to text), `markdown` (HTML to
+  Markdown, for CodeMirror editors), `salary_min` / `salary_max` (integers out
+  of free text such as `$180k - $220k` or `Up to $350k`; a spread wider than
+  Wellfound's 80,000 cap is narrowed from the bottom; unparseable text renders
+  empty so an `optional` step skips), `salary_currency` (ISO code from a `£`,
+  `€`, `$` or a written code, empty otherwise), `years_min` (the years-of-
+  experience floor an advert states, clamped to Wellfound's 0–10 list; a range
+  gives its low end, several mentions give the highest, and a bare number with
+  no `year` beside it is ignored), `noon_tokens` (rewrites
+  document placeholders `{{name}}` / `{{job_company}}` into noon's
+  `{first_name}` / `{company}`) and `juicebox_tokens`.
 - Besides `advert`, `email` (inside `per_email`) and `row`, the context carries
   `emails` — the whole sequence as a list — and `email_count`, for platforms
   whose campaign has fixed slots: `{{ emails[0].body_html | noon_tokens }}`.

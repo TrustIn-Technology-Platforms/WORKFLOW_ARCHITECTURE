@@ -327,3 +327,45 @@ The error names the profile, both browsers, and the two ways out.
 profile and logging in again. That is the honest cost - the old session was
 never going to survive the switch, it would just have failed later and
 mysteriously.
+
+## D-017 · noon's sourcing wizard is driven through its API, not its DOM
+
+**Status** Accepted · **Where** [app/platforms/noon_sourcing.py](../app/platforms/noon_sourcing.py), [app/platforms/noon.py](../app/platforms/noon.py), [platforms/noon](platforms/noon.md#the-sourcing-wizard)
+
+The campaign half of noon is driven through the page. That was decided on
+2026-08-26 ([03-status](03-status.md)) for a good reason: the API was
+undocumented and no write to it had been observed. The sourcing wizard is the
+same product and gets the opposite answer, because it is a different kind of
+screen — the Python-driver escape hatch [D-009](#d-009--platforms-are-yaml-recipes-not-python-classes)
+left open, taken for the second time after Loxo.
+
+It is one component with timed stage transitions of up to seven seconds, two
+drag-and-drop lists whose contents move between them, star toggles whose
+legality depends on how the item is worded (only text starting "must" or
+"require" may be starred, unless nothing does), and a question screen that shows
+one question at a time. Reproducing that with clicks means racing animations to
+build a payload that four JSON calls carry outright.
+
+So the wizard is replayed as calls. Not invented ones: every request, its
+field names and their order were read out of noon's own portal bundle
+(`_next/static/chunks`, deployment `dpl_6zHVEuHXq88mMiCcX1CJpgeRD8XJ`), and the
+calls go out through `page.evaluate(fetch(...))` in the logged-in tab, so the
+origin, the cookies and the Firebase token are the ones a recruiter's own
+browser would send. The token is lifted from the first request the portal makes
+after booting, because it is minted per page load from IndexedDB and travels in
+the JSON body rather than a header — there is nothing in a session file to
+replay.
+
+**Trade-off** An undocumented interface can change without notice, and a changed
+payload shape would surface as a `PlatformError` naming the call rather than as
+a screenshot of a wrong-looking page. That is the cost of not fighting the
+animation, and it is bounded: the whole surface is nine calls, all of them
+listed in the platform brief, and the probe script re-derives them from a live
+run. noon should still be asked (support@noon.ai) before this is treated as
+stable.
+
+**Still open** The sequence has been written and unit-tested against a stand-in
+session, but never run against a live role — the saved session had expired and
+Microsoft SSO needs a person at the keyboard. `NOON_SOURCING` therefore defaults
+to off, so an unattended Notion row keeps posting campaigns exactly as it did
+until someone has watched a `source --live --headed` run once.

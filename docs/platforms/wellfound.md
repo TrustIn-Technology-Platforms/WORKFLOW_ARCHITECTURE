@@ -2,7 +2,7 @@
 
 > **Purpose** What is known about Wellfound as a job-advert destination, and the one question that has to be answered before anything is recorded.
 > **Audience** Whoever decides which Wellfound account posts, and whoever then records `platforms/wellfound.yaml`.
-> **Status** **Stub — blocked on an account decision, not on code.** `platforms/wellfound.yaml` exists with `enabled: false` so `login wellfound` works. Nothing has been posted, recorded or logged in. Read [The policy problem](#the-policy-problem) first.
+> **Status** **LIVE — proven 2026-08-31.** `post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live` filled the real *New Job Posting* form and saved job **4656911** as a draft; every field was verified by reading the saved job back through its own `/edit` page, and `Active (7)` was unchanged while `Drafts` went 51 → 53. The recipe submits **Save draft**, never Publish — see [Draft, not publish](#draft-not-publish). Sohaib's decision (2026-08-28): TrustIn posts anonymised adverts from its own account, as the recruiters already do by hand; the [policy risk](#the-policy-problem) is accepted, not removed.
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md) · [platforms/loxo](loxo.md)
 
 | | |
@@ -10,10 +10,10 @@
 | **Key** | `wellfound` — matches `platforms/wellfound.yaml` and the Notion `Platforms` option (add `Wellfound` to that column; `AngelList` would not resolve) |
 | **Kind** | `advert` — **the first advert recipe.** noon, Loxo and Juicebox take the email sequence; Wellfound takes the job advert. An advert-only document (the Alembic one, `real-advert-only.docx`) is a complete input |
 | **URL** | `https://wellfound.com/` — recruiter side is `/recruit/...`, jobs list `/recruit/jobs-beta` |
-| **Account** | **Undecided.** See below. No TrustIn login has been captured |
-| **Status** | Brief done (desk research + anonymous probe). Not logged in, not recorded |
+| **Account** | TrustIn recruiter account, signed in as **Marcus Gardiner-Hill** (`marcus@trust-in.co.uk`, company profile *TrustIn*). Profile `.profiles/wellfound`, captured 2026-08-28. The account already holds 7 active anonymised posts and 51 drafts |
+| **Status** | **Live and proven.** Saves a draft; a recruiter publishes it by hand |
 | **Owner** | Sohaib |
-| **Last verified** | 2026-08-28 — anonymous probe of the login pages only |
+| **Last verified** | 2026-08-31 — live draft save, read back off the saved job |
 
 ## The policy problem
 
@@ -37,9 +37,23 @@ it. So the account question is the whole of step one:
 | **B. A TrustIn recruiter account posting for clients** | No — explicitly banned | Not automating this. A recording made this way is a recording of a ban |
 | **C. Wellfound's job aggregation** — it crawls company careers pages and ATS feeds (Greenhouse, Lever, Workable, Ashby) | Yes, and needs no posting at all | If the client's careers page or ATS already carries the role, Wellfound lists it on its own. Nothing to build; check before building |
 
-**Decision needed: which of A or C applies to the current clients.** Until then
-the recipe stays a stub. This is the same class of question as Loxo's API key —
-information, not code.
+**Decision taken 2026-08-28 (Sohaib): option B, knowingly.** TrustIn is
+retained by the client and posts the advert *anonymised* from its own account —
+which is what the recruiters have been doing by hand for months (the account
+shows seven live posts in that style, e.g. *Information Security Officer -
+Global Hedgefund / IaC, Linux / Up to $350k*). Anonymising does not change the
+policy position — the ban is on who posts, not on whether the client is named —
+so the risk is accepted rather than removed. The Terms also forbid automated
+access, in a clause aimed at scrapers; one browser posting a few jobs a day at
+human pace is indistinguishable from the recruiter doing it. Consequences for
+how it runs:
+
+- **Low and human-paced.** One post per row, never a batch, never re-posting a
+  role that is already live. `SLOW_MO_MS` is worth setting.
+- **Wellfound is a bonus channel, not a primary one.** The account can be
+  banned without warning, taking every live TrustIn post with it, automation or
+  no automation. Do not make it the only place a role is advertised.
+- Options A and C above remain the compliant routes if the account is lost.
 
 ## Does it have an API?
 
@@ -51,10 +65,57 @@ information, not code.
 - Why browser automation would be chosen: there is nothing else, and the flow
   is a conventional Rails form, which the recipe engine handles well.
 
+## The form, mapped (2026-08-28)
+
+Read-only probes with the saved profile (`artifacts/wellfound-probe-*.json/png`),
+then a full dry run. Everything below is observed, not guessed.
+
+**Route.** `/recruit/jobs-beta` redirects a logged-in recruiter to
+`/recruit/jobs/<latest id>` (the Jobs list with one job open); `+ Post Job`
+links to **`/recruit/jobs/new`**, which is the form. Opening it creates
+nothing. The recruiter-side job URL is `/recruit/jobs/<id>` with `/edit`
+for the form; the public one is `wellfound.com/jobs/<id>-<slug>`.
+
+**Nothing autosaves.** Filling every field fired only GraphQL *queries*
+(`LocationTagAutocompleteField`, `TalentRoles`, …) and no mutation, so a dry run
+that stops before Publish leaves no draft. Both *Save draft* and *Publish* are
+disabled until the required fields are in, then enable together.
+
+**Session check.** `/login` for a logged-in user shows the recruiter dashboard
+*without changing the URL*, so a check that starts at `/login` and looks for
+`/login` in the address fails a good session. The recipe starts the check at
+`/recruit/jobs-beta` instead.
+
+| Control | Selector | Kind | What the recipe does |
+|---|---|---|---|
+| Title * | `#form-input--title` | text | `advert.title`, as written — TrustIn's live titles are already "Role / stack / place / Up to $X" |
+| Description | `.CodeMirror` (EasyMDE; hidden `textarea#react-simplemde-editor`) | **Markdown**, CodeMirror 5 | `fill_rich` detects CodeMirror and calls `setValue` with `advert.body_html | markdown`. Bold labels and bullets survive |
+| Type of position * | react-select, default *Full-time employee*; options Full-time employee / Contractor / Cofounder / Intern | react-select | left at default; `employment_type` maps Contract→Contractor when present (selector for this control is a guess — its input id was not in the dump) |
+| Primary role * | `#react-select-form-input--primaryRoleId-input` | react-select, fixed list (Software Engineer, Backend Engineer, DevOps, Data Engineer, Security Engineer, Machine Learning Engineer, …) | `combobox` with `force: true` (the placeholder div intercepts clicks), typed then **Enter** — react-select options carry no `role=option`, so the action's Enter fallback is what commits |
+| Work experience | `#react-select-form-input--yearsExperienceMin-input` | react-select, `0+` … `10+ years of experience` and nothing above | **filled** from the advert's own wording via the `years_min` filter; blank when the advert states no figure |
+| Skills | `input[placeholder='e.g. Python, React']` (`#downshift-0-input`) | Downshift **tag** input bound to Wellfound's own vocabulary | **filled** by the `tags` action from the Notion `Skills` column, else drafted from the advert. A skill Wellfound does not offer is silently discarded by the form, so the action drops it and logs it |
+| Location * | `#downshift-1-input` | downshift autocomplete, options `role=option` reading "City, Region", commits as a **tag** | `combobox`; typing "San Francisco" and clicking the first option gives *San Francisco, California* |
+| Relocation | `#form-input--allowRelocation--true` (default Yes) | radio, **visually hidden** | untouched |
+| Visa sponsorship * | `label[for='form-input--allowInternationalApplicants--false']` | radio, hidden, **no default** | `click` the label — `check` on the input times out as not visible. Default No; choosing No auto-ticks "Auto-skip applicants who require sponsorship" |
+| Remote policy * | `label[for='form-input--remoteConfigKind--ONSITE']` (`ONSITE_OR_REMOTE`, `REMOTE`) | radio, hidden | `remote_kind` default `ONSITE`. The remote kinds reveal a required *Hiring regions* field the recipe does not fill. Choosing In office auto-ticks "Auto-skip applicants who cannot relocate" |
+| Currency | `#react-select-form-input--currencyCode-input`, default USD | react-select | only when `salary | salary_currency` is non-empty (£ → GBP) |
+| Salary | `#form-input--salaryMin`, `#form-input--salaryMax` | text | `salary_min` / `salary_max` filters split "$180k - $220k"; spread must be ≤ $80k (the filter narrows from the bottom) |
+| Equity / No Equity | `#form-input--noEquity--true` | checkbox | untouched — Publish enables without it |
+| Recruiting contact, Subscribers, Coworkers, Company size | prefilled (Marcus; 1-10) | react-select | untouched |
+| Publish / **Save draft** | `button:has-text('Save draft')` | buttons, top right — **both confirmed present on the live form, 2026-08-31** (`Save draft`, `Publish`, alongside `Add another role`) | **Save draft is `submit: true`** (changed 2026-08-31). The recipe never publishes: an advert is client-facing, so an unattended run leaves it in drafts for a recruiter to read and publish. Publish is one click from a draft; an unpublish is not |
+
+Supporting code added for this platform, all generic: the `markdown`,
+`salary_min`, `salary_max` and `salary_currency` filters
+([templating.py](../../app/utils/templating.py)), CodeMirror support in
+`fill_rich` and `force` on `combobox` ([actions.py](../../app/platforms/actions.py)),
+`PROP_LOCATION` / `PROP_SALARY` / `PROP_EMPLOYMENT_TYPE` merged into the advert
+by the orchestrator ([pipeline.py](../../app/pipeline.py) `enrich_advert`), and
+`post --set Column=Value` to stand in for a Notion row.
+
 ## Manual walkthrough
 
 From the help centre ([How do I post a job?](https://help.wellfound.com/article/712-post-a-job)),
-**not yet done by hand** — confirm each step during the recording.
+confirmed against the live form above.
 
 1. Log in at `https://wellfound.com/login` with an account **connected to a company profile**.
 2. Top toolbar → **Jobs**, or go straight to `https://wellfound.com/recruit/jobs-beta`.
@@ -66,6 +127,24 @@ From the help centre ([How do I post a job?](https://help.wellfound.com/article/
 8. Submit is **Publish**. **Save Draft** is the alternative and is the natural dry-run target — the recipe's `submit: true` goes on Publish, and a draft is what an unattended run leaves behind when it stops there.
 9. **The first job an account posts goes through moderation review** before it is live. Later ones publish immediately. The run may therefore finish with no public URL the first time.
 10. The resulting URL looks like: *unknown until one is posted*. Public jobs are `https://wellfound.com/jobs/<id>-<slug>`; the recruiter-side one is not yet seen.
+
+## Draft, not publish
+
+The recipe's `submit` step clicks **Save draft**. Not **Publish**, though both
+buttons sit side by side on the form and either would work.
+
+A job advert is client-facing. An unattended run triggered by a Notion status
+change should not be the thing that makes one public, and the account already
+works this way by hand - 7 active posts against 51 drafts. So the run fills the
+form completely and leaves the result in Wellfound's **Drafts** tab for a
+recruiter to read and publish. Publish is one click away from a draft; an
+unpublish is not.
+
+The live run on 2026-08-31 confirmed the boundary holds: `Drafts` went 51 -> 53
+across two runs while `Active` stayed at 7.
+
+To change this, edit the `submit` step's selector to `button:has-text('Publish')`
+- and expect the row's `Post URL` to point at a live advert from that moment on.
 
 ## Field mapping
 
@@ -79,7 +158,8 @@ From the help centre ([How do I post a job?](https://help.wellfound.com/article/
 | `advert.salary` | Salary + currency | — | number range | **Required in practice**: a job with no salary or equity goes to *Limited Distribution* and is hidden from filtered searches. Range max 80K wide. Empty in the Alembic document |
 | — | Equity | — | range | ≤ 15% spread. Optional if salary is given |
 | `advert.body_html` | Description | — | rich text (editor type unknown) | Paste target for `fill_rich`; tags that survive are unknown |
-| `advert.fields[...]` | Work Experience, Skills, Visa Sponsorship | — | mixed | Optional; the documents do not carry them |
+| `advert.tags` | Skills | `tags` | Downshift | From the Notion `Skills` column, else drafted from the advert (`app/platforms/skills.py`) |
+| `advert.body_text \| years_min` | Work experience | `combobox` | react-select | The floor the advert states, clamped to Wellfound's 10+ ceiling |
 
 ### Values needing translation
 
@@ -153,24 +233,25 @@ and it is not planned. The two share a login and nothing else.
 
 ## Open questions
 
-- [ ] **Which account posts** — client account with a TrustIn recruiting contact (A), or rely on aggregation from the client's careers page / ATS (C)? This decides whether there is anything to build.
-- [ ] If A: one session per client — does the Notion row name the client account, and how does `login` scope its profile?
-- [ ] Where do `location`, `salary`, `employment_type` and `category` come from — Notion columns or labelled lines in the document?
-- [ ] What is the description editor, and does it accept pasted HTML?
-- [ ] Does the form autosave (like noon) or is *Save Draft* the only write before *Publish*?
-- [ ] What does the recruiter-side job URL look like after Publish?
-- [ ] Is 2FA enforced, and how long does a session last?
+- [x] ~~Which account posts~~ — TrustIn's own, anonymised (decision above).
+- [x] ~~Where do location and salary come from~~ — Notion columns `Location` / `Salary` (`PROP_LOCATION`, `PROP_SALARY`), merged into the advert by the orchestrator; `post --set` stands in for them locally. The Alembic document carries neither.
+- [x] ~~What is the description editor~~ — EasyMDE (CodeMirror 5), Markdown. Written through the instance.
+- [x] ~~Does the form autosave~~ — no. Only Publish / Save draft write.
+- [x] ~~Recruiter-side job URL~~ — `/recruit/jobs/<id>`; captured after Publish.
+- [ ] What happens *after* Publish — a redirect to `/recruit/jobs/<id>`, or a promotion upsell modal first? The two steps after `submit` assume the redirect; the first live run will show.
+- [ ] Is 2FA enforced, and how long does the session last? The capture took 47 seconds, so no 2FA prompt appeared.
+- [ ] `Type of position` — the react-select input id (`jobTypeId`?) is unverified; the step is `optional` and skipped while `employment_type` is empty.
+- [ ] Which role should a non-engineering advert map to? `advert.category` is empty in every document seen, so everything posts as *Software Engineer* until a Notion column supplies it.
 
 ## Recipe
 
-- Recipe file: `platforms/wellfound.yaml` — stub, `enabled: false`, placeholder `goto`.
-- Dry-run last passed: never.
-- Live post last confirmed: never.
-- Known limitations: everything above.
+- Recipe file: `platforms/wellfound.yaml` — full YAML recipe, `enabled: true`, 15 steps, Publish is `submit: true`.
+- Dry-run last passed: **2026-08-28**, Alembic document + `--set Location="San Francisco" --set Salary="$180k - $220k"`. Screenshot `artifacts/wellfound-filled.png`.
+- Live post last confirmed: never — awaiting a go from Sohaib, since it publishes on the real account.
+- Known limitations: In office only (no hiring-regions handling for remote posts); equity left blank; role defaults to Software Engineer; a re-run does not detect an already-posted role and would post it twice.
 
 ## Next
 
-1. Answer the account question. Nothing else moves until it is answered.
-2. `python -m app.cli login wellfound` with that account, then `inspect` the *Post a Job* form read-only — establish the editor type and the exact field list.
-3. Record one post with `record wellfound --url https://wellfound.com/recruit/jobs-beta --doc <advert.docx>`, using **Save Draft**, then delete the draft.
-4. Fill in the selectors above, mark Publish `submit: true`, dry-run, then one live `ZZ TEST` post.
+1. **One live post, with permission**: `python -m app.cli post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live`, then check the job under *Jobs* and the captured `post_url`. Unpublish it afterwards if it was a test.
+2. Add `Wellfound` as an option on the Notion `Platforms` column, and `Location` / `Salary` columns to the database, so rows can drive it.
+3. Decide the remote-post shape (hiring regions) and the role mapping once a non-SF, non-engineering advert turns up.

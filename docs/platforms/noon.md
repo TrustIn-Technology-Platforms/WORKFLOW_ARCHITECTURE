@@ -12,7 +12,7 @@
 | **URL** | `https://www.noon.ai/portal` → `/portal/sourcing` when logged in. Next.js, client-rendered |
 | **Account** | TrustIn LTD company account (`trial: true`). Recruiters: sohaib@; admins: marcus@, nicholas@ |
 | **Login** | Microsoft SSO (Entra ID) → Firebase. Captured profile in `.profiles/noon`, verified working headless 2026-08-26 |
-| **Status** | Recipe drafted against the real UI. Two unconfirmed screens, see below |
+| **Status** | Campaign: live and proven. Sourcing criteria: **written, not yet run against a live role** — see [The sourcing wizard](#the-sourcing-wizard) |
 | **Owner** | Sohaib |
 | **Last verified** | 2026-08-26 (read-only) |
 
@@ -176,6 +176,109 @@ Still undocumented — ask noon before relying on it.
 banner on a fresh role concerns connecting Outlook and LinkedIn for sending, not
 saving.
 
+## The sourcing wizard
+
+> **Status** **PROVEN LIVE 2026-08-31** end to end on a throwaway role
+> (`ZZ TEST - Senior Recruitment Consultant - 20260831`): JD read, criteria
+> generated, four non-negotiables selected and ranked, two clarifying questions
+> answered with the stricter option, sourcing started. Originally built from
+> noon's own portal bundle, then `source --role <uuid> --doc <file>` (a dry run)
+> captured the token off the portal, called `generate_params` against the real
+> API and got back 3 must-haves and 9 nice-to-haves from a real advert, which
+> the tightening merged into 12 must-haves. **The write half — steps 2 to 7 —
+> has still never run**; those payloads are read-from-source until a `--live`
+> run or `python scripts/probe_noon_sourcing.py` confirms them.
+
+Stage 1 of a role — the `Start sourcing` button on a fresh role page — is a
+seven-step wizard, and it is where the criteria that decide *who noon finds*
+are set. Until now it was only ever done by hand.
+
+| Step | Screen | What it asks |
+|------|--------|--------------|
+| 1 | Job description | "Paste the job description below … Noon will read it and pre-fill your search." `Submit` / `Skip` |
+| 2 | Candidate pool | "Where should we source from?" — Entire Internet, Internal ATS, Inbound |
+| — | *(optional)* | "In your own words, what are the must-haves?" |
+| 3 | Search criteria | "Confirm the search criteria." Two drag-and-drop lists: **Must-haves** and **Nice-to-haves** |
+| 4 | ATS events | Only on Ashby/Loxo-linked companies. Not ours |
+| 5 | Non-negotiables | "Click a box to star the true must-haves… Best results come from 3 or fewer" |
+| 6 | Ranking | "Drag to reorder your non-negotiables — #1 is the most important" |
+| 7 | Clarifying questions | One generated question at a time, each with generated answer options |
+
+### What the automation does with it
+
+The recruiter's habit, now in code
+([noon_sourcing.py](../../app/platforms/noon_sourcing.py)):
+
+1. Paste the document's advert as the job description.
+2. **Promote every nice-to-have into the must-haves**, deduplicated. A
+   preference filters nobody out; the point of the exercise is that everything
+   noon read out of the advert is applied.
+3. **Keep every generated criterion as a non-negotiable**, in the order noon
+   generated them — that order follows the advert, which is the only stated view
+   of what matters most. This is deliberately tighter than noon's own advice of
+   "3 or fewer", and it is why a role can come back with few candidates;
+   loosening is a matter of removing criteria in the Control Panel afterwards.
+4. **Answer each clarifying question with the strictest option offered** — a
+   question offering to widen the search ("would you consider…") is answered
+   *no*, one asking whether something is demanded ("is X required?") is answered
+   *yes*, and one where neither reading is clear is left unanswered with noon's
+   own `SKIP` sentinel rather than guessed at.
+5. Send the final call, which sets the agent searching.
+
+```bash
+python -m app.cli source --role <uuid|url> --doc advert.docx            # rehearsal
+python -m app.cli source --role <uuid|url> --doc advert.docx --live
+python -m app.cli source --role <uuid> --doc advert.docx --live --no-start   # criteria only
+python -m app.cli post noon --doc advert.docx --live --sourcing         # campaign + criteria
+```
+
+A dry run sends `generate_params` with `dont_save`, so noon reads the advert and
+hands back the criteria it *would* use while writing nothing. That is as far as
+a rehearsal can go: every step after it saves on arrival, exactly like the
+campaign editor.
+
+### The calls behind each step
+
+Driven through the API rather than the DOM — see
+[D-017](../11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom).
+Every call below is one the portal makes itself, in this order:
+
+| Step | Call | Payload | Returns |
+|------|------|---------|---------|
+| 1 | `generate_params` | `{token, jd, role, role_name}` (+`dont_save` to rehearse) | `{must_haves, nice_to_haves, titles, location, yoe, company_specs, client_name_in_jd, requires_visa_sponsorship}` — and saves the search parameters onto the role |
+| 2 | `set_candidate_source` | `{token, role, source}` | — |
+| 5 | `setup_clarifying_questions` | `{token, role, must_haves}` | — (warms the questions up) |
+| 5 | `gpt_stream` | `{newdemo: true, msg, prompt: null, role, company, source, v2: true}` | the criteria, one `*` bullet each |
+| 5 | `role_autopilot` | `{token, id, autopilot}` with `feedback` + `pending_non_negotiables: [{id, text}]` | — |
+| 6 | `rank_non_negotiables` | `{token, id, non_negotiables: [text, …]}` | — |
+| 6 | `role_autopilot` | `{id, autopilot, initialization: true}` | — |
+| 7 | `clarifying_questions` | `{token, role, non_negotiables}` | `{question: [option, …]}` |
+| 7 | `mark_clarifying_question` | `{token, role, question, answer}` | — |
+| 7 | `role_autopilot` | `{id, autopilot, initialization: false}` | **starts the search** |
+
+`initialization` reads backwards: `true` means "still setting up", and the
+`false` at the end is the go signal. `--no-start` repeats `true`, which saves
+the answers and leaves the role idle.
+
+**`all_roles` answers from a cache.** A role created seconds earlier is not in
+it, so the campaign flow's own new role looks deleted — `post noon --sourcing`
+failed exactly this way on 2026-08-31. The call is scoped by `company` and
+retried through `refetch_roles`, which does see it.
+
+Must-haves and nice-to-haves are newline-joined strings on
+`role.autopilot`, not arrays — a trailing blank line is dropped, which
+`as_lines` mirrors. The autopilot block is read back with `all_roles`, amended,
+and posted whole; anything else on it (the campaign ids, auto-contact settings)
+travels untouched.
+
+### Where the JD ends up
+
+`preferences.jd` is empty on all 125 roles because nothing writes it. The advert
+goes in through `generate_params`, and noon keeps it as the role's cached job
+description (`cached_job_description`, `get_role_jd`); what it extracts lands on
+`preferences.location`, `preferences.type`, `preferences.experience` and
+`preferences.companySpecs`.
+
 ## The API underneath
 
 The portal is a thin client over `https://noon.fly.dev`. Reads observed on
@@ -216,8 +319,8 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 | Our field | noon | How | Confirmed |
 |-----------|------|-----|-----------|
 | `advert.title` | Role name | `[placeholder^='Search existing ATS roles']` | yes |
-| `advert.body_html` | `preferences.jd`, if the wizard exposes it | unknown | no |
-| `advert.location` | `preferences.location[]` | unknown | no |
+| `advert.body_text` | the job description the sourcing wizard reads | `generate_params` — see [the sourcing wizard](#the-sourcing-wizard) | payload read from noon's bundle, not yet run live |
+| `advert.location` | `preferences.location[]` | extracted from the advert by `generate_params` | same |
 | `email.subject` | step Subject | `text='Subject' >> nth=-1 >> xpath=following::input[1]` | selector plausible, untested |
 | `email.body_html` | step body (Draft.js) | `.public-DraftEditor-content >> nth=-1`, `fill_rich` | element confirmed, paste untested |
 | `email.delay_days` | `offset` — "N days after previous step" | click `2 days`, then ? | no |
@@ -237,15 +340,23 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 - [x] **Which HTML tags survive the paste?** `<p>`, `<strong>`, `<em>`, `<ul><li>` all did.
 - [x] **Which endpoints save?** `create_role` / `create_project` / `update_role` for the role, `template_update` for the campaign, `add_comparison_campaign` for an import.
 - [x] **Token mapping.** The `noon_tokens` template filter: `{{ email.body_html | noon_tokens }}` turns `{{name}}` into `{first_name}` and `{{job_company}}` into `{company}`.
+- [x] **What is behind `Start sourcing`?** A seven-step wizard; every step, payload and endpoint is in [the sourcing wizard](#the-sourcing-wizard).
+- [ ] **Run the write half of the sourcing wizard against a live role.** `generate_params` is confirmed live (2026-08-31); `set_candidate_source`, `gpt_stream`, `role_autopilot`, `rank_non_negotiables`, `clarifying_questions` and `mark_clarifying_question` were read out of the portal bundle and have never been sent. `python scripts/probe_noon_sourcing.py` records them from a hand-driven run; the first `source --live` should be watched with `--headed`.
+- [ ] **Ask noon about the API.** The campaign already saves through `template_update` and the criteria now go through `role_autopilot`. Both are undocumented. support@noon.ai.
 - [ ] **Delete the two test roles** — `ZZ TEST - delete me` (project `03143de9-…`) and `ZZ TEST 2 - delete me` (project `2aeefeb6-…`). Both carry a complete campaign; neither has contacted anyone.
 - [ ] **Decide the mapping rule** for documents with a different number of emails than the template has slots. The recipe expects exactly three and fails clearly on fewer; a fourth is ignored.
 - [ ] **Connection-request note** — needs LinkedIn Premium on the sending account. Until then step 1 sends a bare request, as Nicholas's own template does.
 
 ## What is left
 
-Nothing on noon itself. `python -m app.cli post noon --doc <file> --live`
-creates the role and saves the campaign; a recruiter then reviews it and
-presses `Contact N candidates`. Wire it to Notion and deploy.
+The campaign half is done: `python -m app.cli post noon --doc <file> --live`
+creates the role and saves the campaign; a recruiter then reviews it and presses
+`Contact N candidates`.
+
+The sourcing half reads live and writes untested. One supervised run —
+`python -m app.cli source --role <uuid> --doc <file> --live --headed` on a
+throwaway role — is what stands between it and `NOON_SOURCING=true` in the
+Railway environment, where it would run unattended on every posted row.
 
 ## Gotchas
 

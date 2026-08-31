@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mock CodeMirror form</title>
+  <!--
+  A stand-in for an EasyMDE/SimpleMDE description editor (Wellfound's job
+  form). CodeMirror 5 keeps its document in JS, exposes the instance on the
+  `.CodeMirror` element, and ignores paste events dispatched at the DOM. The
+  form's React wrapper listens to the editor's own "change" event, so the only
+  write that the app notices is one made through the instance.
+  -->
+</head>
+<body>
+  <label for="react-simplemde-editor">Description</label>
+  <div id="react-simplemde-editor-wrapper">
+    <textarea id="react-simplemde-editor" style="display:none"></textarea>
+    <div class="EasyMDEContainer">
+      <!-- sized like a real editor: the engine only writes to visible elements -->
+      <div class="CodeMirror cm-s-easymde" style="min-height:120px;border:1px solid #ccc;padding:8px">
+        <div class="CodeMirror-lines" id="lines" style="white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </div>
+  <div id="model" data-value=""></div>
+
+  <script>
+    // Minimal CodeMirror 5 surface: setValue/getValue/save + a change event
+    // the "React wrapper" (#model) subscribes to. Paste events do nothing.
+    (function () {
+      const el = document.querySelector('.CodeMirror');
+      const ta = document.querySelector('#react-simplemde-editor');
+      const model = document.querySelector('#model');
+      const handlers = { change: [] };
+      let doc = '';
+      const cm = {
+        getValue: () => doc,
+        setValue: (text) => {
+          doc = String(text);
+          document.querySelector('#lines').textContent = doc;
+          handlers.change.forEach((h) => h(cm, { origin: 'setValue' }));
+        },
+        save: () => { ta.value = doc; },
+        refresh: () => {},
+        on: (name, fn) => { (handlers[name] = handlers[name] || []).push(fn); },
+      };
+      el.CodeMirror = cm;
+      // what react-simplemde-editor does: copy the editor text into React state
+      cm.on('change', (instance) => { model.dataset.value = instance.getValue(); });
+      el.addEventListener('paste', (e) => { e.preventDefault(); /* ignored, like the real thing */ });
+    })();
+  </script>
+</body>
+</html>

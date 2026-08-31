@@ -1,40 +1,224 @@
 # Wellfound (formerly AngelList Talent) — job advert posting.
 #
-# STUB. `enabled: false`, one placeholder step. It exists so
-# `python -m app.cli login wellfound` has somewhere to send the browser and so
-# the Notion `Platforms` option has a recipe key to resolve to. The real steps
-# come from a recording of one post done by hand — see
-# docs/platforms/wellfound.md, which also records the reason nothing has been
-# recorded yet: Wellfound's Recruiter Code of Conduct bans third-party
-# recruiters and staffing agencies, so which account posts is a decision that
-# has to be taken before any live run.
+# The first `kind: advert` recipe. The other three post the outreach sequence;
+# this one posts the advert half of the document to TrustIn's recruiter
+# account, anonymised as the recruiters already do by hand. Mapped against the
+# real form on 2026-08-28 (docs/platforms/wellfound.md); the form is a plain
+# React page with stable `form-input--*` ids, so this is YAML, not a driver.
 #
-# This is the first `kind: advert` recipe. The others post outreach sequences;
-# this one posts the job advert half of the document, and the advert-only
-# documents (Alembic, real-advert-only.docx) are exactly its input.
+# Three things the document does not carry: Location and Salary, which the form
+# requires, and Skills, which it offers. Location and Salary come from the Notion
+# row (PROP_LOCATION / PROP_SALARY, merged into the advert by the orchestrator)
+# or from `post --set Location=...`. Skills come from PROP_SKILLS, or are drafted
+# from the advert when that column is empty.
+#
+# Dry-run stops before Publish. Nothing autosaves on this form, so a dry run
+# leaves no draft behind (verified 2026-08-28).
 
 key: wellfound
 label: Wellfound
 kind: advert
-enabled: false
+enabled: true
 
 login:
-  # Plain Rails form (#user_email / #user_password / "Continue with Google").
-  # Anonymous probe 2026-08-28: every /recruit URL bounces a logged-out visitor
-  # to /login?after_sign_in=..., so the landing URL is the session check.
-  # `ready_selector` is deliberately unset until a logged-in page has been seen
-  # (see docs/platforms/juicebox.md for why a guessed selector is worse than
-  # none — it fails a perfectly valid session).
-  url: https://wellfound.com/login
+  # The recruiter Jobs page, not /login. Logged out it bounces to
+  # /login?after_sign_in=/recruit/jobs-beta, which the pattern below catches;
+  # logged in it redirects to /recruit/jobs/<latest id>. Starting the check at
+  # /login itself does not work: a logged-in visitor is shown the recruiter
+  # dashboard while the address bar still reads /login, so the pattern fires
+  # on a perfectly good session (seen 2026-08-28).
+  url: https://wellfound.com/recruit/jobs-beta
   logged_out_pattern: "/login"
+  # Only the recruiter shell renders these: the "+ Post Job" link on the Jobs
+  # page and the "Find Talent" item in the top nav.
+  ready_selector:
+    - "a:has-text('Post Job')"
+    - "a[href='/recruit/jobs/new']"
+    - "a:has-text('Find Talent')"
   session_file: wellfound.storage_state.json
 
 defaults:
   base_url: https://wellfound.com
-  # Where the help centre says "Post a Job" lives for a logged-in recruiter.
-  jobs_url: https://wellfound.com/recruit/jobs-beta
+  timeout_ms: 30000
+  # Wellfound's "Primary role" list. The documents carry no category, so this
+  # is the default when `advert.category` is empty; a Notion column can
+  # override it (it is merged into advert.category upstream if you add one).
+  default_role: Software Engineer
+  # In office / Onsite or remote / Remote only -> ONSITE / ONSITE_OR_REMOTE /
+  # REMOTE. Remote kinds unlock a required "hiring regions" field this recipe
+  # does not fill, so the default is the one that needs nothing else.
+  remote_kind: ONSITE
+  # "Willing to offer Visa Sponsorship" has no default and is required.
+  visa_sponsorship: "false"
 
 steps:
   - action: goto
-    url: "{{ jobs_url }}"
-    description: placeholder — replaced by the recording
+    url: "{{ base_url }}/recruit/jobs/new"
+    description: the New Job Posting form (nothing is created until Publish)
+
+  - action: wait_for
+    selector: "#form-input--title"
+    timeout_ms: 45000
+
+  # --- 1. Job details -------------------------------------------------------
+  # TrustIn's live titles already read "Role - Company type / Stack / Salary",
+  # the same shape as the document title, so it goes in as written.
+  - action: fill
+    selector: "#form-input--title"
+    value: "{{ advert.title | truncate(150) }}"
+
+  # EasyMDE (CodeMirror) Markdown editor - fill_rich detects CodeMirror and
+  # sets the Markdown in `value`; `value_html` is the fallback source.
+  - action: fill_rich
+    selector: ".CodeMirror"
+    value: "{{ advert.body_html | markdown }}"
+    value_html: "{{ advert.body_html }}"
+    description: job description (Markdown)
+
+  # Type of position defaults to "Full-time employee" and is left alone unless
+  # the document says otherwise. react-select: type, then Enter on the match.
+  - action: combobox
+    selector: "#react-select-form-input--jobTypeId-input"
+    value: "{{ advert.employment_type }}"
+    map:
+      Permanent: Full-time employee
+      Full-time: Full-time employee
+      Full Time: Full-time employee
+      Contract: Contractor
+      Contractor: Contractor
+      Freelance: Contractor
+      Internship: Intern
+      Intern: Intern
+    force: true
+    optional: true
+
+  # react-select: the typed text filters the list and Enter commits the
+  # highlighted match, which is the combobox action's fallback when no
+  # clickable option node is found.
+  - action: combobox
+    selector: "#react-select-form-input--primaryRoleId-input"
+    value: "{{ advert.category | default(Software Engineer) }}"
+    force: true
+    description: primary role (Wellfound's fixed list)
+
+  # --- Work experience -------------------------------------------------------
+  # react-select offering "0+ years of experience" through "10+ years of
+  # experience" and nothing above (read off the live form 2026-08-31). The floor
+  # is taken from the advert's own wording; an advert that never states one
+  # leaves the field alone rather than guessing a seniority.
+  - action: combobox
+    selector: "#react-select-form-input--yearsExperienceMin-input"
+    value: "{{ advert.body_text | years_min }}"
+    map:
+      "0": 0+ years of experience
+      "1": 1+ years of experience
+      "2": 2+ years of experience
+      "3": 3+ years of experience
+      "4": 4+ years of experience
+      "5": 5+ years of experience
+      "6": 6+ years of experience
+      "7": 7+ years of experience
+      "8": 8+ years of experience
+      "9": 9+ years of experience
+      "10": 10+ years of experience
+    force: true
+    optional: true
+    description: years of experience (Wellfound caps its list at 10+)
+
+  # --- Skills ---------------------------------------------------------------
+  # A Downshift tag input bound to Wellfound's own skill vocabulary: typed text
+  # matching nothing is dropped when focus leaves, with no error. The `tags`
+  # action types each skill, clicks the option that matches, and drops the ones
+  # Wellfound does not offer.
+  #
+  # The documents carry no skills section, so the list comes from the Notion
+  # `Skills` column, or is drafted from the advert when that is empty
+  # (app/platforms/skills.py). No skills at all means this step skips: the field
+  # is optional, and empty beats invented.
+  #
+  # Selected by placeholder first, id second. `downshift-N` ids are assigned in
+  # mount order, so they shift the moment the form gains or loses a widget;
+  # the placeholder is the part Wellfound writes on purpose.
+  - action: tags
+    selector:
+      - "input[placeholder='e.g. Python, React']"
+      - "#downshift-0-input"
+    value: "{{ advert.tags }}"
+    max: 10
+    optional: true
+    description: skills (Wellfound's own vocabulary; unknown ones are dropped)
+
+  # --- Location -------------------------------------------------------------
+  # Downshift autocomplete with role=option entries reading "City, Region", so
+  # the typed city matches the first suggestion by prefix and it is clicked.
+  - action: combobox
+    selector:
+      - "input[placeholder='e.g. San Francisco']"
+      - "#downshift-1-input"
+    value: "{{ advert.location }}"
+    description: location (must be picked from Wellfound's list)
+    # Wellfound marks Location required, and a draft saved without one is a
+    # draft nobody can publish. Stopping here with a message the recruiter can
+    # act on beats a green run and a silently unusable advert.
+    required_message: >-
+      Wellfound needs a location for this advert and neither the document nor
+      the row has one. Fill the Location column on the row (or add a
+      "Location: <city>" line to the document), then set the status back.
+
+  # The radio inputs themselves are visually hidden (styled radios), so the
+  # label is the click target - `check` on the input times out as "not visible".
+  - action: click
+    selector: "label[for='form-input--allowInternationalApplicants--{{ visa_sponsorship }}']"
+    description: visa sponsorship (required, no default)
+
+  # --- Remote work details ---------------------------------------------------
+  - action: click
+    selector: "label[for='form-input--remoteConfigKind--{{ remote_kind }}']"
+    description: remote policy (required)
+
+  # --- Salary & equity ------------------------------------------------------
+  # Currency only when the salary text names one; otherwise the form's USD.
+  - action: combobox
+    selector: "#react-select-form-input--currencyCode-input"
+    value: "{{ advert.salary | salary_currency }}"
+    force: true
+    optional: true
+
+  - action: fill
+    selector: "#form-input--salaryMin"
+    value: "{{ advert.salary | salary_min }}"
+    optional: true
+  - action: fill
+    selector: "#form-input--salaryMax"
+    value: "{{ advert.salary | salary_max }}"
+    optional: true
+
+  - action: screenshot
+    name: wellfound-filled
+
+  # --- Save as a draft --------------------------------------------------------
+  # NOT Publish. A job advert is client-facing, and an unattended run should not
+  # be the thing that makes one public - so the recipe fills the form and leaves
+  # it in Wellfound's drafts for a recruiter to read and publish by hand. The
+  # account already works that way: 7 active posts against 51 drafts. Publish is
+  # one click away from a draft; an unpublish is not.
+  - action: click
+    selector:
+      - "button:has-text('Save draft')"
+      - "button:has-text('Save Draft')"
+    submit: true
+
+  - action: wait
+    description: the draft save is an XHR, not a navigation
+    ms: 6000
+
+  # A draft save may not redirect the way Publish does, so the job URL is taken
+  # when it is there and the run does not fail when it is not.
+  - action: capture_url
+    pattern: "(https://wellfound\\.com/recruit/jobs/\\d+)"
+    as: post_url
+    optional: true
+
+  - action: capture_url
+    description: whatever the form left us on, so the row has somewhere to point
+    as: form_url

@@ -3,7 +3,7 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-08-28
+> **Last reviewed** 2026-08-31
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
@@ -19,6 +19,37 @@ Railway volume (`/data`); cookies are injected from locally-exported
 storage_state because Chrome's cookie store is OS-encrypted. What remains is
 hygiene: deleting test roles/campaigns from the platforms, and the recurring
 local session refresh when a platform logs the bot out.
+
+**Amended 2026-08-31: one trigger, both halves, nothing published.** The
+sourcing criteria are no longer a separate command — `CRITERIA_ENABLED`
+(default **on**) makes them part of posting, so a row set to `Ready to Post`
+now writes the outreach *and* sets the criteria that decide who receives it, on
+every platform that has them. What each platform is left in:
+
+| Platform | Outreach | Criteria | Left as |
+|---|---|---|---|
+| noon | campaign saved | role's sourcing criteria set, agent searching | nobody contacted until a recruiter presses `Contact N candidates` |
+| Loxo | campaign saved, **switched OFF**, 0 prospects | job's Skill DNA tightened | nothing sends until a recruiter adds prospects and switches it on |
+| Juicebox | sequence saved as a **draft** | search criteria rebuilt (needs the `Juicebox Search` column) | draft sends nothing |
+| Wellfound | **Save draft, never Publish** (changed 2026-08-31) | n/a — a job board | sits in Wellfound's drafts for a recruiter to read and publish |
+
+Nothing in that table reaches a candidate or a client without a person
+pressing something. Criteria are written to a record the recruiters already
+made, so the target comes from the optional `Loxo Job` / `Juicebox Search`
+columns, and an uncertain match is **skipped and reported rather than guessed**
+— writing one client's requirements onto another client's job is the failure
+this design exists to prevent.
+
+**Added 2026-08-31: the other half of a noon role.** Posting a campaign says
+what candidates are told; the role's *sourcing criteria* decide who hears it,
+and until now they were set by hand. `source` now does that from the same
+document's advert, tightening it the way the recruiter does — every nice-to-have
+promoted into the must-haves, every generated criterion kept, the strictest
+answer picked for each clarifying question. The wizard was reconstructed from
+noon's own portal bundle, and **the read half is confirmed live**: a dry run on
+2026-08-31 pulled 3 must-haves and 9 nice-to-haves out of a real advert through
+noon's API. **The write half has never run.** One supervised `--live` run is
+what stands between this and `NOON_SOURCING=true` on Railway.
 
 *Earlier headline, kept for the record:* **noon.ai posts for real
 (2026-08-27)** via `post noon --doc <file> --live`, verified on a throwaway
@@ -60,10 +91,13 @@ write endpoints have been observed.
 | 3 | Read `.docx` into blocks | **BUILT** | [docx_reader.py](../app/documents/docx_reader.py) |
 | 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document |
 | 5 | Post to platforms | **BUILT — noon + Juicebox LIVE** | [platforms/](../app/platforms/) — `post noon --live` saved a five-step campaign on 2026-08-27 ([noon.yaml](../platforms/noon.yaml) `enabled: true`). `post juicebox --live` created and saved a three-email sequence the same day via a Python `driver` ([juicebox.py](../app/platforms/juicebox.py), [juicebox.yaml](../platforms/juicebox.yaml) `enabled: true`) — see [platforms/juicebox](platforms/juicebox.md) |
+| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. See [platforms/noon](platforms/noon.md#the-sourcing-wizard) and [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) |
+| 5c | Loxo candidate criteria | **PARSER + DRAFTER BUILT, WRITER UNBUILT** | [loxo_criteria.py](../app/platforms/loxo_criteria.py) parses Loxo's Skill DNA out of a job description (Dealbreaker / Baseline / Nice-to-have / Traits to avoid), promotes every nice-to-have into Dealbreaker, and renders it back with the advert prose intact; [criteria_ai.py](../app/platforms/criteria_ai.py) drafts whichever buckets came back empty from the advert via `claude-opus-5`, proven live 2026-08-31. 19 tests. **Nothing writes to a Loxo job yet.** See [platforms/loxo](platforms/loxo.md#candidate-criteria--the-skill-dna-2026-08-31) |
+| 5d | Juicebox search criteria | **DRY RUN PROVEN, LIVE WRITE UNTESTED** | [juicebox_criteria.py](../app/platforms/juicebox_criteria.py) — reads a search's ranked criteria, drafts a tighter list from its own job description, writes it back through the Criteria dialog. Dry run verified live 2026-08-31 (5 criteria read, 10 drafted); the `--live` write was stopped by a permission gate, not a failure. Backup + `--restore` in place. See [platforms/juicebox](platforms/juicebox.md#search-criteria-2026-08-31) |
 | 6 | Write back to Notion | **BUILT** | [client.py](../app/notion/client.py) |
 | — | Orchestration | **BUILT** | [pipeline.py](../app/pipeline.py) |
 | — | Sessions / login capture | **BUILT and verified live** | [store.py](../app/sessions/store.py), `capture_login` — the saved noon profile opened `/portal` logged in, headless, on 2026-08-26 |
-| — | Tests | **PARTIAL** | 26 passing; parser (incl. real documents), templating filters, engine and recorder covered, Notion and fetcher are not |
+| — | Tests | **PARTIAL** | 114 passing; parser (incl. real documents), templating filters, engine and recorder covered, Notion and fetcher are not |
 
 ## Verified working
 
@@ -243,22 +277,48 @@ campaign is OFF with no prospects. Every selector and hazard is in
 `platforms/loxo.yaml` stays `enabled: false` until those steps are ported into
 it and a second `testzz` run through the engine reproduces the result.
 
-## Platform four - Wellfound, started 2026-08-28
+## Platform four - Wellfound, LIVE 2026-08-31
 
-`platforms/wellfound.yaml` exists as a **stub** (`enabled: false`, `kind:
-advert`, correct `login.url` and a verified `logged_out_pattern`), so `login
-wellfound` has somewhere to send the browser. It is the **first advert-kind
-recipe** - the other three post the outreach sequence; this one posts the job
-advert, and the advert-only documents are its complete input.
+`platforms/wellfound.yaml` is a **full YAML recipe, `enabled: true`, proven
+live**. It is the **first advert-kind recipe** - the other three post the
+outreach sequence; this one posts the job advert, and the advert-only documents
+(Alembic) are its complete input. The session is TrustIn's own recruiter account
+(Marcus), captured with `login wellfound`.
 
-It is blocked on information, not code: Wellfound's Recruiter Code of Conduct
-bans third-party recruiters and staffing agencies from posting, with permanent
-bans. The brief, [platforms/wellfound](platforms/wellfound.md#the-policy-problem),
-sets out the two workable shapes (post from the client's own company account
-as an embedded recruiting contact, or rely on Wellfound aggregating the
-client's careers page / ATS) and the fields the document does not carry
-(location, salary, employment type, role category - all required or
-punished by Wellfound, all empty in the Alembic document).
+**The live run (2026-08-31).** `post wellfound --doc <advert.docx> --set
+Location=... --set Salary=... --live` filled the real *New Job Posting* form and
+saved job [4656911](https://wellfound.com/recruit/jobs/4656911) as a draft.
+Every field was verified by reading the saved job back through its own `/edit`
+page rather than trusting the run: title, description, type, primary role, work
+experience (`10+ years of experience`), seven skills, location, visa, remote
+policy and salary all persisted. `Active (7)` was unchanged throughout - the
+recipe clicks **Save draft**, never **Publish**, so an unattended run cannot
+make an advert public. Publishing stays a recruiter's click.
+
+Two things the run found that nothing else would have:
+
+- **Skills and Work experience were never filled.** Both are now mapped - Skills
+  through a new `tags` action against Wellfound's own vocabulary, Work
+  experience through a new `years_min` filter reading the advert's stated floor.
+- **A dash in a job title was being read as advert metadata**, which silently
+  cost the advert its title on seven of TrustIn's nine live title shapes. Caught
+  only by reading a saved draft back and finding it titled `About Company:`.
+  Fixed in the parser; see [06-document-pipeline](06-document-pipeline.md#4d-extract-advert-fields).
+
+The policy question was decided rather than solved: Wellfound's Code of Conduct
+and Terms ban third-party recruiters, TrustIn already posts anonymised adverts
+there by hand, and Sohaib chose to automate that as-is. The risk is recorded in
+[platforms/wellfound](platforms/wellfound.md#the-policy-problem) along with the
+consequences (human pace, one post per row, bonus channel only).
+
+Built for it, all reusable: `markdown`, `salary_min` / `salary_max` /
+`salary_currency` filters; `fill_rich` drives a CodeMirror (EasyMDE) editor
+through its instance; `combobox` takes `force: true` for react-select;
+`PROP_LOCATION` / `PROP_SALARY` / `PROP_EMPLOYMENT_TYPE` columns are merged into
+an advert that lacks them (`pipeline.enrich_advert`); and `post --set
+Column=Value` stands in for a Notion row. 71 tests pass, including a CodeMirror
+mock ([tests/test_actions.py](../tests/test_actions.py)) and the orchestrator
+merge ([tests/test_pipeline.py](../tests/test_pipeline.py)).
 
 ## Still not started
 

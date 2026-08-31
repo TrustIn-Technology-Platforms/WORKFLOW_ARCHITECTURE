@@ -211,6 +211,16 @@ Only a line whose label is short (roughly ≤ 40 characters) and whose value is
 non-empty is treated as a field. A consumed field line is removed from the advert
 body, so a field is never posted twice.
 
+**A dash only labels a field whose name is one of the five above.** `Label: value`
+stays open to any label; `Label - value` does not, because that is also how every
+one of TrustIn's job titles is written — `Backend Platform Engineer - NYC /
+Series A / Kubernetes`. Reading those as a field called *Backend Platform
+Engineer* consumed the title on seven of the nine live shapes and left the advert
+titled `About Company:`, with no warning. Found 2026-08-31 by reading a saved
+Wellfound draft back rather than trusting the run that produced it. So
+`Location - Manchester` is still a field, and `Start Date - ASAP` is not — write
+that one with a colon.
+
 Unmatched labels go to `fields`, keyed by the label as written. A recipe can then
 reference `{{ advert.fields["Start Date"] }}` with no code change.
 

@@ -25,6 +25,10 @@ key: noon
 label: noon.ai
 kind: email_sequence
 enabled: true           # proven: `post noon --live` reproduced the hand-driven campaign on a throwaway role, 2026-08-27
+# The steps below still run exactly as they did; the driver adds the second
+# half of a role - its sourcing criteria - after them, when NOON_SOURCING is on.
+# See app/platforms/noon.py and docs/platforms/noon.md#the-sourcing-wizard.
+driver: noon
 
 login:
   url: https://www.noon.ai/portal
@@ -86,6 +90,14 @@ steps:
   - action: capture_url
     description: /portal/sourcing?role=<uuid>
     as: post_url
+
+  - action: capture_url
+    description: >-
+      the role's own uuid. The final capture_url overwrites post_url with the
+      project page, and the sourcing wizard is keyed on the role, so keep it
+      separately here while it is still on screen.
+    as: role_id
+    pattern: "(?<=role=)[0-9a-fA-F-]{36}"
 
   # -------------------------------------------------------------------------
   # 2. Open the campaign editor and import the shared template

@@ -91,6 +91,34 @@ predicts:
 
 Re-capturing is the fix, and it is the same command as the first capture.
 
+### Try the saved cookies before re-capturing
+
+A profile can look logged out while the login behind it is perfectly alive, and
+re-capturing is then a wasted trip through SSO. noon did exactly this on
+2026-08-31: the portal bounced to `/log-in`, but the Firebase record in the
+profile's IndexedDB was intact and `accounts:lookup` returned the account with a
+token refreshed that morning. What had gone missing was noon's *own* pair of
+first-party cookies, `NoonAI.AuthUser` and `NoonAI.AuthUserTokens` (and their
+`.sig` halves) — still present, and still unexpired, in
+`.sessions/noon.storage_state.json`.
+
+So before re-capturing, put the saved cookies back:
+
+```bash
+touch .profiles/<platform>/.import-cookies    # consumed on the next run
+```
+
+`profile_context` sees the flag, injects the cookies from
+`<SESSION_DIR>/<platform>.storage_state.json`, and deletes it. The mechanism was
+built for the Railway volume, where Chrome's OS-bound cookie encryption does not
+survive the move from a laptop to a Linux container — the same fix works locally
+whenever a profile's cookie jar has lost first-party cookies that the exported
+copy still holds.
+
+Tell the two apart by what is missing: **no first-party cookies but a live
+identity store** is this case, and importing fixes it; **the identity provider
+itself refusing** is a real expiry, and only `login` fixes that.
+
 ## Deploying with sessions
 
 Sessions are captured on a machine with a screen, and production usually has

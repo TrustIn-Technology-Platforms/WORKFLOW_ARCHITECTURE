@@ -50,6 +50,12 @@ to the same column even without an override.
 | `PROP_POSTED_AT` | `Posted At` | Written back on success. |
 | `PROP_ERROR` | `Error` | Written back on failure. |
 | `PROP_TITLE` | `Name` | Fallback title. The client also detects the real `title` column by type. |
+| `PROP_LOCATION` | `Location` | Fills `advert.location` when the document has none. Job boards (Wellfound) require it. |
+| `PROP_SALARY` | `Salary` | Fills `advert.salary` when the document has none. Wellfound hides a post without one. |
+| `PROP_EMPLOYMENT_TYPE` | `Employment Type` | Fills `advert.employment_type` when the document has none. |
+| `PROP_SKILLS` | `Skills` | **Optional.** Comma-separated skills for Wellfound's Skills tag field. Blank means they are drafted from the advert (`app/platforms/skills.py`); no `ANTHROPIC_API_KEY` means the field is left empty. |
+| `PROP_LOXO_JOB` | `Loxo Job` | **Optional.** The Loxo job whose criteria this row sets — URL or id. Blank falls back to matching by hiring company. |
+| `PROP_JUICEBOX_SEARCH` | `Juicebox Search` | **Optional.** The Juicebox search whose criteria this row sets — full URL. Blank skips that step. |
 
 ## Status values
 
@@ -84,6 +90,31 @@ capitalisation. Notion rejects an option name that does not already exist.
 | `VIEWPORT_HEIGHT` | `900` | |
 | `LOCALE` | `en-GB` | Affects date formats a platform renders. |
 | `TIMEZONE` | `Europe/London` | Same reason. Keep aligned with the business, not the server. |
+
+## Sourcing criteria
+
+Every platform here has two halves: the outreach a candidate receives, and the
+criteria that decide who receives it. One switch governs the second half
+everywhere, so a Notion row that posts also gets its sourcing set up.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `CRITERIA_ENABLED` | `true` | Set each platform's sourcing criteria from the advert as part of posting. `post <platform> --no-sourcing` turns it off for one run. |
+| `NOON_SOURCING_SOURCE` | `public` | Which pool noon searches: `public` (Entire Internet), `ats`, or `inbound`. |
+| `NOON_START_SOURCING` | `true` | Send noon's final call — the one that sets its agent searching. `false` leaves the criteria saved and the role idle. |
+
+## Criteria drafting
+
+A platform's own generator does not always fill every criteria bucket, and on a
+job it has never been run against it fills none. The advert says what the role
+needs, so the gaps are drafted from it
+([criteria_ai.py](../app/platforms/criteria_ai.py)). Leaving the key unset is a
+supported state: the gaps stay empty and the run says which ones did.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `ANTHROPIC_API_KEY` | *(empty)* | Fills empty criteria buckets from the advert. Unset means the gaps are reported, not filled — never a failed run. |
+| `CRITERIA_MODEL` | `claude-opus-5` | Model used for that drafting. |
 
 ## Storage
 

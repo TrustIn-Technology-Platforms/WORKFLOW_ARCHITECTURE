@@ -263,6 +263,17 @@ def post(
     dry_run: bool = typer.Option(True, "--dry-run/--live", help="Stop before submitting."),
     headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
     slow: int = typer.Option(0, "--slow", help="Milliseconds between actions."),
+    set_: list[str] = typer.Option(
+        [], "--set", metavar="COLUMN=VALUE",
+        help="Stand in for a Notion column, e.g. --set 'Location=San Francisco'. "
+             "Repeatable. Reaches recipes as row.property[...] and fills empty "
+             "advert fields the same way a real row would.",
+    ),
+    sourcing: Optional[bool] = typer.Option(
+        None, "--sourcing/--no-sourcing",
+        help="Also set the platform's sourcing criteria from the advert. "
+             "Defaults to CRITERIA_ENABLED.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Run one recipe against one document. No Notion involved."""
@@ -271,9 +282,13 @@ def post(
         settings.headless = False
     if slow:
         settings.slow_mo_ms = slow
+    if sourcing is not None:
+        settings.criteria_enabled = sourcing
+
+    row = _stand_in_row(set_) if set_ else None
 
     try:
-        result = asyncio.run(_post(platform, doc, settings, dry_run))
+        result = asyncio.run(_post(platform, doc, settings, dry_run, row))
     except PipelineError as exc:
         _fail(str(exc))
         return
@@ -292,13 +307,433 @@ def post(
         console.print("\n[dim]Dry run - nothing was submitted. Use --live to post.[/dim]")
 
 
-async def _post(platform: str, source: str, settings: Any, dry_run: bool) -> Any:
-    from app.models import Outcome, PostResult
+@app.command()
+def source(
+    role: str = typer.Option(
+        ..., "--role",
+        help="Role uuid, or the /portal/sourcing?role=... URL of an existing role.",
+    ),
+    doc: str = typer.Option(
+        ..., "--doc", help="A .docx path or share link. Its advert is the job description."
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run reads the advert and shows the criteria, saving nothing.",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Role name to give noon. Defaults to the document's."
+    ),
+    start: bool = typer.Option(
+        True, "--start/--no-start",
+        help="Send the final call, the one that sets noon searching.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Set a noon role's sourcing criteria from a document's advert.
+
+    Every requirement noon reads out of the advert becomes a must-have —
+    nice-to-haves included — every criterion it generates is kept as a
+    non-negotiable, and each clarifying question is answered with the strictest
+    option offered. This is the tight-criteria setup done by hand until now; see
+    docs/platforms/noon.md#the-sourcing-wizard.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    try:
+        report = asyncio.run(_source(role, doc, settings, dry_run, name, start))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"\n[bold]role[/bold]  {report.role_id}")
+    console.print(f"\n[bold]Must-haves[/bold] ({len(report.must_haves)})")
+    for line in report.must_haves:
+        promoted = " [dim](was a nice-to-have)[/dim]" if line in report.promoted else ""
+        console.print(f"  - {line}{promoted}")
+    if report.non_negotiables:
+        console.print(f"\n[bold]Non-negotiables[/bold] ({len(report.non_negotiables)})")
+        for position, line in enumerate(report.non_negotiables, start=1):
+            console.print(f"  {position}. {line}")
+    if report.answers:
+        console.print("\n[bold]Clarifying questions[/bold]")
+        for question, answer in report.answers.items():
+            shown = "[yellow]skipped[/yellow]" if answer == "SKIP" else answer
+            console.print(f"  {question}\n    -> {shown}")
+    for warning in report.warnings:
+        console.print(f"\n[yellow]{warning}[/yellow]")
+    if dry_run:
+        console.print("\n[dim]Dry run - nothing was saved. Use --live to apply.[/dim]")
+    elif report.started_sourcing:
+        console.print("\n[green]noon is now sourcing against these criteria.[/green]")
+
+
+@app.command("search-criteria")
+def search_criteria(
+    search: str = typer.Option(
+        ..., "--search", help="Juicebox search URL, or its search_id."
+    ),
+    project: Optional[str] = typer.Option(
+        None, "--project", help="Project id. Only needed when --search is a bare id."
+    ),
+    doc: Optional[str] = typer.Option(
+        None, "--doc",
+        help="A .docx whose advert the criteria come from. Defaults to the job "
+             "description the search already carries.",
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="A dry run shows the criteria, saving nothing."
+    ),
+    restore: Optional[str] = typer.Option(
+        None, "--restore", help="Path to a backup JSON to put back, instead of rebuilding."
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Rebuild a Juicebox search's criteria from a document's advert.
+
+    Juicebox ranks criteria rather than splitting must-have from nice-to-have,
+    so the list is built dealbreakers first, then the baseline, then
+    disqualifiers as negative criteria — tightest checks where it weighs them
+    most. See docs/platforms/juicebox.md.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    try:
+        report = asyncio.run(
+            _search_criteria(search, project, doc, settings, dry_run, restore)
+        )
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"\n[bold]search[/bold] {report.search_url}")
+    if report.before:
+        console.print(f"\n[bold]Before[/bold] ({len(report.before)})")
+        for position, line in enumerate(report.before, start=1):
+            console.print(f"  {position}. [dim]{line}[/dim]")
+    console.print(f"\n[bold]After[/bold] ({len(report.after)}) - most important first")
+    for position, line in enumerate(report.after, start=1):
+        console.print(f"  {position}. {line}")
+    for warning in report.warnings:
+        console.print(f"\n[yellow]{warning}[/yellow]")
+    if dry_run:
+        console.print("\n[dim]Dry run - nothing was saved. Use --live to apply.[/dim]")
+
+
+async def _search_criteria(
+    search: str,
+    project: str | None,
+    doc: str | None,
+    settings: Any,
+    dry_run: bool,
+    restore: str | None = None,
+) -> Any:
     from app.pipeline import load_document
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.browser import save_failure
+    from app.platforms.juicebox_criteria import restore_criteria, set_criteria
+
+    advert_text, role_name = "", ""
+    if doc:
+        document = await load_document(doc, settings)
+        advert = document.advert
+        if advert is None or not advert.body_text.strip():
+            raise PipelineError(
+                f"{doc} has no advert section, so there is nothing to build "
+                "search criteria from."
+            )
+        advert_text = advert.body_text
+        role_name = document.source_name or advert.title
+        console.print(f"[dim]advert: {len(advert_text)} chars from {doc}[/dim]")
+    else:
+        console.print("[dim]advert: the search's own job description[/dim]")
+
+    recipe = resolve("juicebox", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'juicebox'.")
+    base = str(recipe.defaults.get("base_url", "https://app.juicebox.ai"))
+
+    if search.startswith("http"):
+        url = search
+    elif project:
+        url = f"{base}/project/{project}/search?search_id={search}"
+    else:
+        raise PipelineError("--search was a bare id, so --project is needed too.")
+
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="jb-criteria", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="jb-criteria")
+        )
+        async with opener as (context, page):
+            try:
+                if restore:
+                    from app.platforms.juicebox_criteria import SearchCriteriaReport
+
+                    put_back = await restore_criteria(page, url, restore)
+                    return SearchCriteriaReport(
+                        search_url=url, after=put_back, saved=True,
+                        warnings=[f"restored {len(put_back)} criteria from {restore}"],
+                    )
+                return await set_criteria(
+                    page,
+                    url,
+                    advert_text,
+                    role_name=role_name,
+                    settings=settings,
+                    dry_run=dry_run,
+                )
+            except PipelineError:
+                await save_failure(context, page, "juicebox-criteria-failed", settings)
+                raise
+
+
+@app.command()
+def criteria(
+    job: str = typer.Option(..., "--job", help="Loxo job id, or the job URL."),
+    doc: Optional[str] = typer.Option(
+        None, "--doc",
+        help="A .docx whose advert fills empty criteria. Defaults to the job's "
+             "own description.",
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="A dry run shows the criteria, writing nothing."
+    ),
+    marker: Optional[str] = typer.Option(
+        None, "--marker", help="Line to prefix the description with, to label a test run."
+    ),
+    restore: Optional[str] = typer.Option(
+        None, "--restore", help="Path to a backup JSON to put back, instead of writing criteria."
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Tighten a Loxo job's candidate criteria — its Skill DNA.
+
+    Every nice-to-have becomes a dealbreaker, and any bucket Loxo left empty is
+    drafted from the advert. The job's description is backed up to ARTIFACT_DIR
+    before anything is written; `--restore` puts one back.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    try:
+        report = asyncio.run(_criteria(job, doc, settings, dry_run, marker, restore))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    if restore:
+        console.print(f"\n[green]restored[/green] job {report}")
+        return
+
+    console.print(f"\n[bold]job[/bold]      {report.job_id}")
+    console.print(f"[bold]backup[/bold]   {report.backup_path}")
+    if report.drafted:
+        console.print(f"[bold]drafted[/bold]  {', '.join(report.drafted)} (from the advert)")
+    console.print(f"[bold]promoted[/bold] {report.promoted} nice-to-have(s) into dealbreakers")
+    console.print(f"\n{report.summary}")
+    for warning in report.warnings:
+        console.print(f"\n[yellow]{warning}[/yellow]")
+    if dry_run:
+        console.print("\n[dim]Dry run - nothing was written. Use --live to apply.[/dim]")
+
+
+async def _criteria(
+    job: str,
+    doc: str | None,
+    settings: Any,
+    dry_run: bool,
+    marker: str | None,
+    restore: str | None,
+) -> Any:
+    from app.pipeline import load_document
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.browser import save_failure
+    from app.platforms.loxo import job_id_from
+    from app.platforms.loxo_sourcing import restore_description, set_criteria
+
+    job_id = job_id_from(job)
+    if not job_id:
+        raise PipelineError(
+            f"{job!r} does not contain a Loxo job id. Pass the job URL or its id."
+        )
+
+    advert_text, role_name = "", ""
+    if doc:
+        document = await load_document(doc, settings)
+        if document.advert and document.advert.body_text.strip():
+            advert_text = document.advert.body_text
+            role_name = document.source_name or document.advert.title
+            console.print(f"[dim]advert: {len(advert_text)} chars from {doc}[/dim]")
+        else:
+            console.print(f"[yellow]{doc} has no advert; using the job's own description[/yellow]")
+
+    recipe = resolve("loxo", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'loxo'.")
+    agency_id = str(recipe.defaults.get("agency_id", "28356"))
+
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="loxo-criteria", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="loxo-criteria")
+        )
+        async with opener as (context, page):
+            try:
+                if restore:
+                    await restore_description(page, job_id, restore, agency_id=agency_id)
+                    return job_id
+                return await set_criteria(
+                    page,
+                    job_id,
+                    advert_text,
+                    role_name=role_name,
+                    agency_id=agency_id,
+                    settings=settings,
+                    dry_run=dry_run,
+                    marker=marker or "",
+                )
+            except PipelineError:
+                await save_failure(context, page, "loxo-criteria-failed", settings)
+                raise
+
+
+def _role_uuid(value: str) -> str:
+    """Accept a bare uuid or any noon URL that carries one."""
+    import re as _re
+
+    match = _re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                       r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", value or "")
+    if not match:
+        _fail(f"{value!r} does not contain a role uuid.")
+    return match.group(0)
+
+
+async def _source(
+    role: str, doc: str, settings: Any, dry_run: bool, name: str | None, start: bool
+) -> Any:
+    from app.pipeline import load_document
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.engine import _role_name
+    from app.platforms.noon_sourcing import set_up_sourcing
+
+    role_id = _role_uuid(role)
+    document = await load_document(doc, settings)
+    advert = document.advert
+    if advert is None or not advert.body_text.strip():
+        raise PipelineError(
+            f"{doc} has no advert section, so there is no job description to give "
+            "noon. Sourcing criteria come from the advert, not from the emails."
+        )
+
+    emails = [e for e in document.emails if e.is_email]
+    role_name = name or _role_name(document.source_name, None, advert, emails)
+    jd = f"{advert.title}\n\n{advert.body_text}".strip()
+    console.print(f"[dim]job description: {len(jd)} chars from {doc}[/dim]")
+
+    recipe = resolve("noon", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'noon'.")
+
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="noon-sourcing", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="noon-sourcing")
+        )
+        async with opener as (context, page):
+            from app.platforms.browser import save_failure
+
+            try:
+                return await set_up_sourcing(
+                    page,
+                    role_id,
+                    role_name,
+                    jd,
+                    source=settings.noon_sourcing_source,
+                    start_sourcing=start,
+                    dry_run=dry_run,
+                )
+            except PipelineError:
+                await save_failure(context, page, "noon-sourcing-failed", settings)
+                raise
+
+
+def _stand_in_row(pairs: list[str]) -> Any:
+    """A NotionRow built from COLUMN=VALUE pairs, shaped like the API's rich_text.
+
+    Lets `post --doc` exercise everything a real row would supply - advert
+    fields on columns, `row.property[...]` in recipes - without Notion.
+    """
+    from app.models import NotionRow
+
+    props: dict[str, Any] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            _fail(f"--set needs COLUMN=VALUE, got {pair!r}")
+        name, _, value = pair.partition("=")
+        props[name.strip()] = {
+            "type": "rich_text",
+            "rich_text": [{"type": "text", "plain_text": value.strip()}],
+        }
+    return NotionRow(
+        page_id="local", title="", document_url=None, status=None,
+        platforms=[], raw_properties=props,
+    )
+
+
+async def _post(
+    platform: str, source: str, settings: Any, dry_run: bool, row: Any = None
+) -> Any:
+    from app.models import Outcome, PostResult
+    from app.pipeline import enrich_advert, load_document
     from app.platforms import BrowserRunner, get_adapter
     from app.platforms.engine import describe_emails
+    from app.platforms.skills import ensure_skills
 
     document = await load_document(source, settings)
+    for filled in enrich_advert(document, row, settings):
+        console.print(f"[dim]from --set: {filled}[/dim]")
+    # Same order as the orchestrator: the column first, the advert second.
+    drafted = await ensure_skills(document, settings)
+    if drafted:
+        console.print(f"[dim]skills drafted: {', '.join(drafted)}[/dim]")
     console.print(
         f"[dim]parsed: {describe_emails(document.emails)}"
         f"{', advert present' if document.advert else ', no advert'}[/dim]"
@@ -311,7 +746,7 @@ async def _post(platform: str, source: str, settings: Any, dry_run: bool) -> Any
             platform, runner=runner, settings=settings, dry_run=dry_run
         )
         try:
-            return await adapter.post(document)
+            return await adapter.post(document, row)
         except PipelineError as exc:
             return PostResult(
                 platform=platform,

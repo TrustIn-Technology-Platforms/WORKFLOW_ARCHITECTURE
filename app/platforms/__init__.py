@@ -66,7 +66,11 @@ def _driver(name: str) -> type[RecipeAdapter]:
         from app.platforms.loxo import LoxoAdapter
 
         return LoxoAdapter
+    if name == "noon":
+        from app.platforms.noon import NoonAdapter
+
+        return NoonAdapter
     raise PlatformError(
         f"Recipe names driver {name!r}, but no such driver is registered. "
-        f"Known drivers: juicebox, loxo."
+        f"Known drivers: juicebox, loxo, noon."
     )
