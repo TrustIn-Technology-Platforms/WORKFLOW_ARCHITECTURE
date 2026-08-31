@@ -83,6 +83,21 @@ def create_app() -> FastAPI:
         from app.sessions.store import SessionStore
 
         store = SessionStore(settings)
+
+        # Is the profile directory actually a mounted volume? An unmounted
+        # /data is an ordinary directory inside the container: an upload writes
+        # to it and returns 200, and the next restart takes it with it - which
+        # looks exactly like an upload that never happened. Distinguishing the
+        # two from outside is otherwise guesswork.
+        profile_root = Path(settings.browser_profile_dir)
+        try:
+            root_is_mount = profile_root.is_mount() or (
+                profile_root.parent.is_mount() if profile_root.parent != profile_root
+                else False
+            )
+        except Exception:  # noqa: BLE001 - health must always answer
+            root_is_mount = None
+
         profiles: dict[str, dict] = {}
         for key in sorted(recipes):
             info = store.profile_info(key)
@@ -103,13 +118,22 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.2",  # bumped with per-platform profile reporting
+            "version": "1.3",  # bumped with volume reporting
             "notion_configured": settings.notion_configured,
             "webhook_secret_set": bool(settings.webhook_secret),
             "dry_run": settings.dry_run,
             "headless": settings.headless,
             "session_dir": str(settings.session_dir),
             "profile_dir": str(settings.browser_profile_dir),
+            "profile_dir_exists": profile_root.is_dir(),
+            # False on a deployment means an upload will not survive a restart:
+            # attach a Railway volume at /data. None means the check could not
+            # run (Windows, an exotic filesystem) and says nothing either way.
+            "profile_dir_on_volume": root_is_mount,
+            "profile_dir_contents": (
+                sorted(p.name for p in profile_root.iterdir())
+                if profile_root.is_dir() else []
+            ),
             "profiles": profiles,
             "platforms_enabled": enabled,
             "platforms_total": len(recipes),
