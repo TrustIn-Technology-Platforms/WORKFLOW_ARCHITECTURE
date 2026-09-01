@@ -21,6 +21,7 @@ from app.platforms.noon_sourcing import (
     format_feedback,
     parse_criteria,
     run_wizard,
+    role_title,
     strictest_answer,
     targeting_preamble,
     tighten,
@@ -367,3 +368,46 @@ def test_a_dry_run_still_reports_the_filters_it_would_have_set():
 
     assert report.location == "Manchester, UK"
     assert report.titles == ["Platform Engineer"]
+
+
+@pytest.mark.parametrize(
+    "written,role",
+    [
+        # TrustIn's own title convention: the role, then what sells it.
+        ("Backend Platform Engineer - NYC / Series A / Kubernetes", "Backend Platform Engineer"),
+        ("Platform Engineer / AWS, Kubernetes", "Platform Engineer"),
+        ("Head of Data - London", "Head of Data"),
+        # Nothing to strip.
+        ("Senior Recruitment Consultant", "Senior Recruitment Consultant"),
+        # An unspaced hyphen is part of the name, not a separator.
+        ("Front-End Engineer", "Front-End Engineer"),
+        # The filename shape, which is "Company - Role - Location". Its leading
+        # segment is the company, so it must not survive as a search title.
+        ("Kepler - Backend Platform Engineer - NYC", ""),
+        ("Engineer", ""),
+        ("", ""),
+    ],
+)
+def test_only_the_role_reaches_noon_as_a_title(written, role):
+    """noon turns this line into `preferences.titles` and searches for people
+    who hold them. "NYC" and "Series A" are not titles, and a company name is
+    worse than none - a wrong filter excludes the right people silently.
+    """
+    assert role_title(written) == role
+
+
+def test_a_decorated_title_is_cleaned_inside_the_preamble():
+    assert targeting_preamble(
+        title="Backend Platform Engineer - NYC / Series A / Kubernetes",
+        location="New York, NY",
+    ).splitlines() == [
+        "Job title: Backend Platform Engineer",
+        "Location: New York, NY",
+    ]
+
+
+def test_a_title_that_does_not_parse_leaves_the_line_out():
+    """Silence beats a company name: noon reads the titles out of the JD too."""
+    assert targeting_preamble(title="Kepler", location="New York, NY") == (
+        "Location: New York, NY"
+    )

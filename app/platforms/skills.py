@@ -172,12 +172,15 @@ async def ensure_skills(
         return []
 
     settings = settings or get_settings()
-    # Drafted from the general advert: it is the fullest statement of the role,
-    # where a board section is deliberately cut down.
+    # Drafted from the client's JD when the document carries one, and the
+    # general advert otherwise — `job_description` is exactly that choice. The
+    # advert sells the role and softens the stack it is selling; the JD states
+    # it, which is the same reason the sourcing criteria read it (D-018). A
+    # board section is never the source: it is deliberately cut down, where the
+    # general advert is the fullest statement of the role.
     source = document.advert or missing[0]
-    skills = await draft_skills(
-        source.body_text, title=source.title, settings=settings
-    )
+    text = document.job_description or source.body_text
+    skills = await draft_skills(text, title=source.title, settings=settings)
     for advert in missing:
         advert.tags = list(skills)
     return skills

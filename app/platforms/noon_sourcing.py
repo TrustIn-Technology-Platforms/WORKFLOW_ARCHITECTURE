@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -149,6 +150,32 @@ class SourcingReport:
 # ----------------------------------------------------------------------
 
 
+# TrustIn writes a job title as the role, then what sells it: "Backend Platform
+# Engineer - NYC / Series A / Kubernetes". The decoration is separated by a
+# spaced dash or a slash, and both are safe to cut on because a real job title
+# contains neither: "Site Reliability Engineer", "Head of Data". A hyphen
+# without spaces is kept, so "Front-End Engineer" survives whole.
+_TITLE_DECORATION = re.compile(r"\s+[-–—/|·•]\s*.*$|\s*/\s*.*$")
+
+
+def role_title(title: str) -> str:
+    """Just the role, out of a decorated title.
+
+    This is what goes into the preamble's `Job title:` line, and noon turns it
+    into `preferences.titles` — the list of titles it searches for. Handed the
+    whole decorated string it reads "NYC" and "Series A" as job titles and looks
+    for people who hold them, which is worse than telling it nothing: a wrong
+    filter excludes the right people silently.
+
+    Only the leading segment is trusted, so anything that does not parse into
+    one comes back empty rather than guessed at.
+    """
+    cleaned = _TITLE_DECORATION.sub("", (title or "").strip()).strip(" -–—/|,")
+    # A single word is a company or a fragment far more often than a job title,
+    # and "Kepler" as a search title would be actively wrong.
+    return cleaned if len(cleaned.split()) >= 2 else ""
+
+
 def targeting_preamble(
     *,
     title: str = "",
@@ -184,8 +211,9 @@ def targeting_preamble(
     back off the role afterwards and warns when it is still empty.
     """
     lines: list[str] = []
-    if title.strip():
-        lines.append(f"Job title: {title.strip()}")
+    role = role_title(title)
+    if role:
+        lines.append(f"Job title: {role}")
     if location.strip():
         lines.append(f"Location: {location.strip()}")
     if employment_type.strip():

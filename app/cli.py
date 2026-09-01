@@ -347,11 +347,13 @@ def source(
         help="Role uuid, or the /portal/sourcing?role=... URL of an existing role.",
     ),
     doc: str = typer.Option(
-        ..., "--doc", help="A .docx path or share link. Its advert is the job description."
+        ..., "--doc",
+        help="A .docx path or share link. Its Client JD section is the job "
+             "description, or its advert when there is no such section.",
     ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--live",
-        help="A dry run reads the advert and shows the criteria, saving nothing.",
+        help="A dry run reads the document and shows the criteria, saving nothing.",
     ),
     name: Optional[str] = typer.Option(
         None, "--name", help="Role name to give noon. Defaults to the document's."
@@ -360,28 +362,55 @@ def source(
         True, "--start/--no-start",
         help="Send the final call, the one that sets noon searching.",
     ),
+    set_: list[str] = typer.Option(
+        [], "--set", metavar="COLUMN=VALUE",
+        help="Stand in for a Notion column, e.g. --set 'Location=Manchester'. "
+             "Repeatable. The location, employment type and skills a search "
+             "filters on live on the row rather than in the document, so "
+             "without this a run started from a file alone has none of them.",
+    ),
     headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Set a noon role's sourcing criteria from a document's advert.
+    """Set a noon role's sourcing criteria and search filters from a document.
 
-    Every requirement noon reads out of the advert becomes a must-have —
-    nice-to-haves included — every criterion it generates is kept as a
+    Every requirement noon reads out of the job description becomes a must-have
+    — nice-to-haves included — every criterion it generates is kept as a
     non-negotiable, and each clarifying question is answered with the strictest
     option offered. This is the tight-criteria setup done by hand until now; see
     docs/platforms/noon.md#the-sourcing-wizard.
+
+    The criteria rank the pool; `preferences` decides the pool. Those come off
+    the row's columns, so pass them with `--set` when running from a file:
+
+        --set 'Location=Manchester' --set 'Employment Type=Permanent'
     """
     settings = _setup(verbose)
     if headed:
         settings.headless = False
 
+    row = _stand_in_row(set_) if set_ else None
+
     try:
-        report = asyncio.run(_source(role, doc, settings, dry_run, name, start))
+        report = asyncio.run(_source(role, doc, settings, dry_run, name, start, row))
     except PipelineError as exc:
         _fail(str(exc))
         return
 
     console.print(f"\n[bold]role[/bold]  {report.role_id}")
+
+    # The filters, first, because they decide the pool the criteria then rank -
+    # and because an empty location is the failure this run exists to catch.
+    console.print("\n[bold]Search filters[/bold]")
+    if report.location:
+        console.print(f"  location   {report.location}")
+    else:
+        console.print("  location   [yellow]none - noon will search globally[/yellow]")
+    if report.titles:
+        console.print(f"  titles     {', '.join(report.titles)}")
+    else:
+        console.print("  titles     [yellow]none[/yellow]")
+
     console.print(f"\n[bold]Must-haves[/bold] ({len(report.must_haves)})")
     for line in report.must_haves:
         promoted = " [dim](was a nice-to-have)[/dim]" if line in report.promoted else ""
@@ -674,16 +703,33 @@ def _role_uuid(value: str) -> str:
 
 
 async def _source(
-    role: str, doc: str, settings: Any, dry_run: bool, name: str | None, start: bool
+    role: str,
+    doc: str,
+    settings: Any,
+    dry_run: bool,
+    name: str | None,
+    start: bool,
+    row: Any = None,
 ) -> Any:
-    from app.pipeline import load_document
+    from app.pipeline import enrich_advert, load_document
     from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
     from app.platforms.engine import _role_name
     from app.models import Advert
     from app.platforms.noon_sourcing import set_up_sourcing, targeting_preamble
+    from app.platforms.skills import ensure_skills
 
     role_id = _role_uuid(role)
     document = await load_document(doc, settings)
+    # The same two steps the orchestrator runs before any platform sees the
+    # document, in the same order: the row's columns fill the advert fields it
+    # left empty, then the skills are drafted if no column named them. Without
+    # this the search filters below are built from the document alone, and the
+    # document is exactly what does not carry them.
+    for filled in enrich_advert(document, row, settings):
+        console.print(f"[dim]from --set: {filled}[/dim]")
+    drafted = await ensure_skills(document, settings)
+    if drafted:
+        console.print(f"[dim]skills drafted: {', '.join(drafted)}[/dim]")
     advert = document.advert
     jd = document.job_description
     if not jd:
@@ -697,8 +743,10 @@ async def _source(
     # A Client JD is enough on its own, so the advert may be absent entirely.
     advert = advert or Advert(title="", body_text="", body_html="")
     role_name = name or _role_name(document.source_name, None, advert, emails)
+    # The advert's title only - `role_name` is the filename, whose leading
+    # segment is the company rather than the role.
     targeting = targeting_preamble(
-        title=advert.title or role_name,
+        title=advert.title,
         location=advert.location or "",
         employment_type=advert.employment_type or "",
         skills=advert.tags,

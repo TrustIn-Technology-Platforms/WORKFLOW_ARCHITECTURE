@@ -229,6 +229,10 @@ The recruiter's habit, now in code
 python -m app.cli source --role <uuid|url> --doc advert.docx            # rehearsal
 python -m app.cli source --role <uuid|url> --doc advert.docx --live
 python -m app.cli source --role <uuid> --doc advert.docx --live --no-start   # criteria only
+
+# The search filters live on the row, not in the document. Running from a
+# file alone, hand them over with --set or the role is searched globally:
+python -m app.cli source --role <uuid> --doc advert.docx --live --headed \n    --set 'Location=Manchester' --set 'Employment Type=Permanent'
 python -m app.cli post noon --doc advert.docx --live --sourcing         # campaign + criteria
 ```
 
@@ -304,7 +308,20 @@ Two changes, neither of which needs an endpoint we have not seen:
    ```
 
    Values come off the row (`Location`, `Employment Type`, `Skills`) through
-   `enrich_advert`; a line whose value is unknown is not written at all.
+   `enrich_advert` and `ensure_skills`, exactly as `post` resolves them; a
+   line whose value is unknown is not written at all. `source` takes the
+   same `--set COLUMN=VALUE` as `post`, because a run started from a file
+   has no row to read them off.
+
+   **Only the role reaches the `Job title:` line.** TrustIn writes a title as
+   the role plus what sells it — `Backend Platform Engineer - NYC / Series A /
+   Kubernetes` — and noon turns that line into `preferences.titles`, the list
+   it searches for. Handed the whole string it looks for people whose job
+   title is "NYC" or "Series A". `role_title()` cuts at the first spaced dash
+   or slash and refuses anything that does not leave at least two words, so a
+   filename (`Kepler - Backend Platform Engineer - NYC`, whose leading segment
+   is the *company*) produces no title line at all. Silence is safe here:
+   noon also reads titles out of the JD body.
 
    **Salary is deliberately not in there** even though the row carries it.
    noon has no compensation preference, so the only thing it could become is

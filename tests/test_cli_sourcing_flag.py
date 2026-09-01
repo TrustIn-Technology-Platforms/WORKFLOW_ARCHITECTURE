@@ -62,3 +62,64 @@ def test_sourcing_turns_it_on_even_when_the_setting_is_off(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert seen["criteria_enabled"] is True
+
+
+# ----------------------------------------------------------------------
+# `source` builds the search filters from the same place `post` does
+# ----------------------------------------------------------------------
+
+
+def test_source_passes_the_columns_through_as_a_stand_in_row(monkeypatch):
+    """`--set` is what makes a file-only run exercise the location fix.
+
+    The location, employment type and skills a search filters on live on the
+    Notion row, not in the document — that is the whole reason noon was
+    searching globally. A `source` run that could not receive them would leave
+    the supervised live run unable to prove the thing it exists to prove.
+    """
+    seen: dict = {}
+
+    async def fake_source(role, doc, settings, dry_run, name, start, row=None):
+        seen["row"] = row
+
+        # The real report, so a field the command prints cannot go missing here.
+        from app.platforms.noon_sourcing import SourcingReport
+
+        return SourcingReport(role_id="r")
+
+    monkeypatch.setattr(cli, "_source", fake_source)
+    monkeypatch.setattr(cli, "_setup", lambda verbose=False: Settings())
+    result = runner.invoke(
+        cli.app,
+        [
+            "source", "--role", "r", "--doc", "x.docx",
+            "--set", "Location=Manchester",
+            "--set", "Employment Type=Permanent",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    row = seen["row"]
+    assert row is not None, "--set must reach _source, or the filters stay empty"
+    assert row.property_text("Location") == "Manchester"
+    assert row.property_text("Employment Type") == "Permanent"
+
+
+def test_source_without_set_still_runs(monkeypatch):
+    """A document that states its own location needs no columns."""
+    seen: dict = {}
+
+    async def fake_source(role, doc, settings, dry_run, name, start, row=None):
+        seen["row"] = row
+
+        # The real report, so a field the command prints cannot go missing here.
+        from app.platforms.noon_sourcing import SourcingReport
+
+        return SourcingReport(role_id="r")
+
+    monkeypatch.setattr(cli, "_source", fake_source)
+    monkeypatch.setattr(cli, "_setup", lambda verbose=False: Settings())
+    result = runner.invoke(cli.app, ["source", "--role", "r", "--doc", "x.docx"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["row"] is None

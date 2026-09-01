@@ -85,6 +85,12 @@ globally and the criteria did the geography badly, if at all.
    Key skills: Kubernetes, Terraform
    ```
 
+   The title is cleaned first. TrustIn writes titles as the role plus what
+   sells it (`Backend Platform Engineer - NYC / Series A / Kubernetes`), and
+   noon turns that line into `preferences.titles` — so the whole string means
+   searching for people whose job title is "NYC". `role_title()` keeps the
+   leading segment and emits nothing when that is not a plausible title.
+
    Only the lines whose values are known are written — `Location:` followed by
    nothing is worse than silence. Salary is left out on purpose: noon has no
    compensation preference, so it could only become a criterion, and every
@@ -215,7 +221,9 @@ Rules, all of them now enforced by the parser:
 So what is left is not code but two live sessions at a keyboard, both of which
 need a person because both platforms sign in through SSO:
 
-1. `python -m app.cli source --role <uuid> --doc <file> --live --headed` on a
-   throwaway noon role, to confirm the preamble sets `preferences.location`.
+1. `python -m app.cli source --role <uuid> --doc <file> --live --headed`
+   `--set 'Location=<city>'` on a throwaway noon role, to confirm the preamble
+   sets `preferences.location`. The `--set` matters: run from a file alone
+   there is no row to read the location off, and the run proves nothing.
 2. `python scripts/probe_loxo_longlist.py --job <id>` on a real Loxo job, to
    map the Longlist Agent. Read-only — it saves nothing.

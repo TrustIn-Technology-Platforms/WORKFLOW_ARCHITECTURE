@@ -261,6 +261,21 @@ that one with a colon.
 Unmatched labels go to `fields`, keyed by the label as written. A recipe can then
 reference `{{ advert.fields["Start Date"] }}` with no code change.
 
+### 4d-and-a-half. What the title carries
+
+Two heuristics read TrustIn's title convention, both added 2026-09-01 after the
+first real Wellfound drafts posted with no salary and a fallback title:
+
+- **Salary.** `… / up to $250K + equity` in a *title* becomes `advert.salary`
+  when no labelled `Salary:` line and no Notion column supplies one. Titles
+  only, never body text - advert bodies name funding rounds ("backed by a $120M
+  round"), which would read as a salary from anywhere less constrained.
+- **A board section's first line.** A board advert (`Wellfound` heading) whose
+  first body line is slash- or dash-separated, title-length and not a sentence
+  is opened with a title in the convention above; that line becomes the board
+  advert's title (a leading `Title:` label is dropped) and leaves the body, and
+  its salary is read as above.
+
 ### 4e. Invariants
 
 - **Never raises for messy input.** Ambiguity is a `warning`, not an exception.

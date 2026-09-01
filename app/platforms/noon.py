@@ -97,8 +97,16 @@ class NoonAdapter(RecipeAdapter):
         # The facts a search filters on, above the description noon reads. They
         # live on the Notion row rather than in the prose, which is why the
         # location came back empty on every role until this existed.
+        #
+        # The general advert deliberately, not `advert_for("noon")`: a section
+        # written for a board is cut down for that board, and these are facts
+        # about the role rather than copy. `enrich_advert` and `ensure_skills`
+        # have already filled it from the row's columns by this point.
+        # The advert's title only, never `role_name`: that is the document's
+        # filename, "Company - Role - Location", whose leading segment is the
+        # company. `role_title` would hand noon a company name to search for.
         targeting = targeting_preamble(
-            title=advert.title or role_name,
+            title=advert.title,
             location=advert.location or "",
             employment_type=advert.employment_type or "",
             skills=advert.tags,

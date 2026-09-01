@@ -612,3 +612,102 @@ def test_real_metadata_is_still_read_however_it_is_written():
     assert advert.location == "San Francisco Bay Area, or remote within the United States"
     assert advert.salary == "$200,000 - $260,000 plus equity"
     assert advert.fields.get("Start Date") == "ASAP"
+
+
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        ("Senior Platform Engineer / AWS / SF / up to $225k + Equity", "up to $225k"),
+        ("Backend Platform Engineer - NYC / Series A / Up to $300k", "Up to $300k"),
+        ("Platform Engineer / Hedge Fund / London / up to £250k + bonus", "up to £250k"),
+        ("Staff Engineer / NY / $200 - 260k/yr", "$200 - 260k/yr"),
+        ("Infrastructure Engineer / $200,000 - $260,000 / Onsite", "$200,000 - $260,000"),
+    ],
+)
+def test_a_salary_in_the_title_reaches_the_advert(title, expected):
+    """The titles carry the package by convention and the documents rarely
+    state it anywhere else - the Notion board has no Salary column, so without
+    this the boards get no salary at all (first real Wellfound draft,
+    2026-09-01)."""
+    document = parser.parse_document(
+        [_block(title), _block("About Company:", style="heading", level=2), _block("An AI startup.")]
+    )
+    assert document.advert is not None
+    assert document.advert.salary == expected
+
+
+def test_a_funding_round_is_not_a_salary():
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer / Backed by a $120M round / SF"),
+            _block("About Company:", style="heading", level=2),
+            _block("An AI startup."),
+        ]
+    )
+    assert document.advert is not None
+    assert document.advert.salary is None
+
+
+def test_a_labelled_salary_line_beats_the_title():
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer / up to $300k"),
+            _block("Salary: $250,000 - $280,000"),
+            _block("We are hiring."),
+        ]
+    )
+    assert document.advert is not None
+    assert document.advert.salary == "$250,000 - $280,000"
+
+
+def test_a_board_advert_inherits_the_title_salary():
+    """Wellfound reads its own advert; the salary lives in the document title."""
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer / SF / up to $260k"),
+            _block("Job Advert", style="heading", level=2),
+            _block("The general advert."),
+            _block("Wellfound", style="heading", level=2),
+            _block("Anonymised board copy."),
+        ]
+    )
+    board = document.advert_for("wellfound")
+    assert board.salary == "up to $260k"
+
+
+def test_a_board_section_opening_with_a_title_line_gets_it_as_its_title():
+    """The recruiters open the board section with a TrustIn-convention title -
+    "Role / Company / Place / up to $250K + equity". Left in the body, the post
+    went out titled with the inherited fallback and without the salary that
+    line carries (first real drafts, 2026-09-01)."""
+    line = "Staff Platform Engineer / Agentic AI Platform / South Bay / up to $250K + equity"
+    document = parser.parse_document(
+        [
+            _block("Job Description", style="heading", level=2),
+            _block("The general advert prose."),
+            _block("Wellfound", style="heading", level=2),
+            _block(line),
+            _block("A Series A SRE Startup, backed by a $30M round, is hiring."),
+        ]
+    )
+    board = document.advert_for("wellfound")
+    assert board.title == line
+    assert board.salary == "up to $250K"
+    assert line not in board.body_text, "the title is not repeated as body line one"
+    assert "Series A SRE Startup" in board.body_text
+    assert "$30M" in board.body_text, "the funding line stays prose, never a salary"
+
+
+def test_a_board_section_opening_with_prose_keeps_it_in_the_body():
+    document = parser.parse_document(
+        [
+            _block("Title / Advert", style="heading", level=1),
+            _block("General advert."),
+            _block("Wellfound", style="heading", level=2),
+            _block("We are hiring a founding engineer to build CI/CD tooling."),
+            _block("You will own the platform."),
+        ]
+    )
+    board = document.advert_for("wellfound")
+    assert "founding engineer" in board.body_text, "a sentence is not a title"
+    assert board.title == "Title / Advert", "title still inherited from the document"

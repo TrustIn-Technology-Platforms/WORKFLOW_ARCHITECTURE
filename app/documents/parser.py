@@ -655,11 +655,39 @@ def _build_platform_advert(
     """
     # The board's name is kept as the leading heading on purpose. `_build_advert`
     # promotes the first line of a headingless section to the title, and in board
-    # copy that first line is the opening sentence of the advert - dropping it
-    # would both lose a line and title the post with it. With the heading there,
-    # the heading becomes the title instead, and is discarded just below.
-    built = _build_advert([Section(heading=s.heading, level=s.level, blocks=list(s.blocks))
-                           for s in sections], warnings)
+    # copy that first line is usually the opening sentence of the advert -
+    # dropping it would both lose a line and title the post with it. With the
+    # heading there, the heading becomes the title instead, and is discarded
+    # just below.
+    copies = [Section(heading=s.heading, level=s.level, blocks=list(s.blocks))
+              for s in sections]
+
+    # ...unless that first line is plainly a job title. The recruiters open the
+    # board section with one in TrustIn's own convention - "Staff Platform
+    # Engineer / Agentic AI Platform / South Bay / up to $250K + equity" - and
+    # leaving it in the body posted the advert titled "Job Description" (the
+    # inherited fallback) with no salary, while both sat unread in body line one
+    # (found 2026-09-01 on the first drafts saved from real rows). Slash- or
+    # dash-separated, no closing full stop, title-length: that shape is a title,
+    # not prose, so it moves to the title and out of the body.
+    own_title = ""
+    first = copies[0]
+    if first.blocks:
+        candidate = first.blocks[0]
+        text = candidate.text.strip()
+        if (
+            candidate.style == "body"
+            and 0 < len(text) <= 120
+            and not text.endswith(".")
+            and (" / " in text or " - " in text)
+            and _field_from(candidate)[0] is None
+        ):
+            # "Title: Infrastructure & Security Engineer / ..." - the label is
+            # the recruiter's, the post's title starts after it.
+            own_title = re.sub(r"^\s*title\s*[:\-–]\s*", "", text, flags=re.IGNORECASE)
+            first.blocks = first.blocks[1:]
+
+    built = _build_advert(copies, warnings)
     if built is None or not built.body_text.strip():
         warnings.append(
             f"The {platform} section is empty; the general advert will be posted there."
@@ -667,7 +695,7 @@ def _build_platform_advert(
         return base or Advert(title="", body_text="", body_html="")
 
     inherited = base or Advert(title="", body_text="", body_html="")
-    title = built.title
+    title = own_title or built.title
     # "Wellfound" is the name of a board, not of a job.
     if not title or title == "(untitled)" or _platform_advert_of(title) is not None:
         title = inherited.title
@@ -676,7 +704,7 @@ def _build_platform_advert(
         body_text=built.body_text,
         body_html=built.body_html,
         location=built.location or inherited.location,
-        salary=built.salary or inherited.salary,
+        salary=built.salary or _salary_in(title) or inherited.salary,
         employment_type=built.employment_type or inherited.employment_type,
         category=built.category or inherited.category,
         reference=built.reference or inherited.reference,
@@ -743,6 +771,34 @@ def _build_advert(sections: list[Section], warnings: list[str]) -> Advert | None
     return _finish_advert(title, body_blocks, fields, warnings)
 
 
+# TrustIn's titles carry the package by convention - "… / up to $300k",
+# "… / $200 - 260k/yr" - and the documents rarely state it anywhere else, so a
+# labelled `Salary:` line missing meant no salary reached the boards at all
+# (found 2026-09-01 on the first Wellfound draft posted from a real row). Title
+# only, never the body: advert bodies name funding rounds ("backed by a $120M
+# round"), which would read as a salary from here.
+_TITLE_SALARY = re.compile(
+    r"""(?:up\s+to\s+)?
+        [$£€]\s?\d[\d,.]*\s?k?                                  # $200,000 · $300k · £250 k
+        (?:\s*(?:-|–|—|to)\s*[$£€]?\s?\d[\d,.]*\s?k?)?          # optional upper bound
+        (?:\s?/\s?(?:yr|year|annum|pa))?                        # "/yr" style suffix
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+# A package has thousands in it: a k after a digit, a comma-grouped figure, or
+# five-plus digits. "$120" clipped off a "$120M round" has none and is dropped.
+_SALARY_SANITY = re.compile(r"\dk\b|\d\s?k\b|\d{1,3},\d{3}|\d{5,}", re.IGNORECASE)
+
+
+def _salary_in(title: str) -> str | None:
+    """The salary snippet a title carries, or None when it carries none."""
+    for match in _TITLE_SALARY.finditer(title or ""):
+        snippet = match.group(0).strip()
+        if _SALARY_SANITY.search(snippet):
+            return snippet
+    return None
+
+
 def _finish_advert(
     title: str, body_blocks: list[Block], fields: dict[str, str], warnings: list[str]
 ) -> Advert:
@@ -758,7 +814,7 @@ def _finish_advert(
         body_text=body_text,
         body_html=body_html,
         location=known.get("location"),
-        salary=known.get("salary"),
+        salary=known.get("salary") or _salary_in(title),
         employment_type=known.get("employment_type"),
         category=known.get("category"),
         reference=known.get("reference"),

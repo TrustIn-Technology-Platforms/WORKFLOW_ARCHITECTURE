@@ -154,7 +154,11 @@ The configuration is already shaped for this — `SESSION_DIR`, `ARTIFACT_DIR` a
    `BROWSER_PROFILE_DIR=/data/profiles` (the Dockerfile already sets both).
    Without it, every deploy logs the system out of every platform.
 2. **Environment.** `NOTION_TOKEN`, `NOTION_DATABASE_ID`, `WEBHOOK_SECRET`,
-   `LOG_JSON=true`, `HEADLESS=true`. `PORT` is injected.
+   `ANTHROPIC_API_KEY`, `LOG_JSON=true`, `HEADLESS=true`. `PORT` is injected.
+   The Anthropic key is the one people forget: `.env` never reaches the
+   image, and without it the run still goes green while Wellfound quietly
+   loses its Skills tags and the criteria drafts skip - `GET /health` says
+   `anthropic_key_set: false` when this has happened.
 3. **Browsers.** Playwright's Chromium must be installed in the image —
    `playwright install --with-deps chromium` in the build. This is the step most
    often missed, and it fails only at the first browser run.

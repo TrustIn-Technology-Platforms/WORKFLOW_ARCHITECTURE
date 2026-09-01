@@ -118,9 +118,13 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.3",  # bumped with volume reporting
+            "version": "1.4",  # bumped with anthropic-key reporting
             "notion_configured": settings.notion_configured,
             "webhook_secret_set": bool(settings.webhook_secret),
+            # False here silently costs Wellfound its Skills tags and the
+            # criteria drafts their gap-filling - .env never reaches the image,
+            # so the key must be a Railway variable, and nothing else says so.
+            "anthropic_key_set": bool(settings.anthropic_api_key),
             "dry_run": settings.dry_run,
             "headless": settings.headless,
             "session_dir": str(settings.session_dir),

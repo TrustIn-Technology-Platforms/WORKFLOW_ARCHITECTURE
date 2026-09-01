@@ -148,3 +148,36 @@ def test_ensure_skills_copies_an_existing_list_instead_of_drafting(monkeypatch):
     assert added == []
     assert document.platform_adverts["wellfound"].tags == ["Go"]
     assert not called
+
+
+def test_skills_are_drafted_from_the_client_jd_when_there_is_one(monkeypatch):
+    """The advert sells the role and softens the stack; the JD states it.
+
+    Same reason the sourcing criteria read `job_description` (D-018) - and the
+    tags feed both Wellfound's Skills field and noon's targeting preamble, so
+    drafting them off the marketing copy shortchanges both.
+    """
+    seen: dict[str, str] = {}
+
+    async def _draft(advert_text, *, title="", settings=None):
+        seen["text"] = advert_text
+        return ["Kubernetes"]
+
+    monkeypatch.setattr("app.platforms.skills.draft_skills", _draft)
+    document = _document(body="A place where great people do their best work.")
+    document.client_jd = "8+ years of production Kubernetes and Terraform."
+
+    added = asyncio.run(ensure_skills(document))
+    assert added == ["Kubernetes"]
+    assert "Kubernetes" in seen["text"]
+    assert "best work" not in seen["text"]
+
+
+def test_without_a_client_jd_the_advert_is_still_the_source(monkeypatch):
+    async def _draft(advert_text, *, title="", settings=None):
+        assert "Python" in advert_text
+        return ["Python"]
+
+    monkeypatch.setattr("app.platforms.skills.draft_skills", _draft)
+    document = _document(body="We use Python here.")
+    assert asyncio.run(ensure_skills(document)) == ["Python"]

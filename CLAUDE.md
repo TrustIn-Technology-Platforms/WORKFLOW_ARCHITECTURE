@@ -68,8 +68,10 @@ except for one surface, and what is left needs a person at a keyboard because
 both platforms sign in through SSO:
 
 1. **One supervised noon run.** `python -m app.cli source --role <uuid> --doc
-   <file> --live --headed` on a throwaway role, to confirm the targeting
-   preamble sets `preferences.location`. Read
+   <file> --live --headed --set 'Location=<city>'` on a throwaway role, to
+   confirm the targeting preamble sets `preferences.location`. The `--set` is
+   not optional: the location lives on the Notion row, so a file-only run has
+   none and proves nothing. Read
    [docs/platforms/noon.md](docs/platforms/noon.md#the-live-run-2026-08-27)
    first — the editor autosaves, so there is no harmless dry run past role
    creation.
