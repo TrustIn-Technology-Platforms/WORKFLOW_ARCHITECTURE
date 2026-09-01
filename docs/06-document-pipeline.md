@@ -133,6 +133,19 @@ one undifferentiated wall of text.
 
 The rule is deliberately conservative: it does nothing when real headings exist.
 
+### Promotion by meaning
+
+A document written with **no formatting at all** — no Heading styles, nothing
+bold — still marks its sections: a line saying `Email 1`, `Subject` or
+`LinkedIn Connection`, alone on a line. One real document arrived exactly like
+that (52 plain-body blocks, 2026-09-01) and produced zero email steps, failing
+all three sequence platforms at once. So, under the same guard (only when the
+document has no real headings anywhere), a short body line that *entirely*
+matches a section name the classifier already knows — an email step, a channel,
+a board, `Subject`, an advert heading, a JD heading — is promoted to a level-2
+heading. Entirely is the operative word: `Email me at…` and `Touch base soon.`
+stay prose.
+
 ---
 
 ## Stage 4 — Parse into `ParsedDocument`
