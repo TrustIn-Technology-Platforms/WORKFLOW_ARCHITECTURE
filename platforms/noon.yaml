@@ -212,6 +212,43 @@ steps:
     description: let the last autosave go out
     ms: 4000
 
+  # -------------------------------------------------------------------------
+  # 6. Step 1's connection-request note. Deliberately LAST: opening it adds a
+  #    new Draft.js editor at the top of the step list, which would shift every
+  #    nth index above if it ran before the body fills.
+  #
+  #    noon warns "You can't add a message to connection requests on a
+  #    non-premium LinkedIn account" and offers "Add note anyways" - the note
+  #    saves regardless (typed, closed, reopened and still there, proven
+  #    2026-09-01 on a throwaway role). The warning click is optional so a
+  #    Premium upgrade, which removes the dialog, does not break the run; the
+  #    "Generate with AI" wait is not - it exists only inside the opened note
+  #    UI, and filling nth=0 without it would overwrite step 2's body.
+  # -------------------------------------------------------------------------
+  - action: click
+    selector: "text='Add a note'"
+    force: true
+
+  - action: dismiss
+    description: the non-premium warning, when noon shows one
+    selector: "text='Add note anyways'"
+
+  - action: wait_for
+    selector: "text='Generate with AI'"
+    timeout_ms: 20000
+
+  - action: fill_rich
+    description: >-
+      the note itself - the document's Connect/LinkedIn section, same text as
+      the accepted-trigger message. Plain text on purpose (a connection note
+      has no formatting), capped at the 300 characters noon's editor enforces.
+    selector: ".public-DraftEditor-content >> nth=0"
+    value: "{{ connection_note.body_text | noon_tokens | truncate(300) }}"
+
+  - action: wait
+    description: the note autosaves on blur like every other field here
+    ms: 4000
+
 # The emails are mapped onto fixed slots above, so nothing repeats per email.
 per_email: []
 

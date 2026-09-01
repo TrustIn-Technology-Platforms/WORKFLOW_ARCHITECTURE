@@ -56,9 +56,14 @@ steps:
     url: "{{ base_url }}/recruit/jobs/new"
     description: the New Job Posting form (nothing is created until Publish)
 
+  # The New Job page renders a "start from a previous posting" picker listing
+  # every draft on the account before the form itself. With 57 drafts on the
+  # books it is a heavy page, and on the Railway container it blew through 45s
+  # while rendering fine locally in ~12s (2026-09-01). The real cure is pruning
+  # the old test drafts; the timeout covers the container being slow anyway.
   - action: wait_for
     selector: "#form-input--title"
-    timeout_ms: 45000
+    timeout_ms: 120000
 
   # --- 1. Job details -------------------------------------------------------
   # TrustIn's live titles already read "Role - Company type / Stack / Salary",

@@ -128,7 +128,7 @@ previous step):
 
 | Step | Type | Offset | Subject | What we put in it |
 |------|------|--------|---------|-------------------|
-| 1 | LinkedIn connection request | now | — | nothing: a note needs **LinkedIn Premium** (`Add a note` says so) |
+| 1 | LinkedIn connection request | now | — | the connection note — `Add a note` warns it needs **LinkedIn Premium**, but `Add note anyways` saves it regardless (proven 2026-09-01: typed, closed, reopened, still there). 300-char cap, enforced by the editor |
 | 2 | Email | +4d, 08:00 Pacific | role title | document email 1 |
 | 3 | Email, same thread | +2d | (inherits) | document email 2 |
 | 4 | LinkedIn InMail | +2d | role title | document email 1 |
@@ -394,6 +394,7 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 | `email.subject` | step Subject | `text='Subject' >> nth=-1 >> xpath=following::input[1]` | selector plausible, untested |
 | `email.body_html` | step body (Draft.js) | `.public-DraftEditor-content >> nth=-1`, `fill_rich` | element confirmed, paste untested |
 | `email.delay_days` | `offset` — "N days after previous step" | click `2 days`, then ? | no |
+| `connection_note.body_text` | step 1's connection note | `Add a note` → `Add note anyways` → `.public-DraftEditor-content >> nth=0` (the newest editor, top of the list) | yes — 2026-09-01 |
 | sender | From: | defaults to the logged-in user (sohaib@) | yes |
 
 ## Open questions
@@ -415,7 +416,17 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 - [ ] **Ask noon about the API.** The campaign already saves through `template_update` and the criteria now go through `role_autopilot`. Both are undocumented. support@noon.ai.
 - [ ] **Delete the two test roles** — `ZZ TEST - delete me` (project `03143de9-…`) and `ZZ TEST 2 - delete me` (project `2aeefeb6-…`). Both carry a complete campaign; neither has contacted anyone.
 - [ ] **Decide the mapping rule** for documents with a different number of emails than the template has slots. The recipe expects exactly three and fails clearly on fewer; a fourth is ignored.
-- [ ] **Connection-request note** — needs LinkedIn Premium on the sending account. Until then step 1 sends a bare request, as Nicholas's own template does.
+- [x] **Connection-request note** — written since 2026-09-01. noon's warning
+  ("You can't add a message to connection requests on a non-premium LinkedIn
+  account") is a warning, not a wall: `Add note anyways` opens a 300-char
+  Draft.js editor that autosaves like every other field. The recipe clicks
+  through it and pastes the document's Connect/LinkedIn section, `noon_tokens`
+  translated and truncated to 300. The note steps run **last** on purpose —
+  opening the editor adds a Draft.js node at the top of the step list, which
+  would shift every `nth` index the body fills rely on. The fill is guarded by
+  waiting for `Generate with AI`, which exists only inside the opened note UI;
+  without that guard a failed open would pour the note into step 2's body.
+  Sohaib reported the gap and the exact click path on 2026-09-01.
 
 ## What is left
 
