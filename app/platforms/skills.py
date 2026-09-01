@@ -183,4 +183,14 @@ async def ensure_skills(
     skills = await draft_skills(text, title=source.title, settings=settings)
     for advert in missing:
         advert.tags = list(skills)
+    if not skills and not settings.anthropic_api_key:
+        # Said on the row, not just in a log line. A run with no key still goes
+        # green while Wellfound's Skills field stays empty, and finding out from
+        # the saved draft cost a full deploy-and-trigger cycle (2026-09-01).
+        document.warnings.append(
+            "Skills were left empty: the row has no Skills column and "
+            "ANTHROPIC_API_KEY is not set here, so none could be drafted. Set "
+            "the key (a Railway variable on the server), or add a Skills "
+            "column to the board."
+        )
     return skills

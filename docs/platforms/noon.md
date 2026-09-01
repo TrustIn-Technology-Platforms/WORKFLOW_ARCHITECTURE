@@ -232,7 +232,8 @@ python -m app.cli source --role <uuid> --doc advert.docx --live --no-start   # c
 
 # The search filters live on the row, not in the document. Running from a
 # file alone, hand them over with --set or the role is searched globally:
-python -m app.cli source --role <uuid> --doc advert.docx --live --headed \n    --set 'Location=Manchester' --set 'Employment Type=Permanent'
+python -m app.cli source --role <uuid> --doc advert.docx --live --headed \
+    --set 'Location=Manchester' --set 'Employment Type=Permanent'
 python -m app.cli post noon --doc advert.docx --live --sourcing         # campaign + criteria
 ```
 

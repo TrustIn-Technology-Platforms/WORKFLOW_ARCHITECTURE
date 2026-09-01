@@ -123,3 +123,27 @@ def test_row_columns_reach_a_board_advert_too():
     assert wellfound.location == "NY", "the recipe reads THIS advert"
     assert wellfound.tags == ["Python", "Go"]
     assert doc.advert.location == "NY"
+
+
+def test_a_multi_select_skills_column_reads_as_a_list():
+    """The column type a recruiter would actually pick for skills.
+
+    `Skills` is a natural multi-select, and `plain_text_of` flattens one to
+    "A, B, C" - which `split_skills` then splits on the comma. Worth pinning:
+    the list feeds Wellfound's Skills field and noon's targeting preamble, and a
+    silently-empty read would leave both looking like the recruiter named
+    nothing.
+    """
+    doc = ParsedDocument(advert=Advert(title="t", body_text="b", body_html="<p>b</p>"))
+    row = _row(
+        Skills={
+            "type": "multi_select",
+            "multi_select": [
+                {"name": "Kubernetes"}, {"name": "Terraform"}, {"name": "Go"},
+            ],
+        }
+    )
+    filled = enrich_advert(doc, row, _Settings())
+
+    assert doc.advert.tags == ["Kubernetes", "Terraform", "Go"]
+    assert "tags <- Skills" in filled

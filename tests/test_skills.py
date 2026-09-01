@@ -181,3 +181,19 @@ def test_without_a_client_jd_the_advert_is_still_the_source(monkeypatch):
     monkeypatch.setattr("app.platforms.skills.draft_skills", _draft)
     document = _document(body="We use Python here.")
     assert asyncio.run(ensure_skills(document)) == ["Python"]
+
+
+def test_no_key_and_no_column_says_so_on_the_row(monkeypatch):
+    """The run stays green either way; the difference is whether a person finds
+    out from the row or from the saved draft."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    from app.config import reset_settings_cache
+
+    reset_settings_cache()
+    try:
+        document = _document()
+        added = asyncio.run(ensure_skills(document))
+    finally:
+        reset_settings_cache()
+    assert added == []
+    assert any("Skills were left empty" in w for w in document.warnings)
