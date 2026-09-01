@@ -169,7 +169,7 @@ leading section.
 
 | Heading looks like | Becomes |
 |--------------------|---------|
-| `Client JD`, `Full JD`, `Original JD`, `JD` — **after the last message** | `client_jd`, and so does every section below it |
+| `Client JD`, `Full JD`, `Original JD`, `JD` — and `Job Description`, `Job Spec` **after the last message** | `client_jd`, and so does every section below it |
 | `Job Spec`, `Role Spec` — **after the last message** | the same |
 | `Email 1`, `Email 2 - Follow up`, `Follow-up 3`, `Sequence Step 2` | An `EmailStep` |
 | `Job Advert`, `Advert`, `Job Description`, `The Role`, `Role Overview` | The `Advert` |
@@ -199,10 +199,12 @@ it.
 
 - Its own opening heading (`Client JD`) is dropped; every heading inside the
   spec is kept, because a bullet list under `Must have` means nothing without it.
-- `Job Description` is **not** an accepted heading — it already names the advert
-  above, and reusing it would replace the advert silently.
-- `Job Spec` is accepted only after the last message: it names the advert at the
-  top of a document and the client's spec at the bottom of one.
+- `Job Description` and `Job Spec` are accepted **only after the last message**:
+  each names the advert at the top of a document and the client's spec at the
+  bottom of one, so position settles what the word alone cannot. (A recruiter
+  pasted the client's JD under `Job Description`, at the end, on the first real
+  document to carry one — 2026-09-01 — which is how the heading earned its
+  place.)
 - A JD heading found *before* the last message is left to the ordinary rules and
   a warning says to move it. Obeying it would read half the sequence as a spec.
 - An empty section warns and falls back.

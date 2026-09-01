@@ -123,3 +123,45 @@ def test_source_without_set_still_runs(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert seen["row"] is None
+
+
+# ----------------------------------------------------------------------
+# `check` covers the drafting key
+# ----------------------------------------------------------------------
+
+
+def _offline_check(monkeypatch, **settings_kwargs):
+    """`check` with the network stubbed out. `_env_file=None` keeps the real
+    .env - live Notion credentials included - out of a unit test."""
+    settings = Settings(_env_file=None, **settings_kwargs)
+    monkeypatch.setattr(cli, "_setup", lambda verbose=False: settings)
+
+    async def notion_ok(s):
+        return None
+
+    monkeypatch.setattr(cli, "_check_notion", notion_ok)
+    return settings
+
+
+def test_check_names_what_an_unset_key_costs(monkeypatch):
+    """No key is not a failure - it is three quiet degradations, and the check
+    is where they get said out loud instead of being discovered mid-run."""
+    _offline_check(monkeypatch, anthropic_api_key="")
+    result = runner.invoke(cli.app, ["check"])
+
+    assert "Criteria drafting" in result.output
+    assert "ANTHROPIC_API_KEY unset" in result.output
+
+
+def test_check_probes_a_configured_key(monkeypatch):
+    probed = {}
+
+    async def fake_probe(settings):
+        probed["model"] = settings.criteria_model
+
+    monkeypatch.setattr(cli, "_check_anthropic", fake_probe)
+    _offline_check(monkeypatch, anthropic_api_key="sk-ant-x")
+    result = runner.invoke(cli.app, ["check"])
+
+    assert probed["model"] == "claude-opus-5"
+    assert "key accepted" in result.output

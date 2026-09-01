@@ -145,10 +145,74 @@ def check() -> None:
             problems.append(str(exc))
             console.print(f"  [red]{exc}[/red]")
 
+    # Three paths quietly depend on this key: Wellfound's drafted skills, Loxo's
+    # empty Skill DNA buckets, and Juicebox's criteria (which cannot run at all
+    # without it). A typo'd key otherwise surfaces mid-run as three different
+    # degradations, so it is proven here - where a person is already looking.
+    console.print("\n[bold]Criteria drafting[/bold]")
+    if not settings.anthropic_api_key:
+        console.print(
+            "  [yellow]ANTHROPIC_API_KEY unset - Wellfound skills stay empty, "
+            "Loxo's empty buckets are not filled, Juicebox criteria cannot be "
+            "drafted[/yellow]"
+        )
+    else:
+        try:
+            asyncio.run(_check_anthropic(settings))
+            console.print(
+                f"  [green]ok[/green]  key accepted, model {settings.criteria_model}"
+            )
+        except PipelineError as exc:
+            problems.append(str(exc))
+            console.print(f"  [red]{exc}[/red]")
+
     if problems:
         console.print(f"\n[red]{len(problems)} problem(s).[/red]")
         raise typer.Exit(code=1)
     console.print("\n[green]All checks passed.[/green]")
+
+
+async def _check_anthropic(settings: Any) -> None:
+    """Prove the key and the model id without spending output tokens.
+
+    `count_tokens` is an authenticated, free endpoint that also 404s on an
+    unknown model - so one call verifies both of the two things that can be
+    misconfigured here.
+    """
+    from anthropic import (
+        AsyncAnthropic,
+        AuthenticationError,
+        NotFoundError,
+        PermissionDeniedError,
+    )
+
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    try:
+        await client.messages.count_tokens(
+            model=settings.criteria_model,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except AuthenticationError as exc:
+        raise PipelineError(
+            "Anthropic rejected ANTHROPIC_API_KEY. Re-copy it from "
+            "console.anthropic.com - the criteria drafting will not run "
+            "until it is valid."
+        ) from exc
+    except PermissionDeniedError as exc:
+        raise PipelineError(
+            "The ANTHROPIC_API_KEY is valid but not permitted to use "
+            f"{settings.criteria_model!r} - check the key's workspace limits."
+        ) from exc
+    except NotFoundError as exc:
+        raise PipelineError(
+            f"CRITERIA_MODEL={settings.criteria_model!r} is not a model "
+            "Anthropic recognises. Fix the setting - claude-opus-5 is the "
+            "default."
+        ) from exc
+    except Exception as exc:
+        raise PipelineError(f"Could not reach the Anthropic API: {exc}") from exc
+    finally:
+        await client.close()
 
 
 async def _check_notion(settings: Any) -> None:

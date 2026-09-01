@@ -302,7 +302,20 @@ campaign is OFF with no prospects. Every selector and hazard is in
 `platforms/loxo.yaml` stays `enabled: false` until those steps are ported into
 it and a second `testzz` run through the engine reproduces the result.
 
-## Platform four - Wellfound, LIVE 2026-08-31
+## Platform four - Wellfound, IN PRODUCTION 2026-09-01
+
+**The full production chain works**: a recruiter sets a row to `Ready to Post`,
+the Notion automation hits the Railway webhook, and a complete draft lands in
+Wellfound's Drafts - board-section body, title from the section's opening line,
+salary parsed out of that line, ten drafted skills, location from the row's
+column. Confirmed by Sohaib on the saved draft, 2026-09-01. Getting there took
+four fixes in one day, each found only by reading a saved draft back: board
+adverts missed row enrichment; the title/salary line sat unread as body text;
+recruiter shorthand (`NY`) matched nothing in Wellfound's location list; and the
+server had no `ANTHROPIC_API_KEY`, so skills silently skipped - now a Railway
+variable, reported by `/health`, and warned about on the row.
+
+## Previously: LIVE 2026-08-31
 
 `platforms/wellfound.yaml` is a **full YAML recipe, `enabled: true`, proven
 live**. It is the **first advert-kind recipe** - the other three post the

@@ -2,7 +2,16 @@
 
 > **Purpose** What is known about Wellfound as a job-advert destination, and the one question that has to be answered before anything is recorded.
 > **Audience** Whoever decides which Wellfound account posts, and whoever then records `platforms/wellfound.yaml`.
-> **Status** **LIVE — proven 2026-08-31.** `post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live` filled the real *New Job Posting* form and saved job **4656911** as a draft; every field was verified by reading the saved job back through its own `/edit` page, and `Active (7)` was unchanged while `Drafts` went 51 → 53. The recipe submits **Save draft**, never Publish — see [Draft, not publish](#draft-not-publish). Sohaib's decision (2026-08-28): TrustIn posts anonymised adverts from its own account, as the recruiters already do by hand; the [policy risk](#the-policy-problem) is accepted, not removed.
+> **Status** **IN PRODUCTION — full chain confirmed 2026-09-01.** A real Notion
+> row through the Railway webhook produced a complete draft: the board section's
+> own copy as the body, its opening line as the title, the salary read out of
+> that line (`up to $250K`), ten Claude-drafted skills, and the row's Location
+> column mapped onto Wellfound's list — confirmed by Sohaib on the saved draft.
+> The last piece was `ANTHROPIC_API_KEY` as a Railway variable (added
+> 2026-09-01; `/health` reports `anthropic_key_set`); without it the skills
+> step skips and, since v9, says so on the row.
+>
+> Previously: **LIVE — proven 2026-08-31.** `post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live` filled the real *New Job Posting* form and saved job **4656911** as a draft; every field was verified by reading the saved job back through its own `/edit` page, and `Active (7)` was unchanged while `Drafts` went 51 → 53. The recipe submits **Save draft**, never Publish — see [Draft, not publish](#draft-not-publish). Sohaib's decision (2026-08-28): TrustIn posts anonymised adverts from its own account, as the recruiters already do by hand; the [policy risk](#the-policy-problem) is accepted, not removed.
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md) · [platforms/loxo](loxo.md)
 
 | | |
@@ -13,7 +22,7 @@
 | **Account** | TrustIn recruiter account, signed in as **Marcus Gardiner-Hill** (`marcus@trust-in.co.uk`, company profile *TrustIn*). Profile `.profiles/wellfound`, captured 2026-08-28. The account already holds 7 active anonymised posts and 51 drafts |
 | **Status** | **Live and proven.** Saves a draft; a recruiter publishes it by hand |
 | **Owner** | Sohaib |
-| **Last verified** | 2026-08-31 — live draft save, read back off the saved job |
+| **Last verified** | 2026-09-01 — Notion trigger → Railway → complete draft (title, salary, skills, location), confirmed by Sohaib |
 
 ## The policy problem
 

@@ -188,8 +188,9 @@ Rules, all of them now enforced by the parser:
 - **Heading: `Client JD`.** Not `Job Description` — the parser already maps that
   heading onto the *advert*
   ([06-document-pipeline](06-document-pipeline.md), 4b), and reusing it would
-  silently replace the advert. `Client JD`, `Full JD`, `Original JD` and
-  `Job Spec` are all accepted.
+  silently replace the advert *at the top of a document*. At the **end**, after
+  the last message, `Job Description` and `Job Spec` are accepted too — position
+  settles them. `Client JD`, `Full JD` and `Original JD` work anywhere.
 - **Position: last.** After the final email step, so it cannot be mistaken for
   advert body continuation, and so recruiters can keep pasting it in as the last
   thing they do.
@@ -216,7 +217,12 @@ Rules, all of them now enforced by the parser:
 | 2 | Point noon, Loxo and Juicebox criteria at `job_description` | **done** — `noon.py`, `loxo.py`, `juicebox.py`, and the three CLI commands |
 | 3 | Set noon's location from the row, and check it landed | **done in code** — `targeting_preamble`, `_check_preferences`; needs one live run |
 | 4 | Probe Loxo's Longlist Agent panel; write similar titles and skills | **probe written**, needs a live session; writer unbuilt |
-| 5 | Map Wellfound's Skills field | **done** — `skills.py`, `wellfound.yaml` |
+| 5 | Map Wellfound's Skills field | **done** — `skills.py`, `wellfound.yaml`; drafting proven live 2026-09-01 |
+
+All three drafting paths were run against the real Anthropic API on
+2026-09-01 once the key was configured — skills from a Client JD, Loxo's
+empty buckets, Juicebox's phrased criteria — and `python -m app.cli check`
+now proves the key and the model before a run depends on them.
 
 So what is left is not code but two live sessions at a keyboard, both of which
 need a person because both platforms sign in through SSO:

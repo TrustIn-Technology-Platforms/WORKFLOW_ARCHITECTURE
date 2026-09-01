@@ -138,12 +138,21 @@ _JD_HEADING = re.compile(
     )\s*[:\-–]?\s*$""",
     re.IGNORECASE | re.VERBOSE,
 )
-# `Job Spec` names the advert at the top of a document and the client's spec at
-# the bottom of one, so the word alone cannot settle it. Position does: these
-# only read as the client's JD after the last message in the sequence.
+# `Job Spec` and `Job Description` name the advert at the top of a document and
+# the client's spec at the bottom of one, so the words alone cannot settle it.
+# Position does: these only read as the client's JD after the last message in
+# the sequence. `Job Description` earned its place here the day a recruiter
+# pasted the client's JD under exactly that heading, at the end, and it parsed
+# as the *advert* - which happened to feed sourcing the right text and noon a
+# role named "Job Description" (2026-09-01).
 _LATE_JD_HEADING = re.compile(
-    r"^\s*(?:job\s*spec(?:ification)?|role\s*spec|spec(?:ification)?)\s*[:\-–]?\s*$",
-    re.IGNORECASE,
+    r"""^\s*(?:
+        job\s*spec(?:ification)?
+      | role\s*spec
+      | spec(?:ification)?
+      | (?:job|role)\s*description
+    )\s*[:\-–]?\s*$""",
+    re.IGNORECASE | re.VERBOSE,
 )
 
 _SUBJECT_LINE = re.compile(r"^\s*(?:subject|subject\s*line|re)\s*[:\-–]\s*(.+)$", re.I)

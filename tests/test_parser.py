@@ -711,3 +711,50 @@ def test_a_board_section_opening_with_prose_keeps_it_in_the_body():
     board = document.advert_for("wellfound")
     assert "founding engineer" in board.body_text, "a sentence is not a title"
     assert board.title == "Title / Advert", "title still inherited from the document"
+
+
+def test_a_trailing_job_description_heading_is_the_client_jd():
+    """The recruiters paste the client's spec under the heading they'd naturally
+    write - `Job Description` - at the end. At the top of a document that
+    heading is the advert; after the last message it is the client's JD, and
+    reading it as an advert named noon roles "Job Description" (2026-09-01)."""
+    document = parser.parse_document(
+        [
+            _block("LinkedIn Connection", style="heading", level=2),
+            _block("Hi {first_name}, quick note."),
+            _block("Email 1", style="heading", level=2),
+            _block("Subject: A role"),
+            _block("Hi {first_name}, the body."),
+            _block("Wellfound", style="heading", level=2),
+            _block("Role / Startup / NY / up to $250K"),
+            _block("Board copy for Wellfound."),
+            _block("About You", style="heading", level=2),
+            _block("You have shipped systems."),
+            _block("Job Description", style="heading", level=2),
+            _block("8+ years with Kafka and vector databases."),
+            _block("Run reliability for a multi-tenant SaaS system."),
+        ]
+    )
+    assert len(document.emails) == 2, "the sequence is untouched"
+    assert document.client_jd is not None
+    assert "Kafka and vector databases" in document.client_jd
+    board = document.advert_for("wellfound")
+    assert "Board copy for Wellfound" in board.body_text
+    assert "You have shipped systems" in board.body_text, "About You stays board copy"
+    assert "Kafka and vector databases" not in board.body_text, "the JD is not advert copy"
+    assert document.job_description == document.client_jd
+
+
+def test_a_leading_job_description_heading_is_still_the_advert():
+    document = parser.parse_document(
+        [
+            _block("Job Description", style="heading", level=2),
+            _block("We are hiring a platform engineer to build infrastructure."),
+            _block("Email 1", style="heading", level=2),
+            _block("Subject: Hello"),
+            _block("Hi {first_name}."),
+        ]
+    )
+    assert document.advert is not None
+    assert "platform engineer" in document.advert.body_text
+    assert not document.client_jd
