@@ -98,7 +98,10 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001 - health must always answer
             root_is_mount = None
 
+        from datetime import datetime, timezone
+
         profiles: dict[str, dict] = {}
+        now = datetime.now(timezone.utc).timestamp()
         for key in sorted(recipes):
             info = store.profile_info(key)
             state_file = Path(settings.session_dir) / f"{key}.storage_state.json"
@@ -108,6 +111,14 @@ def create_app() -> FastAPI:
                 "profile": info.exists,
                 "profile_age_days": round(info.age_days, 1) if info.age_days else None,
                 "storage_state": state_file.is_file(),
+                # On Linux the injected export is the ONLY usable cookie source
+                # (the profile's own store arrives OS-encrypted), so a stale one
+                # here is a logged-out platform that looks healthy. Age is what
+                # tells fresh from fossil without spending a row.
+                "storage_state_age_days": (
+                    round((now - state_file.stat().st_mtime) / 86_400, 1)
+                    if state_file.is_file() else None
+                ),
                 # Set by the upload, consumed by the first browser launch. True
                 # means the profile is fresh off an upload and its cookies have
                 # not been injected yet; False after a run has used it.
@@ -118,7 +129,7 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.4",  # bumped with anthropic-key reporting
+            "version": "1.5",  # bumped with artifact endpoints + state ages
             "notion_configured": settings.notion_configured,
             "webhook_secret_set": bool(settings.webhook_secret),
             # False here silently costs Wellfound its Skills tags and the
@@ -220,5 +231,65 @@ def create_app() -> FastAPI:
 
         log.info("sessions imported", extra={"files": len(written)})
         return {"status": "ok", "written_count": len(written), "written": written[:50]}
+
+    def _require_secret(x_webhook_secret: str | None) -> None:
+        if not settings.webhook_secret:
+            raise HTTPException(503, "WEBHOOK_SECRET is not configured on the server.")
+        if not x_webhook_secret or not hmac.compare_digest(
+            x_webhook_secret, settings.webhook_secret
+        ):
+            raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+
+    @app.get("/admin/artifacts")
+    async def list_artifacts(
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """What the failed runs left behind, newest first.
+
+        Every failure on this box saves a screenshot, the DOM and a trace to
+        the artifact dir — and until this existed they sat on the volume where
+        nobody could read them, so every server-side failure was diagnosed by
+        guesswork from the one-line error on the row. The client is
+        scripts/pull_artifacts.py.
+        """
+        _require_secret(x_webhook_secret)
+        root = Path(settings.artifact_dir)
+        if not root.is_dir():
+            return {"status": "ok", "artifacts": []}
+        files = sorted(
+            (p for p in root.rglob("*") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:200]
+        return {
+            "status": "ok",
+            "artifacts": [
+                {
+                    "name": str(p.relative_to(root)).replace("\\", "/"),
+                    "bytes": p.stat().st_size,
+                    "modified": p.stat().st_mtime,
+                }
+                for p in files
+            ],
+        }
+
+    @app.get("/admin/artifacts/{name:path}")
+    async def get_artifact(
+        name: str,
+        x_webhook_secret: str | None = Header(default=None),
+    ):
+        _require_secret(x_webhook_secret)
+        root = Path(settings.artifact_dir).resolve()
+        target = (root / name).resolve()
+        # The name comes off the wire; resolving and re-anchoring is what stops
+        # ../../ from reading the rest of the volume (the session files live
+        # right next door).
+        if root not in target.parents and target != root:
+            raise HTTPException(404, "No such artifact.")
+        if not target.is_file():
+            raise HTTPException(404, "No such artifact.")
+        from fastapi.responses import FileResponse
+
+        return FileResponse(target, filename=target.name)
 
     return app

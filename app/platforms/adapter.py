@@ -29,6 +29,12 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = get_logger(__name__)
 
+# How long the login check waits for the logged-in shell before declaring the
+# session expired. Generous on purpose: the check runs once per platform per
+# row, and a false "expired" costs a human a trip through SSO where a slow
+# true positive costs ninety seconds.
+LOGIN_CHECK_SECONDS = 90
+
 
 class PlatformAdapter(Protocol):
     name: str
@@ -188,8 +194,10 @@ class RecipeAdapter:
                 f"expired). Run: python -m app.cli login {self.recipe.key}"
             )
 
-        # A redirect to the sign-in page is unambiguous, so check it first.
-        if login.logged_out_pattern:
+        # Pattern-only recipes (no shell selector) get the single check: let
+        # the app settle, then read the URL. A bounce to the sign-in page is
+        # unambiguous either way.
+        if not login.ready_selector:
             try:
                 await page.wait_for_load_state("networkidle", timeout=8_000)
             except Exception:
@@ -200,11 +208,41 @@ class RecipeAdapter:
                     extra={"platform": self.recipe.key, "url": page.url},
                 )
                 raise expired()
+            return
 
-        if login.ready_selector:
-            run = StepRun(page=page, params={"selector": login.ready_selector})
-            run.timeout_ms = min(self.settings.action_timeout_ms, 15_000)
-            if await find(run, required=False) is None:
+        # A slow page is not a dead session, and a fixed 15s selector wait
+        # could not tell them apart: the Railway container renders this class
+        # of app in 15-45s where a laptop takes 5-12s (measured 2026-09-01,
+        # when Wellfound "expired" on the container while perfectly logged in
+        # locally - intermittently, which sent everyone chasing cookies). So
+        # poll: the sign-in URL ends it as expired at once, the logged-in
+        # shell ends it as fine at once, and only the deadline - long enough
+        # that a live session cannot plausibly still be rendering - reads as
+        # expired.
+        deadline = asyncio.get_event_loop().time() + LOGIN_CHECK_SECONDS
+        bounced = 0
+        while True:
+            # Two consecutive sightings, because polling sees more than a
+            # single check ever did: a live session refreshing its token can
+            # pass through /login?after_sign_in=... on its way back to the
+            # dashboard, and reading that one frame as expiry is the false
+            # alarm the wellfound recipe already documents (2026-08-28).
+            if login.logged_out_pattern and re.search(login.logged_out_pattern, page.url):
+                bounced += 1
+                if bounced >= 2:
+                    log.info(
+                        "redirected to login",
+                        extra={"platform": self.recipe.key, "url": page.url},
+                    )
+                    raise expired()
+                await page.wait_for_timeout(2_000)
+            else:
+                bounced = 0
+            probe = StepRun(page=page, params={"selector": login.ready_selector})
+            probe.timeout_ms = 4_000
+            if await find(probe, required=False) is not None:
+                return
+            if asyncio.get_event_loop().time() >= deadline:
                 raise expired()
 
     def _first_goto(self) -> str | None:

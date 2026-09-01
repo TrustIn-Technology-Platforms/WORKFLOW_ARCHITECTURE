@@ -247,6 +247,15 @@ class BrowserRunner:
         # <session_dir>/<profile>.storage_state.json, then consume the flag so
         # a server-side cookie refresh is not overwritten on later runs.
         flag = directory / ".import-cookies"
+        # Consumed only after this context CLOSES cleanly, not here. Injected
+        # cookies live in memory until Chrome flushes them to the profile's
+        # (now Linux-keyed) store at close; unlinking the flag up front meant a
+        # run killed mid-flight - an OOM, a redeploy - lost the cookies AND the
+        # flag, and every later run opened a cookie-less profile until the next
+        # upload. A crashed run flushed nothing worth protecting, so re-running
+        # the injection is the correct recovery, and the flag staying put is
+        # what makes it happen.
+        cookies_injected = False
         if flag.exists():
             state_path = Path(settings.session_dir) / f"{profile}.storage_state.json"
             try:
@@ -255,6 +264,7 @@ class BrowserRunner:
                     cookies = state.get("cookies") or []
                     if cookies:
                         await context.add_cookies(cookies)
+                    cookies_injected = True
                     log.info(
                         "cookies imported into profile",
                         extra={"profile": profile, "cookies": len(cookies)},
@@ -269,11 +279,6 @@ class BrowserRunner:
                     "cookie import failed",
                     extra={"profile": profile, "error": str(exc)[:200]},
                 )
-            finally:
-                try:
-                    flag.unlink()
-                except OSError:
-                    pass
 
         tracing = False
         try:
@@ -305,6 +310,15 @@ class BrowserRunner:
                 except Exception:  # pragma: no cover
                     pass
             await context.close()
+            # The close flushed the injected cookies into the profile's own
+            # store, so the import is durable now and the flag has done its
+            # job. A run that died before reaching here keeps the flag, and
+            # the next run injects again - which is the recovery, not a bug.
+            if cookies_injected:
+                try:
+                    flag.unlink()
+                except OSError:
+                    pass
 
     @asynccontextmanager
     async def context(

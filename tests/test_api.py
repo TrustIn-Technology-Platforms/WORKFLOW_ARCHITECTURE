@@ -36,6 +36,7 @@ def test_health_reports_whether_each_platform_has_a_profile():
             "profile",
             "profile_age_days",
             "storage_state",
+            "storage_state_age_days",
             "cookie_import_pending",
         }
         assert isinstance(entry["profile"], bool)
@@ -62,4 +63,78 @@ def test_health_flags_a_freshly_uploaded_profile_as_pending(tmp_path, monkeypatc
         assert entry["cookie_import_pending"] is True
     finally:
         monkeypatch.delenv("BROWSER_PROFILE_DIR", raising=False)
+        get_settings.cache_clear()
+
+
+# ----------------------------------------------------------------------
+# failure artifacts, retrievable
+# ----------------------------------------------------------------------
+
+
+def _artifact_app(tmp_path, monkeypatch):
+    from app.config import get_settings
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "20260901-wellfound-failed.png").write_bytes(b"png-bytes")
+    (root / "loxo-criteria").mkdir()
+    (root / "loxo-criteria" / "backup.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("ARTIFACT_DIR", str(root))
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3cret")
+    get_settings.cache_clear()
+    return TestClient(create_app())
+
+
+def test_artifacts_need_the_secret(tmp_path, monkeypatch):
+    """Traces and screenshots can carry session data, so the listing is gated
+    exactly like the upload that put the sessions there."""
+    from app.config import get_settings
+
+    client = _artifact_app(tmp_path, monkeypatch)
+    try:
+        assert client.get("/admin/artifacts").status_code == 401
+        assert client.get(
+            "/admin/artifacts", headers={"X-Webhook-Secret": "wrong"}
+        ).status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
+def test_artifacts_list_and_download(tmp_path, monkeypatch):
+    """A server-side failure used to be diagnosed by guesswork, because the
+    screenshot it saved sat on a volume nobody could read. Now: list, pull,
+    look at what the browser actually saw."""
+    from app.config import get_settings
+
+    client = _artifact_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        listing = client.get("/admin/artifacts", headers=headers).json()
+        names = [a["name"] for a in listing["artifacts"]]
+        assert "20260901-wellfound-failed.png" in names
+        assert "loxo-criteria/backup.json" in names
+
+        got = client.get(
+            "/admin/artifacts/20260901-wellfound-failed.png", headers=headers
+        )
+        assert got.status_code == 200
+        assert got.content == b"png-bytes"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_artifact_paths_cannot_escape_the_directory(tmp_path, monkeypatch):
+    """The volume holds the session files right next door, so ../ must be a
+    404, never a file."""
+    from app.config import get_settings
+
+    client = _artifact_app(tmp_path, monkeypatch)
+    (tmp_path / "secret.txt").write_text("cookies", encoding="utf-8")
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        response = client.get("/admin/artifacts/../secret.txt", headers=headers)
+        assert response.status_code == 404
+        response = client.get("/admin/artifacts/..%2Fsecret.txt", headers=headers)
+        assert response.status_code == 404
+    finally:
         get_settings.cache_clear()

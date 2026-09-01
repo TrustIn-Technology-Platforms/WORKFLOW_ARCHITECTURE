@@ -827,3 +827,75 @@ def test_an_emails_only_document_without_a_jd_says_what_to_paste():
     ])
     assert any("emails only" in w for w in document.warnings)
     assert any("Client JD" in w for w in document.warnings)
+
+
+# ----------------------------------------------------------------------
+# a document with no formatting at all
+# ----------------------------------------------------------------------
+
+
+def test_an_unformatted_document_still_finds_its_sections():
+    """A real document arrived as 52 plain-body blocks - no Heading styles,
+    nothing bold - and produced zero email steps, failing all three sequence
+    platforms at once (2026-09-01). The section names were there; only the
+    formatting was missing. A bare line that entirely matches a known section
+    name is a heading in a document that has no other kind."""
+    document = parser.parse_document(
+        [
+            _block("LinkedIn Connection"),
+            _block("Hi {{first_name}},"),
+            _block("I am sourcing an engineer for a YC-backed company."),
+            _block("Subject"),
+            _block("Infrastructure Engineer / AWS / NYC / up to $250K"),
+            _block("Email 1"),
+            _block("Hi {{first_name}},"),
+            _block("The first email body."),
+            _block("Email 2"),
+            _block("The second email body."),
+            _block("InMail"),
+            _block("The InMail body."),
+            _block("Wellfound"),
+            _block("Engineer / AWS / NYC / up to $250K"),
+            _block("Board copy for Wellfound."),
+            _block("Job Description"),
+            _block("8+ years with Kubernetes. SOC 2 experience."),
+        ]
+    )
+    channels = [(e.channel, e.order) for e in document.emails]
+    assert channels == [("linkedin", 1), ("email", 1), ("email", 2), ("inmail", 1)]
+    assert all(e.subject for e in document.emails if e.is_email), "shared Subject applied"
+    assert document.client_jd and "Kubernetes" in document.client_jd
+    board = document.advert_for("wellfound")
+    assert "Board copy" in board.body_text
+    assert board.salary == "up to $250K"
+
+
+def test_promotion_by_meaning_never_runs_when_real_headings_exist():
+    """The same guard as the reader's bold rule: one real heading anywhere means
+    the author formats their sections, and a body line saying "Email 1" inside
+    prose is content, not a section break."""
+    document = parser.parse_document(
+        [
+            _block("Email 1", style="heading", level=2),
+            _block("Subject: Hello"),
+            _block("See Email 2 below for details."),
+            _block("Email 2"),
+            _block("This line and the one above are one email body."),
+        ]
+    )
+    assert len(document.emails) == 1
+    assert "Email 2" in document.emails[0].body_text
+
+
+def test_prose_lines_are_not_promoted_in_an_unformatted_document():
+    document = parser.parse_document(
+        [
+            _block("Email 1"),
+            _block("Subject: A role"),
+            _block("Email me at sohaib@trust-in.co.uk if this is interesting."),
+            _block("Touch base soon."),
+        ]
+    )
+    assert len(document.emails) == 1
+    body = document.emails[0].body_text
+    assert "Email me at" in body and "Touch base soon." in body

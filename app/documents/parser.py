@@ -205,9 +205,64 @@ _FIELD_LOOKUP = {
 _MAX_SUBJECT_CHARS = 200
 
 
+# A full line that is an email-step name and nothing else. The classifier's
+# `_EMAIL_HEADING` deliberately matches prefixes ("Email 1: intro" is a
+# heading); for promoting a bare body line the match must consume the whole
+# line, or prose like "Email me at..." becomes a section break.
+_FULL_LINE_EMAIL = re.compile(
+    r"""^\s*
+    (?:e[-\s]?mail|follow[\s-]?up|touch(?:point)?|step|sequence\s+step|outreach|message)
+    \s*[#:\-–]?\s*\d*\s*[:.]?\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _names_a_section(text: str) -> bool:
+    line = text.strip()
+    if not line or len(line) > 60:
+        return False
+    return bool(
+        _FULL_LINE_EMAIL.match(line)
+        or _channel_of(line)
+        or _platform_advert_of(line)
+        or _SHARED_SUBJECT_HEADING.match(line)
+        or _ADVERT_HEADING.match(line)
+        or _JD_HEADING.match(line)
+        or _LATE_JD_HEADING.match(line)
+    )
+
+
+def _promote_named_sections(blocks: list[Block]) -> None:
+    """Headings by meaning, for a document written with no formatting at all.
+
+    The reader promotes by *formatting* - fully-bold lines, `=== fenced ===`
+    lines - and had nothing to hold onto when a real document arrived as 52
+    plain-body blocks: "Email 1", "Subject" and "LinkedIn Connection" were
+    ordinary paragraphs, zero email steps came out, and all three sequence
+    platforms failed at once (2026-09-01). The section names are still there,
+    they are just unformatted - so, with the same guard as the reader (only
+    when the document has no real headings anywhere), a short line that
+    ENTIRELY matches a section name the classifier already knows becomes one.
+    """
+    if any(b.style == "heading" for b in blocks):
+        return
+    for block in blocks:
+        if block.style == "body" and _names_a_section(block.text):
+            block.style = "heading"
+            block.level = 2
+            block.html = f"<h2>{_escape(block.text.strip())}</h2>"
+
+
+def _escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
 def parse_document(blocks: list[Block]) -> ParsedDocument:
     """Blocks in, structure out. Never raises for messy input."""
     warnings: list[str] = []
+    _promote_named_sections(blocks)
     sections = split_sections(blocks)
 
     if not sections:

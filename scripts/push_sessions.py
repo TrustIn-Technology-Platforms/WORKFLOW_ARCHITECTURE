@@ -73,6 +73,16 @@ def main() -> None:
     url = (args.url or settings.service_url or "").strip()
     secret = (args.secret or settings.webhook_secret or "").strip()
 
+    # On the Linux target the storage_state export is the only cookie source -
+    # the profile's own store arrives OS-encrypted and unreadable - so shipping
+    # a fossil export next to a fresh profile deploys a logged-out platform.
+    # Say so before the upload, not after the failed row.
+    import time
+    for state in sorted(pathlib.Path(settings.session_dir).glob("*.storage_state.json")):
+        age_days = (time.time() - state.stat().st_mtime) / 86_400
+        marker = "  <-- STALE, run scripts/refresh_storage_state.py first" if age_days > 3 else ""
+        print(f"  {state.name}: exported {age_days:.1f}d ago{marker}")
+
     if not args.dry_run:
         # Named separately: "one of these is missing" sends people looking at
         # the wrong one.

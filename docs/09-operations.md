@@ -136,8 +136,24 @@ gated by the same `WEBHOOK_SECRET` as the webhook and unpacking with
 `filter="data"` so no archive member can escape the target directory. A 404 from
 it means the deployed image predates the endpoint - redeploy first.
 
-**Sessions expire** - noon weekly, Juicebox sooner - so both commands are a
-recurring chore, not a one-off. Until that is automated, running the trigger from
+**Reading a server-side failure.** Every failed run on the server saves a
+screenshot, the page DOM and a trace to the artifact dir on the volume — and
+they can be pulled down instead of guessed about:
+
+```bash
+python scripts/pull_artifacts.py --grep wellfound      # list matching
+python scripts/pull_artifacts.py --grep wellfound --pull 3
+```
+
+The receiving ends are `GET /admin/artifacts` and `GET /admin/artifacts/<name>`,
+gated by the same `WEBHOOK_SECRET`; path traversal out of the artifact dir is a
+404. Downloads land in `artifacts/from-server/`. A 404 on the listing itself
+means the deployed image predates the endpoint — redeploy first.
+
+**Sessions expire** - noon weekly, Juicebox sooner - and idle sessions expire
+fastest, so the refresh is automated: the Windows scheduled task
+**`TrustIn session keepalive`** (`scripts/register_keepalive.ps1`) exercises
+every profile and re-uploads the exports every 2 days. Running the trigger from
 a workstation uses the local profiles directly and needs no upload at all:
 
 ```bash
