@@ -46,7 +46,7 @@ def test_health_reports_whether_each_platform_has_a_profile():
 def test_health_flags_a_freshly_uploaded_profile_as_pending(tmp_path, monkeypatch):
     """The upload drops `.import-cookies`; the first browser launch consumes it.
     While it is there, the profile's cookies have not been injected yet."""
-    from app.config import Settings, get_settings
+    from app.config import get_settings
 
     profiles = tmp_path / "profiles"
     (profiles / "wellfound").mkdir(parents=True)

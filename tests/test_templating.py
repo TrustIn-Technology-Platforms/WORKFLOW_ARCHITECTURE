@@ -120,3 +120,35 @@ def test_years_min_ignores_numbers_that_are_not_years():
 
 def test_years_min_is_empty_when_the_advert_states_nothing():
     assert render("{{ a | years_min }}", {"a": "We move fast."}) == ""
+
+
+# ----------------------------------------------------------------------
+# {ai_intro} - noon's token, nobody else's
+# ----------------------------------------------------------------------
+
+
+def test_juicebox_removes_the_ai_intro_paragraph_entirely():
+    """Title-casing it would invent an {{Ai Intro}} field Juicebox rejects, and
+    leaving it sends '{{ai_intro}}' as the first line of a real email."""
+    from app.utils.templating import juicebox_tokens
+
+    html = ("<p>Hi {{first_name}},</p>\n<p>{{ai_intro}}</p>\n"
+            "<p>I am recruiting for a Series A startup.</p>")
+    out = juicebox_tokens(html)
+    assert "ai_intro" not in out.lower()
+    assert "Ai Intro" not in out
+    assert "<p>Hi {{First Name}},</p>" in out
+    assert "Series A startup" in out
+    assert "<p></p>" not in out, "the emptied paragraph goes with it"
+
+
+def test_drop_ai_intro_handles_the_inline_form_too():
+    from app.utils.templating import drop_ai_intro
+
+    assert drop_ai_intro("Hi {first_name}, {{ai_intro}} I saw your work.") == \
+        "Hi {first_name}, I saw your work."
+    assert drop_ai_intro("<p>{ai intro}</p><p>Body.</p>") == "<p>Body.</p>"
+
+
+def test_noon_keeps_ai_intro_as_its_own_single_brace_token():
+    assert render("{{ a | noon_tokens }}", {"a": "<p>{{ai_intro}}</p>"}) == "<p>{ai_intro}</p>"

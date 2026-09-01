@@ -247,7 +247,7 @@ def test_generator_vocabulary_and_merge_tripwire():
     ]
     # Nothing merged: exactly one greeting per step, and the ad went to the advert.
     for e in document.emails:
-        assert sum(1 for l in e.body_text.splitlines() if l.startswith("Hi ")) == 1
+        assert sum(1 for line in e.body_text.splitlines() if line.startswith("Hi ")) == 1
     assert document.advert is not None
     assert "About the role." in document.advert.body_text
     assert not any("merged" in w for w in document.warnings)
@@ -758,3 +758,72 @@ def test_a_leading_job_description_heading_is_still_the_advert():
     assert document.advert is not None
     assert "platform engineer" in document.advert.body_text
     assert not document.client_jd
+
+
+# ----------------------------------------------------------------------
+# a document whose only advert is a board section
+# ----------------------------------------------------------------------
+
+
+def _board_only_document(*, with_jd: bool):
+    blocks = [
+        _heading("Email 1 (Day 1)"),
+        _block("Subject: Platform Engineer"),
+        _block("Hi {{first_name}}, worth a chat?"),
+        _heading("Wellfound"),
+        _block("Anonymised board copy for Wellfound."),
+    ]
+    if with_jd:
+        blocks += [
+            _heading("Client JD"),
+            _block("8+ years of production Kubernetes. Manchester, no sponsorship."),
+        ]
+    return parser.parse_document(blocks)
+
+
+def test_a_wellfound_section_is_an_advert_not_an_absence():
+    """The shape that shipped on 2026-09-01: emails plus a `Wellfound` section,
+    no general advert. It was warned about as "emails only", which reads as
+    "Wellfound has nothing to post" - the opposite of the truth. The board
+    section posts; what such a document actually lacks is a job description for
+    the sourcing criteria, and the warning must say that instead.
+    """
+    document = _board_only_document(with_jd=False)
+
+    board = document.advert_for("wellfound")
+    assert board is not None
+    assert board.body_text == "Anonymised board copy for Wellfound."
+    assert not document.is_empty
+    assert not any("emails only" in w for w in document.warnings)
+    assert any("Client JD" in w for w in document.warnings)
+
+
+def test_a_board_section_plus_a_client_jd_is_a_complete_document():
+    """Everything has the text it needs, so nothing is worth a warning: the
+    board posts its section and the criteria read the JD.
+    """
+    document = _board_only_document(with_jd=True)
+
+    assert document.advert_for("wellfound") is not None
+    assert document.job_description.startswith("8+ years")
+    assert document.warnings == []
+
+
+def test_a_board_advert_alone_is_not_an_empty_document():
+    """A document holding only a `Wellfound` section still has something to
+    post; `is_empty` failing the row would be wrong twice over.
+    """
+    document = parser.parse_document([
+        _heading("Wellfound"),
+        _block("Anonymised board copy."),
+    ])
+    assert not document.is_empty
+
+
+def test_an_emails_only_document_without_a_jd_says_what_to_paste():
+    document = parser.parse_document([
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+    ])
+    assert any("emails only" in w for w in document.warnings)
+    assert any("Client JD" in w for w in document.warnings)

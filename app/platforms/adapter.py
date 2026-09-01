@@ -77,6 +77,23 @@ class RecipeAdapter:
                 finished_at=datetime.now(timezone.utc),
             )
 
+        # A job board posts the advert half of the document, and an emails-only
+        # document has none - the engine would otherwise open the form and type
+        # empty strings into it. Skipping is a decision the recruiter can act
+        # on; a half-filled draft with no title is a mystery they cannot.
+        if recipe.kind == "advert" and document.advert_for(recipe.key) is None:
+            return PostResult(
+                platform=recipe.key,
+                outcome=Outcome.SKIPPED,
+                detail=(
+                    f"{recipe.label} posts the advert half of the document, and "
+                    "this document has no advert - it is emails only. Add an "
+                    f"advert section (or an 'Ad - {recipe.label}' section) and "
+                    "re-run."
+                ),
+                finished_at=datetime.now(timezone.utc),
+            )
+
         # A recipe with no login block needs no session - that covers a public
         # destination and the local fixture the engine is tested against.
         needs_login = bool(recipe.login.url or recipe.login.ready_selector)

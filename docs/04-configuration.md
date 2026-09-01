@@ -133,6 +133,7 @@ and must never be committed.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `WEBHOOK_SECRET` | *(empty)* | Shared secret for the inbound webhook. Requests are rejected when it is set and does not match. |
+| `SERVICE_URL` | *(empty)* | The deployed service's public URL (`https://<app>.up.railway.app`). Read by `scripts/push_sessions.py` and the keep-alive to upload fresh sessions to the volume; unset means refreshes stay local. |
 | `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read only by `scripts/push_sessions.py`, so re-uploading expired logins needs nothing pasted on the command line. |
 | `PORT` | `8000` | Railway injects this. |
 | `POLL_LIMIT` | `10` | Maximum rows claimed per poll. Also caps the Notion query page size. |

@@ -154,7 +154,10 @@ class ParsedDocument:
 
     @property
     def is_empty(self) -> bool:
-        return self.advert is None and not self.emails
+        # A board advert counts: a document holding only a `Wellfound` section
+        # still has something to post, and failing the row as "empty" would be
+        # wrong twice over.
+        return self.advert is None and not self.emails and not self.platform_adverts
 
     def advert_for(self, platform: str) -> Advert | None:
         """The advert this platform should post: its own if the document wrote

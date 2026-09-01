@@ -32,6 +32,7 @@ import re
 from typing import TYPE_CHECKING
 
 from app.logging_conf import get_logger
+from app.utils.templating import drop_ai_intro
 from app.models import Advert, AuthenticationRequired, NotionRow, ParsedDocument, PlatformError
 from app.platforms.adapter import RecipeAdapter
 from app.platforms.engine import RunReport, _role_name
@@ -673,6 +674,10 @@ class LoxoAdapter(RecipeAdapter):
 
 
 def _translate(text: str, first_tok: str | None, company_tok: str | None) -> str:
+    # {ai_intro} is noon's token and only noon can expand it - through Loxo it
+    # goes out literally as the first line of a real email (seen on the live
+    # campaigns, 2026-09-01), so its paragraph is removed here.
+    text = drop_ai_intro(text)
     if first_tok:
         text = re.sub(r"\{\{?\s*first_name\s*\}?\}", first_tok, text)
     if company_tok:

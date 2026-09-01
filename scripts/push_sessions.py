@@ -124,7 +124,7 @@ def main() -> None:
         # Emphatic on purpose. The old wording led with the archive size, which
         # reads exactly like a completed upload - the size was reported back as
         # "uploaded" while the volume never received anything (2026-08-31).
-        print(f"\n*** DRY RUN - NOTHING WAS UPLOADED ***")
+        print("\n*** DRY RUN - NOTHING WAS UPLOADED ***")
         print(f"built an archive of {len(data) / 1_000_000:.1f} MB, {len(names)} entries")
         print("it would have contained:", ", ".join(tops))
         print("\nTo actually upload, run the same command WITHOUT --dry-run.")

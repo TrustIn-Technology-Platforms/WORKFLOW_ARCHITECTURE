@@ -391,10 +391,32 @@ def _classify(sections: list[Section]) -> _Classified:
         else:
             advert_sections.append(section)
 
-    if not advert_sections and not email_sections:
+    if not advert_sections and not email_sections and not platform_sections:
         warnings.append("Nothing in the document looked like an advert or an email.")
+    elif not advert_sections and platform_sections:
+        # A board section is a real advert - it posts to its board - so this
+        # document is not "emails only". What such a document can still lack is
+        # a text for the sourcing criteria: board copy is cut and anonymised,
+        # so nothing falls back to it, and only a Client JD fills the gap.
+        if not tail:
+            boards = ", ".join(sorted(platform_sections))
+            warnings.append(
+                f"No general advert section - the {boards} section posts to that "
+                "board, but the sourcing criteria have no job description to "
+                "read. Paste the client's JD under a 'Client JD' heading at the "
+                "end of the document."
+            )
     elif not advert_sections:
-        warnings.append("No advert section was found - the document is emails only.")
+        warnings.append(
+            "No advert section was found - the document is emails only."
+            + (
+                ""
+                if tail
+                else " The sourcing criteria have no job description to read "
+                "either; paste the client's JD under a 'Client JD' heading at "
+                "the end of the document."
+            )
+        )
     elif not seen_advert_heading and email_sections:
         warnings.append(
             "No explicit advert heading was found; the text before the first "

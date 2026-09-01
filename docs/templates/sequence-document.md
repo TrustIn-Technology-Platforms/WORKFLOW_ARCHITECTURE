@@ -4,8 +4,8 @@
 > AI generator the prompt block at the bottom and documents come out right.
 > **Audience** Whoever writes or generates sequence documents, and whoever
 > maintains the parser.
-> **Status** Matches the parser as of 2026-08-28 (fenced headings, generator
-> vocabulary, merge tripwire).
+> **Status** Matches the parser as of 2026-09-01 (board-advert sections per
+> D-019, `Client JD`, fenced headings, generator vocabulary, merge tripwire).
 
 ## The one rule that matters
 
@@ -45,9 +45,6 @@ Email 3 (Day 6)
 Hi {{first_name}},
 <body>
 
-Wellfound (Day 2)
-<message posted on Wellfound>
-
 InMail (Day 5)
 Subject: <InMail subject>
 <InMail body>
@@ -59,8 +56,10 @@ Ad · LinkedIn
 Title: <advert title>
 <advert copy>
 
-Ad · Wellfound
-<advert copy>
+Wellfound
+<the Wellfound advert — cut and anonymised for that board. `Ad · Wellfound`
+means the same thing. This is an ADVERT, not a message: a section named after
+a job board is content FOR that board (D-019).>
 
 Client JD
 <the client's job description, pasted verbatim — last thing in the document>
@@ -72,9 +71,13 @@ Rules the parser applies:
   heading sets that step's delay in days; without it, follow-ups default to
   3 days.
 - **Emails first, channels after, ads last** — the emails are what every
-  platform posts today; Wellfound/InMail/Connect are parsed and typed by
-  channel for the platforms that take them; `Ad · <site>` sections become the
-  job advert and are never pasted into a message.
+  platform posts today; InMail/Connect are parsed and typed by channel for the
+  platforms that take them; `Ad · <site>` sections become the job advert and
+  are never pasted into a message.
+- **A `Wellfound` heading is that board's advert, never a message.** The
+  section under it is posted as the Wellfound job ad, exactly as written
+  (D-019). There is no Wellfound message step — Wellfound outreach is not a
+  channel the automation sends through.
 - **`Subject:`** on the first line of a message sets that message's subject.
   A standalone `Subject` heading before Email 1 sets one shared subject for
   all emails instead.
@@ -83,8 +86,8 @@ Rules the parser applies:
   fill or delete such tokens before the document is attached to a row.
 - **One message per section.** Never two greetings under one heading.
 - Recognised channel headings: `Email N`, `InMail`, `LinkedIn` /
-  `LinkedIn Connection` / `Connect`, `Wellfound`. Trailing notes in
-  parentheses or after `·` are fine: `InMail (Day 5)`, `Email 2 · Deeper`.
+  `LinkedIn Connection` / `Connect`. Trailing notes in parentheses or after
+  `·` are fine: `InMail (Day 5)`, `Email 2 · Deeper`.
 
 ## `Client JD` — the section the search reads
 
@@ -126,8 +129,9 @@ Format the output exactly as follows, as a Word document:
 - Each message under its own bold heading, one message per heading.
 - Headings, in this order and with these exact first words:
   "Email 1 (Day 1)", "Email 2 (Day N)", "Email 3 (Day N)",
-  then optionally "Wellfound (Day N)", "InMail (Day N)", "Connect (Day N)",
-  then job adverts under "Ad · LinkedIn", "Ad · Wellfound", "Ad · Eng Sites",
+  then optionally "InMail (Day N)" and "Connect (Day N)",
+  then job adverts under "Ad · LinkedIn", "Ad · Wellfound", "Ad · Eng Sites"
+  (a bare "Wellfound" heading is that board's advert, never a message),
   and last of all "Client JD" holding the client's job description verbatim.
 - Email 1 starts with a line "Subject: <subject>". Emails 2 and 3 have no
   subject (they reply in the same thread). InMail has its own Subject: line.

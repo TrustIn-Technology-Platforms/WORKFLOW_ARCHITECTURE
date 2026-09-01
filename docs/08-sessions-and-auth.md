@@ -91,6 +91,32 @@ predicts:
 
 Re-capturing is the fix, and it is the same command as the first capture.
 
+### Keeping sessions alive — the schedule (2026-09-01)
+
+There is no setting, ours or theirs, that makes a session last three months by
+decree: the platform ends it server-side. What actually determines the lifetime
+is **use**. A session that gets visited has its cookies rotated and its clock
+reset; an idle one times out (noon's dies after roughly a week of disuse). So
+the way to make logins last months is to never leave them idle:
+
+- `scripts/keepalive.ps1` opens every saved profile headless, exercises the
+  session, re-exports the cookies, and pushes them to the deployed volume when
+  `SERVICE_URL` is set in `.env`. It logs to `artifacts/keepalive.log`.
+- `scripts/register_keepalive.ps1` registers it as the Windows scheduled task
+  **`TrustIn session keepalive`** — every 2 days at 09:30, catching up on the
+  next wake when the machine was off. Registered on Sohaib's machine
+  2026-09-01. Remove with
+  `Unregister-ScheduledTask -TaskName "TrustIn session keepalive"`.
+- A platform that has already been logged out is named in the log with the
+  `login` command to run, its dead cookies are **not** exported (the volume's
+  copy might still be alive), and the run exits non-zero so the Task Scheduler
+  history shows it red. The healthy platforms still refresh and push.
+
+Two copies of every session exist — the laptop's profile and the Railway
+volume's — and they age independently. A run that fails on Railway with
+"is not logged in" while the same platform works locally means the *volume's*
+copy is stale: the fix is a refresh + push (one keepalive run), not a re-login.
+
 ### Try the saved cookies before re-capturing
 
 A profile can look logged out while the login behind it is perfectly alive, and

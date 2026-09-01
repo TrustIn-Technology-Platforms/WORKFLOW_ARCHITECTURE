@@ -285,14 +285,33 @@ def _juicebox_label(name: str) -> str:
     return "{{" + label + "}}"
 
 
+# noon expands {ai_intro} into a personalised opening line per candidate. No
+# other platform can: sent through Loxo it goes out literally, and Juicebox
+# would render it as a {{Ai Intro}} field it does not have — either way the
+# first line of a real email to a real candidate. In the documents it always
+# stands as its own paragraph, so for those platforms the whole paragraph goes;
+# the inline pattern is the fallback for a token written mid-sentence.
+_AI_INTRO_PARAGRAPH = re.compile(
+    r"<p[^>]*>\s*\{\{?\s*ai[ _-]?intro\s*\}?\}\s*</p>\s*", re.IGNORECASE
+)
+_AI_INTRO_INLINE = re.compile(r"\{\{?\s*ai[ _-]?intro\s*\}?\}[ \t]*", re.IGNORECASE)
+
+
+def drop_ai_intro(value: Any) -> str:
+    """Remove the noon-only {ai_intro} token for platforms that cannot expand it."""
+    text = _AI_INTRO_PARAGRAPH.sub("", _as_text(value))
+    return _AI_INTRO_INLINE.sub("", text)
+
+
 def juicebox_tokens(value: Any) -> str:
     """Rewrite personalisation tokens into Juicebox's {{Title Case}} form.
 
     Runs the double-brace pass first; its output ({{First Name}}) carries a
     space, so the single-brace pass — which matches only brace-free names — will
-    not touch it and cannot double-convert.
+    not touch it and cannot double-convert. The noon-only {ai_intro} is removed
+    before either pass: Title-casing it would invent a field Juicebox rejects.
     """
-    text = _as_text(value)
+    text = drop_ai_intro(value)
     text = _DOUBLE_TOKEN.sub(lambda m: _juicebox_label(m.group(1)), text)
     text = _SINGLE_TOKEN.sub(lambda m: _juicebox_label(m.group(1)), text)
     return text

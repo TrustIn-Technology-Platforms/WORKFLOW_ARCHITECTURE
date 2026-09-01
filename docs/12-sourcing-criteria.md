@@ -209,6 +209,52 @@ Rules, all of them now enforced by the parser:
   on the platform. With a `Client JD` present the document wins — that is the
   whole point of the row being the trigger.
 
+## Found on the first full production runs (2026-09-01, Sohaib's review)
+
+### The noon-only `{ai_intro}` token leaked into Loxo and Juicebox — **fixed**
+
+The documents open email 1 and 2 with a `{{ai_intro}}` paragraph. Only noon can
+expand it (its `{ai_intro}` writes a personalised opening line per candidate);
+Loxo pasted it literally and Juicebox would have Title-cased it into an
+`{{Ai Intro}}` field it does not have. `drop_ai_intro` now removes the token —
+paragraph and all — inside `juicebox_tokens` and Loxo's `_translate`; noon keeps
+converting it to its single-brace form. Pinned in `tests/test_templating.py`.
+
+### Juicebox has no sourcing setup at all — **open, the biggest remaining gap**
+
+What exists today writes criteria onto an *existing* search named by the
+`Juicebox Search` column, and skips without one. What a recruiter actually does,
+per Sohaib: **create a new project, name it, paste the JD** (Juicebox's own AI
+then does its pass), **then fill the filters — similar job titles, skills,
+location.** None of that surface has ever been opened by the automation: the
+project-creation wizard is unmapped, and the titles/skills/location filters are
+the same criteria-vs-filters split as everywhere else (the automation writes
+free-text criteria, not the structured filters that decide the pool).
+
+Next step is one supervised session on a throwaway project to map the wizard:
+what creation autosaves (noon's lesson: assume everything after the first
+screen), where the JD paste lands, and whether titles/skills/location are free
+text or taxonomy autocompletes.
+
+### Loxo sourcing needs the job to already exist — **by design, now needs a decision**
+
+The criteria writer attaches to an existing job — the `Loxo Job` column, else an
+exact hiring-company match — and **skips with a note on the row** when there is
+no match. That is deliberate (attach, don't create: criteria on the wrong
+client's job would surface nowhere). Consequence Sohaib hit: post a role whose
+job was never created in Loxo and there is no sourcing campaign to see — the
+outreach campaign posts, the criteria half quietly skips.
+
+Two ways forward, one to pick:
+
+1. **Keep attach-only** and make the miss loud: the skip note already lands on
+   the row; recruiters create the job in Loxo as they do today, fill `Loxo Job`,
+   re-run.
+2. **Create the job when missing.** The New Job form was probed read-only on
+   2026-08-31 (`artifacts/loxo-skills/50-new-job-form.json`); the hard part is
+   known: the Role Title box is bound to Loxo's title taxonomy and discards free
+   text on blur, so a document title cannot be typed in verbatim.
+
 ## Order of work
 
 | # | Step | State |

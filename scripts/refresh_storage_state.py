@@ -10,6 +10,18 @@ session is exercised (and refreshed if the platform rotates it), and writes
 Run this right before scripts/push_sessions.py. The server injects these
 cookies into the imported profile on its first launch.
 
+Exercising the session is also what keeps it alive. These platforms end
+sessions server-side - there is no local setting that makes one last longer -
+but a session that is *used* gets its cookies rotated and extended, where an
+idle one quietly times out (noon's lasts about a week idle). So this doubles as
+the keep-alive: run it on a schedule (scripts/keepalive.ps1 registers one) and
+the logins effectively last until the platform forces a real re-auth.
+
+A profile that has already been logged out is reported loudly and its dead
+cookies are not exported - pushing them would overwrite a volume copy that
+might still work. The exit code is non-zero so a scheduled run shows as failed
+instead of green.
+
 Usage:
     python scripts/refresh_storage_state.py            # all platforms with a profile
     python scripts/refresh_storage_state.py loxo noon  # just these
@@ -20,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -30,19 +43,20 @@ from app.platforms.recipe import load_recipes
 from app.sessions.store import SessionStore
 
 
-async def refresh(key: str) -> bool:
+async def refresh(key: str) -> bool | None:
+    """True = exported, False = the session needs a person, None = nothing to do."""
     settings = get_settings()
     recipes = load_recipes(settings)
     recipe = recipes.get(key)
     if recipe is None:
         print(f"  {key}: no recipe, skipped")
-        return False
+        return None
 
     store = SessionStore(settings)
     if not store.has_profile(key):
         print(f"  {key}: no verified profile locally, skipped "
               f"(run: python -m app.cli login {key})")
-        return False
+        return None
 
     url = recipe.login.url or "about:blank"
     runner = BrowserRunner(settings, headless=True)
@@ -51,12 +65,22 @@ async def refresh(key: str) -> bool:
         async with runner.profile_context(
             key, trace_name=f"{key}-refresh", channel=recipe.browser_channel
         ) as (context, page):
+            landed = ""
             try:
                 await page.goto(url, wait_until="commit", timeout=60_000)
                 # Give the app time to boot and rotate/refresh its cookies.
                 await page.wait_for_timeout(12_000)
+                landed = page.url
             except Exception as exc:
                 print(f"  {key}: page load was rough ({str(exc)[:80]}); exporting anyway")
+            # Bounced to the sign-in page means the session is already dead.
+            # Say so and keep the old export - dead cookies pushed to the
+            # volume would overwrite a copy that might still work there.
+            pattern = recipe.login.logged_out_pattern
+            if pattern and landed and re.search(pattern, landed):
+                print(f"  {key}: LOGGED OUT (landed on {landed}). "
+                      f"Run: python -m app.cli login {key}")
+                return False
             state = await context.storage_state()
     finally:
         await runner.stop()
