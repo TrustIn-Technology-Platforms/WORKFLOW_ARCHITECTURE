@@ -138,3 +138,45 @@ def test_tags_with_no_value_skips_instead_of_failing(page_url):
         )
     )
     assert state["chips"] == []
+
+
+# ----------------------------------------------------------------------
+# goto_until - navigation proven, not trusted
+# ----------------------------------------------------------------------
+
+
+async def _goto_until(page_url: str, params: dict) -> str:
+    reset_settings_cache()
+    settings = get_settings()
+    async with BrowserRunner(settings, headless=True) as runner:
+        async with runner.context() as (_context, page):
+            from app.platforms.actions import action_goto_until
+
+            await action_goto_until(StepRun(page=page, params=params, timeout_ms=3_000))
+            return page.url
+
+
+def test_goto_until_returns_once_the_page_proves_out(page_url):
+    landed = asyncio.run(
+        _goto_until(page_url, {"url": page_url, "selector": "#role-form"})
+    )
+    assert landed.startswith(page_url.rsplit("/", 1)[0])
+
+
+def test_goto_until_names_where_the_app_kept_landing(page_url):
+    """The Wellfound case: logged in, no error, and the wanted form nowhere on
+    the page because the SPA answered the deep link with an interstitial. The
+    failure must say where it actually landed, not just that a selector timed
+    out - that one line is the difference between reading the artifact and
+    re-guessing."""
+    import pytest
+
+    from app.models import PlatformError
+
+    with pytest.raises(PlatformError, match="kept landing"):
+        asyncio.run(
+            _goto_until(
+                page_url,
+                {"url": page_url, "selector": "#not-on-this-page", "attempts": 2},
+            )
+        )

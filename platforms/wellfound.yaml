@@ -52,18 +52,26 @@ defaults:
   visa_sponsorship: "false"
 
 steps:
-  - action: goto
+  # Navigation is proven, not trusted: Wellfound answered a fresh session's
+  # first /recruit/jobs/new with a "Hand-picked for you" candidate interstitial
+  # - logged in, no error, and the New Job form nowhere on the page (Railway,
+  # 2026-09-01, failure artifact 20260901-180418). A second navigation goes
+  # through. The 60s-per-attempt budget also covers the page being genuinely
+  # heavy: it renders a picker listing every draft on the account (57 at the
+  # time) before the form, ~12s locally and 45s+ on the container - pruning old
+  # test drafts is the real cure for that half.
+  - action: goto_until
     url: "{{ base_url }}/recruit/jobs/new"
-    description: the New Job Posting form (nothing is created until Publish)
-
-  # The New Job page renders a "start from a previous posting" picker listing
-  # every draft on the account before the form itself. With 57 drafts on the
-  # books it is a heavy page, and on the Railway container it blew through 45s
-  # while rendering fine locally in ~12s (2026-09-01). The real cure is pruning
-  # the old test drafts; the timeout covers the container being slow anyway.
-  - action: wait_for
     selector: "#form-input--title"
-    timeout_ms: 120000
+    attempts: 3
+    timeout_ms: 60000
+    description: the New Job Posting form, retried past Wellfound's interstitials
+
+  # A fresh session gets the consent banner; it overlays the bottom of the form
+  # and would swallow clicks on anything under it.
+  - action: dismiss
+    selector: "button:has-text('Agree & Proceed')"
+    description: cookie banner, when Wellfound shows one to a fresh session
 
   # --- 1. Job details -------------------------------------------------------
   # TrustIn's live titles already read "Role - Company type / Stack / Salary",

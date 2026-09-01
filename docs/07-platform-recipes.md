@@ -174,6 +174,7 @@ Every action takes `selector` unless noted. Common optional keys:
 | Action | Required keys | Does |
 |--------|---------------|------|
 | `goto` | `url` | Navigate. `wait_until` defaults to `domcontentloaded` |
+| `goto_until` | `url`, `selector` | Navigate and prove the right page rendered, renavigating when it did not (`attempts`, default 3; `timeout_ms` per attempt). For SPAs that answer a deep link with an interstitial - Wellfound's "Hand-picked for you" page hijacked `/recruit/jobs/new` on a fresh session (2026-09-01). The failure names where the app kept landing. |
 | `click` | `selector` | Click, scrolling into view first. `force: true` skips actionability checks, for targets under a floating panel or only fully visible on hover |
 | `dismiss` | `selector` | Click if present, **never fail**. For cookie banners and onboarding tours |
 | `fill` | `selector`, `value` | Clear, then write into a plain input |

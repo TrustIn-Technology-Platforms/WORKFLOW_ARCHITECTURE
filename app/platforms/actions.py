@@ -138,6 +138,49 @@ async def action_goto(run: StepRun) -> None:
     await run.page.goto(url, wait_until=wait_until)
 
 
+async def action_goto_until(run: StepRun) -> None:
+    """Navigate, then prove the right page rendered - renavigating when it
+    did not.
+
+    A plain `goto` trusts the SPA to honour the deep link, and an SPA can
+    answer with something else entirely: Wellfound routed a fresh session's
+    first /recruit/jobs/new to a "Hand-picked for you" candidate interstitial
+    - logged in, correct-looking run, and the New Job form nowhere on the page
+    (Railway, 2026-09-01; the failure artifact shows it plainly). Loxo's
+    "Try again" card on cold deep links is the same disease. Navigating again
+    goes through, so arrival is retried rather than assumed, and the failure
+    message names where the app kept landing instead.
+    """
+    url = run.text("url")
+    if not url:
+        raise PlatformError("goto_until needs a url")
+    selectors = _selector_list(run)
+    if not selectors:
+        raise PlatformError("goto_until needs a selector that proves arrival")
+    attempts = max(1, int(run.get("attempts", 3) or 3))
+    wait_until = run.text("wait_until", "domcontentloaded")
+
+    landed = ""
+    for attempt in range(1, attempts + 1):
+        await run.page.goto(url, wait_until=wait_until)
+        try:
+            await resolve_locator(run, selectors[0]).first.wait_for(
+                state="visible", timeout=run.timeout_ms
+            )
+            return
+        except Exception:
+            landed = run.page.url
+            log.info(
+                "goto_until: page did not prove out",
+                extra={"attempt": attempt, "wanted": url, "landed": landed},
+            )
+    raise PlatformError(
+        f"{url} never showed {selectors[0]!r} after {attempts} navigation(s) - "
+        f"the app kept landing on {landed}. Open that URL by hand to see what "
+        "it is showing instead."
+    )
+
+
 async def action_click(run: StepRun) -> None:
     locator = await find(run, required=not run.get("optional", False))
     if locator is None:
@@ -687,6 +730,7 @@ async def action_screenshot(run: StepRun) -> None:
 
 ACTIONS: dict[str, ActionSpec] = {
     "goto": ActionSpec(action_goto, ("url",), ("url",), needs_selector=False),
+    "goto_until": ActionSpec(action_goto_until, ("url", "selector"), ("url",)),
     "click": ActionSpec(action_click, ("selector",)),
     "dismiss": ActionSpec(action_dismiss, ("selector",)),
     "press": ActionSpec(action_press, ("key",), ("key",), needs_selector=False),
