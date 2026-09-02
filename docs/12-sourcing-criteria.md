@@ -220,7 +220,19 @@ Loxo pasted it literally and Juicebox would have Title-cased it into an
 paragraph and all — inside `juicebox_tokens` and Loxo's `_translate`; noon keeps
 converting it to its single-brace form. Pinned in `tests/test_templating.py`.
 
-### Juicebox has no sourcing setup at all — **open, the biggest remaining gap**
+### Juicebox sourcing - **BUILT AND PROVEN 2026-09-02**
+
+The full recruiter flow is now `juicebox_sourcing.py`, wired into the adapter
+after the sequence: **create a project** (instant, then renamed by
+double-click), **paste the JD** (the Paste JD dialog; Juicebox's AI builds and
+names the search), then **fill the filters its AI leaves thin** - job titles,
+location, skills or keywords - through the MUI editor, saved with Save Changes
+and run. Proven end to end by the module itself on the throwaway project
+"ZZ TEST 2 DELETE ME": 7 titles + New York + 7 skills added on top of the AI's
+own, zero refusals, verified by reload. On the first test search the filters
+took matches from 45k ("globally") to ~1k.
+
+### Previously: Juicebox has no sourcing setup at all — **open, the biggest remaining gap**
 
 What exists today writes criteria onto an *existing* search named by the
 `Juicebox Search` column, and skips without one. What a recruiter actually does,

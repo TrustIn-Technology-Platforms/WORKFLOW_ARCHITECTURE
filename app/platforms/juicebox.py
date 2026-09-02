@@ -37,7 +37,7 @@ from app.models import (
     ParsedDocument,
     PlatformError,
 )
-from app.platforms.engine import RunReport
+from app.platforms.engine import RunReport, _role_name
 from app.utils.templating import juicebox_spacing, juicebox_tokens
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -210,7 +210,69 @@ class JuiceboxAdapter(RecipeAdapter):
 
         if self.settings.criteria_enabled:
             await self._set_criteria(page, document, row, report)
+            await self._set_up_sourcing(page, document, row, report)
         return report
+
+    async def _set_up_sourcing(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        row: NotionRow | None,
+        report: RunReport,
+    ) -> None:
+        """A sourcing project for the role: JD search plus real filters.
+
+        This is the half Sohaib found missing entirely on 2026-09-01 ("not even
+        20 percent configured"): a project, the JD pasted so Juicebox's AI
+        builds the search, then the filters its AI leaves thin - titles,
+        location, skills. Same containment as everywhere else: a sourcing
+        failure is a warning on a run whose sequence already saved.
+        """
+        from app.platforms.juicebox_sourcing import set_up_sourcing
+        from app.platforms.targeting_ai import draft_targeting
+
+        targeting = await draft_targeting(
+            document.job_description,
+            role_title=_role_name(document),
+            settings=self.settings,
+        )
+        if not targeting.similar_titles and not targeting.skills:
+            report.warnings.append(
+                "sourcing skipped: no titles or skills could be drafted "
+                "(is ANTHROPIC_API_KEY set here?)"
+            )
+            return
+        advert = document.advert
+        location = advert.location if advert and advert.location else None
+        if self.dry_run:
+            report.warnings.append(
+                f"dry run: would create a sourcing project with "
+                f"{len(targeting.similar_titles)} title(s), "
+                f"{len(targeting.skills)} skill(s)"
+                + (f", location {location}" if location else "")
+            )
+            return
+
+        try:
+            result = await set_up_sourcing(
+                page,
+                project_name=_role_name(document),
+                jd=document.job_description,
+                titles=targeting.similar_titles,
+                skills=targeting.skills,
+                location=location,
+            )
+        except (PlatformError, AuthenticationRequired) as exc:
+            log.warning("juicebox sourcing not set up", extra={"error": str(exc)[:200]})
+            report.warnings.append(f"sourcing not set up: {exc}")
+            return
+        report.warnings.extend(
+            f"sourcing: {section} refused {', '.join(values)}"
+            for section, values in result.refused.items() if values
+        )
+        report.warnings.append(
+            f"sourcing search: {result.search_url} ({result.summary})"
+        )
 
     async def _set_criteria(
         self,
