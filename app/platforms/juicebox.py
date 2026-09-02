@@ -231,9 +231,14 @@ class JuiceboxAdapter(RecipeAdapter):
         from app.platforms.juicebox_sourcing import set_up_sourcing
         from app.platforms.targeting_ai import draft_targeting
 
+        advert = document.advert or Advert(title="", body_text="", body_html="")
+        name = _role_name(
+            document.source_name, row, advert,
+            sorted(document.emails, key=lambda e: e.order),
+        )
         targeting = await draft_targeting(
             document.job_description,
-            role_title=_role_name(document),
+            role_title=name,
             settings=self.settings,
         )
         if not targeting.similar_titles and not targeting.skills:
@@ -256,13 +261,14 @@ class JuiceboxAdapter(RecipeAdapter):
         try:
             result = await set_up_sourcing(
                 page,
-                project_name=_role_name(document),
+                project_name=name,
                 jd=document.job_description,
                 titles=targeting.similar_titles,
                 skills=targeting.skills,
                 location=location,
             )
-        except (PlatformError, AuthenticationRequired) as exc:
+        except Exception as exc:  # noqa: BLE001 - a sourcing failure is a warning,
+            # never a lost run whose sequence already saved.
             log.warning("juicebox sourcing not set up", extra={"error": str(exc)[:200]})
             report.warnings.append(f"sourcing not set up: {exc}")
             return

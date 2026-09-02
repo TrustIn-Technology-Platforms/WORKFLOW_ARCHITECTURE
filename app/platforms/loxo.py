@@ -156,13 +156,14 @@ class LoxoAdapter(RecipeAdapter):
             job_id = await self._criteria_target(page, document, row, report)
             if job_id:
                 await self._set_criteria(page, document, report, job_id)
-                await self._configure_source(page, document, report, job_id)
+                await self._configure_source(page, document, row, report, job_id)
         return report
 
     async def _configure_source(
         self,
         page: "Page",
         document: ParsedDocument,
+        row: NotionRow | None,
         report: RunReport,
         job_id: str,
     ) -> None:
@@ -177,9 +178,14 @@ class LoxoAdapter(RecipeAdapter):
         from app.platforms.loxo_source import configure_source
         from app.platforms.targeting_ai import draft_targeting
 
+        advert = document.advert or Advert(title="", body_text="", body_html="")
+        name = _role_name(
+            document.source_name, row, advert,
+            sorted(document.emails, key=lambda e: e.order),
+        )
         targeting = await draft_targeting(
             document.job_description,
-            role_title=_role_name(document),
+            role_title=name,
             settings=self.settings,
         )
         if not targeting.similar_titles and not targeting.skills:
@@ -201,11 +207,13 @@ class LoxoAdapter(RecipeAdapter):
                 job_id,
                 titles=targeting.similar_titles,
                 skills=targeting.skills,
-                search_name=f"{_role_name(document)} - auto"[:80],
+                search_name=f"{name} - auto"[:80],
                 base_url=self.recipe.defaults.get("base_url", "https://app.loxo.co"),
                 agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
             )
-        except (PlatformError, AuthenticationRequired) as exc:
+        except Exception as exc:  # noqa: BLE001 - a Source failure is a warning,
+            # never a lost run: the TypeError of 2026-09-02 failed a row whose
+            # three platforms had already posted.
             log.warning(
                 "loxo source not configured",
                 extra={"job": job_id, "error": str(exc)[:200]},
