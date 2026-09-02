@@ -236,6 +236,15 @@ what creation autosaves (noon's lesson: assume everything after the first
 screen), where the JD paste lands, and whether titles/skills/location are free
 text or taxonomy autocompletes.
 
+### Loxo's Source filters - similar titles and skills - **BUILT 2026-09-02**
+
+The gap Sohaib reported ("not even 20 percent, no skills no titles") is closed
+for the Source screen: `loxo_source.py` writes Claude-drafted similar titles
+and skills onto `/jobs/<id>/source` and saves them as a named, team-shared
+search, wired into the Loxo run after the criteria. Proven live on job 3658508,
+including the reload-and-restore round trip. (The Longlist Agent's own
+titles/skills panel remains the separate, still-unopened surface.)
+
 ### Loxo sourcing needs the job to already exist — **by design, now needs a decision**
 
 The criteria writer attaches to an existing job — the `Loxo Job` column, else an

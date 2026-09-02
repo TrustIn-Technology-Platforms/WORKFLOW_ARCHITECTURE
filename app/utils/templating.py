@@ -294,13 +294,49 @@ def _juicebox_label(name: str) -> str:
 _AI_INTRO_PARAGRAPH = re.compile(
     r"<p[^>]*>\s*\{\{?\s*ai[ _-]?intro\s*\}?\}\s*</p>\s*", re.IGNORECASE
 )
+# A plain-text line that is the token and nothing else, with the blank line
+# under it. Removing just the token left its blank lines behind, and Loxo -
+# which writes body_text, not HTML - sent emails 1 and 2 with three empty lines
+# between the greeting and the first paragraph (seen live 2026-09-01).
+_AI_INTRO_TEXT_LINE = re.compile(
+    r"^[ \t]*\{\{?\s*ai[ _-]?intro\s*\}?\}[ \t]*\r?\n(?:[ \t]*\r?\n)*",
+    re.IGNORECASE | re.MULTILINE,
+)
 _AI_INTRO_INLINE = re.compile(r"\{\{?\s*ai[ _-]?intro\s*\}?\}[ \t]*", re.IGNORECASE)
+_EXTRA_BLANK_LINES = re.compile(r"\n[ \t]*\n(?:[ \t]*\n)+")
 
 
 def drop_ai_intro(value: Any) -> str:
-    """Remove the noon-only {ai_intro} token for platforms that cannot expand it."""
+    """Remove the noon-only {ai_intro} token for platforms that cannot expand it.
+
+    Whole-line removal, in both shapes the bodies travel in: the HTML paragraph
+    (`<p>{{ai_intro}}</p>`) and the plain-text line. The inline pattern is the
+    fallback for a token written mid-sentence, and any blank-line pileup the
+    removal leaves is collapsed to a single blank line.
+    """
     text = _AI_INTRO_PARAGRAPH.sub("", _as_text(value))
-    return _AI_INTRO_INLINE.sub("", text)
+    text = _AI_INTRO_TEXT_LINE.sub("", text)
+    text = _AI_INTRO_INLINE.sub("", text)
+    return _EXTRA_BLANK_LINES.sub("\n\n", text)
+
+
+_P_JOINT = re.compile(r"</p>\s*<p([^>]*)>", re.IGNORECASE)
+
+
+def juicebox_spacing(value: Any) -> str:
+    """An explicit blank line between paragraphs, the way a person types one.
+
+    Juicebox's TinyMCE renders <p> blocks with no margins, so adjacent
+    paragraphs from the docx reader arrive glued together - "Hi {{First Name}},"
+    sitting directly on the next line (seen live, 2026-09-01). A person writing
+    there makes space by pressing Enter twice, which leaves an empty <p><br></p>
+    between blocks; this inserts the same. Plain-text bodies pass through
+    untouched - their newlines already say what they mean.
+    """
+    text = _as_text(value)
+    if "</p>" not in text.lower():
+        return text
+    return _P_JOINT.sub(r"</p><p><br></p><p\1>", text)
 
 
 def juicebox_tokens(value: Any) -> str:

@@ -152,3 +152,30 @@ def test_drop_ai_intro_handles_the_inline_form_too():
 
 def test_noon_keeps_ai_intro_as_its_own_single_brace_token():
     assert render("{{ a | noon_tokens }}", {"a": "<p>{{ai_intro}}</p>"}) == "<p>{ai_intro}</p>"
+
+
+def test_drop_ai_intro_leaves_no_blank_line_pileup_in_plain_text():
+    """Loxo writes body_text. Removing just the token left its blank lines
+    behind - three empty lines between the greeting and the first paragraph on
+    the live campaign (2026-09-01)."""
+    from app.utils.templating import drop_ai_intro
+
+    text = "Hi {first_name},\n\n{{ai_intro}}\n\nI am recruiting for a startup."
+    assert drop_ai_intro(text) == "Hi {first_name},\n\nI am recruiting for a startup."
+
+
+def test_juicebox_spacing_inserts_a_visible_blank_line_between_paragraphs():
+    """Juicebox's TinyMCE renders <p> with no margins, so the blank line a
+    person would type has to exist as an element."""
+    from app.utils.templating import juicebox_spacing
+
+    html = "<p>Hi {{First Name}},</p>\n<p>I am recruiting.</p>\n<p>Interested?</p>"
+    out = juicebox_spacing(html)
+    assert out == ("<p>Hi {{First Name}},</p><p><br></p>"
+                   "<p>I am recruiting.</p><p><br></p><p>Interested?</p>")
+
+
+def test_juicebox_spacing_leaves_plain_text_alone():
+    from app.utils.templating import juicebox_spacing
+
+    assert juicebox_spacing("Hi,\n\nBody.") == "Hi,\n\nBody."

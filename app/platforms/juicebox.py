@@ -38,7 +38,7 @@ from app.models import (
     PlatformError,
 )
 from app.platforms.engine import RunReport
-from app.utils.templating import juicebox_tokens
+from app.utils.templating import juicebox_spacing, juicebox_tokens
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright.async_api import Page
@@ -164,7 +164,7 @@ class JuiceboxAdapter(RecipeAdapter):
             if index > 0:
                 await self._add_email_step(page, index)
             subject = juicebox_tokens(email.subject) if index == 0 else ""
-            body = juicebox_tokens(email.body_html or email.body_text)
+            body = juicebox_spacing(juicebox_tokens(email.body_html or email.body_text))
             result = await self._fill_step(page, index, name if index == 0 else None,
                                            subject, body)
             if not result.get("setBody"):

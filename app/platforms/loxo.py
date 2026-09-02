@@ -153,21 +153,75 @@ class LoxoAdapter(RecipeAdapter):
         """
         report = await self._drive_campaign(page, document, row)
         if self.settings.criteria_enabled:
-            await self._set_criteria(page, document, row, report)
+            job_id = await self._criteria_target(page, document, row, report)
+            if job_id:
+                await self._set_criteria(page, document, report, job_id)
+                await self._configure_source(page, document, report, job_id)
         return report
+
+    async def _configure_source(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        report: RunReport,
+        job_id: str,
+    ) -> None:
+        """The Source screen's similar titles and skills, drafted from the JD.
+
+        The criteria above rank whoever the search finds; these filters decide
+        who it finds. Loxo seeds them from the job title alone, which is why
+        the first live searches came back "not even 20 percent configured"
+        (Sohaib, 2026-09-01). Same failure containment as the criteria: a
+        Source failure is a warning, never a lost campaign.
+        """
+        from app.platforms.loxo_source import configure_source
+        from app.platforms.targeting_ai import draft_targeting
+
+        targeting = await draft_targeting(
+            document.job_description,
+            role_title=_role_name(document),
+            settings=self.settings,
+        )
+        if not targeting.similar_titles and not targeting.skills:
+            report.warnings.append(
+                "Source filters skipped: no titles or skills could be drafted "
+                "(is ANTHROPIC_API_KEY set here?)"
+            )
+            return
+        if self.dry_run:
+            report.warnings.append(
+                f"dry run: would set {len(targeting.similar_titles)} title(s) "
+                f"and {len(targeting.skills)} skill(s) on job {job_id}'s Source screen"
+            )
+            return
+
+        try:
+            result = await configure_source(
+                page,
+                job_id,
+                titles=targeting.similar_titles,
+                skills=targeting.skills,
+                search_name=f"{_role_name(document)} - auto"[:80],
+                base_url=self.recipe.defaults.get("base_url", "https://app.loxo.co"),
+                agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
+            )
+        except (PlatformError, AuthenticationRequired) as exc:
+            log.warning(
+                "loxo source not configured",
+                extra={"job": job_id, "error": str(exc)[:200]},
+            )
+            report.warnings.append(f"Source filters not set on job {job_id}: {exc}")
+            return
+        report.warnings.append(f"Source search on job {job_id}: {result.summary}")
 
     async def _set_criteria(
         self,
         page: "Page",
         document: ParsedDocument,
-        row: NotionRow | None,
         report: RunReport,
+        job_id: str,
     ) -> None:
         from app.platforms.loxo_sourcing import set_criteria
-
-        job_id = await self._criteria_target(page, document, row, report)
-        if not job_id:
-            return
 
         # The client's JD when the document carries one, the advert when it does
         # not. Loxo's own description used to win by default, which is how the

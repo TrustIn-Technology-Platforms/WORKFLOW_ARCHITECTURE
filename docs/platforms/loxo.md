@@ -167,6 +167,35 @@ opens the same modal with the commit button now labelled **Save** instead of
 The documents write `{first_name}` and `{company}`; the poster translates them
 before typing. Pasting the document's braces verbatim would send them literally.
 
+## The Source screen - similar titles and skills (2026-09-02)
+
+> **Status** **BUILT AND PROVEN LIVE** on job 3658508 (Axle): 10 titles and 12
+> skills written, saved as the team-shared search "Axle Infra Security -
+> automation", reloaded and restored chip-for-chip.
+> [loxo_source.py](../../app/platforms/loxo_source.py) drafts come from
+> [targeting_ai.py](../../app/platforms/targeting_ai.py) reading the JD.
+
+`/agencies/<agency>/jobs/<job>/source` - a person reaches it via the job page
+-> **Add People** -> **Loxo Search**. The pipeline configures it right after
+the Skill DNA criteria, on the same job id.
+
+What three broken live runs taught, now encoded in the writer:
+
+- The filter panel is a **flat sibling list**: a header button per section,
+  content as following siblings until the next header. Only the sixteen real
+  section labels bound a section - the `Include similar Job Titles` toggle is
+  also a left-panel button and once cut the Title window to nothing.
+- Scoping by ancestry once poured twelve skills into the **Title** box, where
+  Loxo's taxonomy dressed them as job titles ("SOC 2" -> "SOC 2 Analyst").
+  Every chip is verified inside its own section's text before the next one.
+- **Chips do not survive a reload.** Persistence is the bookmark **Save**
+  control -> "Save search" dialog (name + Share with team; same name
+  overwrites, which makes re-runs idempotent). A recruiter loads it back from
+  `Saved searches` -> filter box -> name.
+- Titles commit on **exact** taxonomy matches only; skills match loosely,
+  because Loxo files AWS under "Amazon Web Services (AWS)". A value the
+  taxonomy refuses ("Infrastructure as Code") is cleared and reported.
+
 ## Candidate criteria — the Skill DNA (2026-08-31)
 
 > **Status** **PROVEN LIVE 2026-08-31.** `python -m app.cli criteria --job
