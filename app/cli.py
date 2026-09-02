@@ -629,6 +629,204 @@ async def _search_criteria(
                 raise
 
 
+@app.command("juicebox-sourcing")
+def juicebox_sourcing(
+    doc: str = typer.Option(
+        ..., "--doc",
+        help="A .docx path or share link. Its Client JD section is the job "
+             "description, or its advert when there is no such section.",
+    ),
+    project: Optional[str] = typer.Option(
+        None, "--project",
+        help="URL of an existing Juicebox project to build the search in. "
+             "Default: create one named after the document.",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Project name when creating one. Defaults to the document's."
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run drafts the filters and shows them; no browser opens.",
+    ),
+    set_: list[str] = typer.Option(
+        [], "--set", metavar="COLUMN=VALUE",
+        help="Stand in for a Notion column, e.g. --set 'Location=NY, ATL'. "
+             "Repeatable. The location a search filters on lives on the row, "
+             "not in the document, so without it the search has no place filter.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Set up a Juicebox sourcing search from a document: project, JD search, filters.
+
+    The flow a recruiter does by hand - create the project, press Job
+    description and paste the JD so Juicebox's AI builds the search, then add
+    the job titles, location, skills and years its AI leaves thin - saved with
+    Save Changes and run. Nothing contacts a candidate. See
+    docs/platforms/juicebox.md#sourcing.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    row = _stand_in_row(set_) if set_ else None
+
+    try:
+        report = asyncio.run(
+            _juicebox_sourcing(doc, project, name, settings, dry_run, row)
+        )
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    if report is None:
+        console.print(
+            "\n[dim]Dry run - no browser was opened. Use --live to build the search.[/dim]"
+        )
+        return
+    origin = "created" if report.project_created else "existing"
+    console.print(f"\n[bold]project[/bold]  {report.project_url}  [dim]({origin})[/dim]")
+    console.print(f"[bold]search[/bold]   {report.search_url}")
+    for section, values in report.added.items():
+        if values:
+            console.print(f"  {section}: {', '.join(values)}")
+    for section, values in report.refused.items():
+        if values:
+            console.print(f"  [yellow]{section} refused: {', '.join(values)}[/yellow]")
+    if report.saved:
+        console.print("\n[green]Filters saved and the search run.[/green]")
+    else:
+        console.print("\n[red]Filters NOT saved.[/red]")
+
+
+async def _juicebox_sourcing(
+    doc: str,
+    project: str | None,
+    name: str | None,
+    settings: Any,
+    dry_run: bool,
+    row: Any = None,
+) -> Any:
+    from datetime import datetime, timezone
+
+    from app.models import Advert, PlatformError
+    from app.pipeline import _row_text, enrich_advert, load_document
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.browser import save_failure
+    from app.platforms.engine import _role_name
+    from app.platforms.juicebox_sourcing import set_up_sourcing, split_locations, years_span
+    from app.platforms.targeting_ai import configured, draft_targeting
+
+    if project and not project.startswith("http"):
+        raise PipelineError(
+            "--project should be the project's full URL "
+            "(app.juicebox.ai/project/<id>/...)."
+        )
+    if not configured(settings):
+        raise PipelineError(
+            "ANTHROPIC_API_KEY is not set, and the search's titles, skills and "
+            "years are drafted from the JD. Set it, or fill the filters by hand."
+        )
+
+    document = await load_document(doc, settings)
+    for filled in enrich_advert(document, row, settings):
+        console.print(f"[dim]from --set: {filled}[/dim]")
+    jd = document.job_description
+    if not jd:
+        raise PipelineError(
+            f"{doc} has neither a Client JD section nor an advert, so there is "
+            "no job description to paste into Juicebox."
+        )
+    origin = "Client JD" if document.client_jd else "advert"
+    console.print(f"[dim]job description: {len(jd)} chars from the {origin} in {doc}[/dim]")
+
+    advert = document.advert or Advert(title="", body_text="", body_html="")
+    emails = sorted(document.emails, key=lambda e: e.order)
+    project_name = (
+        name or _role_name(document.source_name, row, advert, emails) or "New Project"
+    )
+    # A Client-JD-only document has no advert for --set to enrich, so the
+    # column is read directly, the way the adapter reads a real row.
+    location = advert.location or (_row_text(row, settings.prop_location) if row else None)
+
+    targeting = await draft_targeting(jd, role_title=project_name, settings=settings)
+    if not targeting.similar_titles and not targeting.skills:
+        raise PipelineError(
+            "No titles or skills could be drafted from this JD, so there are no "
+            "filters to set. Check the Anthropic key with `python -m app.cli check`."
+        )
+
+    places = split_locations(location)
+    console.print(f"\n[bold]project[/bold]    {project or project_name + '  (to be created)'}")
+    console.print(f"[bold]titles[/bold]     {', '.join(targeting.similar_titles) or '-'}")
+    console.print(f"[bold]skills[/bold]     {', '.join(targeting.skills) or '-'}")
+    if places:
+        console.print(f"[bold]location[/bold]   {', '.join(places)}")
+    else:
+        console.print("[bold]location[/bold]   [yellow]none - pass --set 'Location=...'[/yellow]")
+    span = years_span(targeting.min_years, targeting.max_years)
+    console.print(f"[bold]years[/bold]      {span or '-'}")
+    if dry_run:
+        return None
+
+    recipe = resolve("juicebox", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'juicebox'.")
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="jb-sourcing", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="jb-sourcing")
+        )
+        async with opener as (context, page):
+            try:
+                report = await set_up_sourcing(
+                    page,
+                    project_name=project_name,
+                    project_url=project,
+                    jd=jd,
+                    titles=targeting.similar_titles,
+                    skills=targeting.skills,
+                    location=location,
+                    min_years=targeting.min_years,
+                    max_years=targeting.max_years,
+                )
+                # The proof, kept: the reloaded filter editor as the run left it.
+                # Not full_page - that blanks this app's virtualised view.
+                shots = Path(settings.artifact_dir) / "jb-sourcing"
+                shots.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                final = shots / f"{stamp}-filters-after-reload.png"
+                try:
+                    await page.screenshot(path=str(final))
+                    console.print(f"[dim]screenshot: {final}[/dim]")
+                except Exception:
+                    pass
+                return report
+            except Exception as exc:
+                # Playwright's own timeouts are not PipelineErrors, and the
+                # person reading this needs the same screenshot either way.
+                artifacts = await save_failure(
+                    context, page, "juicebox-sourcing-failed", settings
+                )
+                if isinstance(exc, PipelineError):
+                    raise
+                first_line = (str(exc).strip().splitlines() or [""])[0][:200]
+                raise PlatformError(
+                    f"{exc.__class__.__name__}: {first_line}"
+                    + (f" (see {artifacts[0]})" if artifacts else "")
+                ) from exc
+
+
 @app.command()
 def criteria(
     job: str = typer.Option(..., "--job", help="Loxo job id, or the job URL."),
@@ -752,6 +950,170 @@ async def _criteria(
                 )
             except PipelineError:
                 await save_failure(context, page, "loxo-criteria-failed", settings)
+                raise
+
+
+@app.command("loxo-source")
+def loxo_source(
+    job: str = typer.Option(..., "--job", help="Loxo job id, or the job URL."),
+    doc: str = typer.Option(
+        ..., "--doc", help="The .docx (or share link) whose Client JD the filters come from."
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run drafts and shows the filters, writing nothing.",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Saved-search name. Defaults to '<role> - auto'."
+    ),
+    location: Optional[str] = typer.Option(
+        None, "--location",
+        help="The row's Location, for the company list. A file alone carries none.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Set a Loxo job's Source filters from a document, on their own.
+
+    Titles, skills, years of experience and past companies - the filters that
+    decide which profiles a search looks at, as opposed to the criteria that
+    rank them. The posting run does this after the criteria; this command does
+    only this, so a change can be tested without re-posting the campaign.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    try:
+        report = asyncio.run(_loxo_source(job, doc, settings, dry_run, name, location))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    if report is None:
+        console.print("\n[dim]Dry run - nothing was written. Use --live to apply.[/dim]")
+        return
+    console.print(f"\n{report.summary}")
+    for section, refused in (
+        ("titles", report.refused_titles),
+        ("skills", report.refused_skills),
+        ("experience", report.missed_experience),
+        ("companies", report.refused_companies),
+    ):
+        if refused:
+            console.print(f"[yellow]refused {section}: {', '.join(refused)}[/yellow]")
+    for warning in report.warnings:
+        console.print(f"\n[yellow]{warning}[/yellow]")
+
+
+async def _loxo_source(
+    job: str,
+    doc: str,
+    settings: Any,
+    dry_run: bool,
+    name: str | None,
+    location: str | None,
+) -> Any:
+    from app.pipeline import load_document
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.browser import save_failure
+    from app.platforms.engine import _role_name
+    from app.platforms.loxo import job_id_from
+    from app.platforms.loxo_source import configure_source, experience_bands
+    from app.platforms.targeting_ai import (
+        draft_companies,
+        draft_targeting,
+        stage_from_text,
+    )
+
+    job_id = job_id_from(job)
+    if not job_id:
+        raise PipelineError(
+            f"{job!r} does not contain a Loxo job id. Pass the job URL or its id."
+        )
+    if not settings.anthropic_api_key:
+        raise PipelineError(
+            "ANTHROPIC_API_KEY is not set, and the Source filters are drafted "
+            "from the document. Set it and run again."
+        )
+
+    document = await load_document(doc, settings)
+    jd = document.job_description
+    if not jd:
+        raise PipelineError(f"{doc} has neither a Client JD nor an advert to draft filters from.")
+    advert = document.advert
+    emails = sorted(document.emails, key=lambda e: e.order)
+    role_name = name or _role_name(document.source_name, None, advert, emails)
+    company = (document.source_name or "").split(" - ")[0].strip()
+    where = location or (advert.location if advert else None) or ""
+    origin = "Client JD" if document.client_jd else "advert"
+    console.print(f"[dim]{origin}: {len(jd)} chars from {doc}[/dim]")
+
+    targeting = await draft_targeting(jd, role_title=role_name, settings=settings)
+    stated = stage_from_text(jd, advert.body_text if advert else "")
+    companies = await draft_companies(
+        jd, company=company, stage=stated, location=where,
+        role_title=role_name, settings=settings,
+    )
+    bands = experience_bands(targeting.min_years, targeting.max_years)
+
+    console.print(f"\n[bold]role[/bold]       {role_name}")
+    console.print(f"[bold]company[/bold]    {company or '-'}   [bold]location[/bold] {where or '-'}")
+    console.print(f"[bold]titles[/bold]     {', '.join(targeting.similar_titles) or '-'}")
+    console.print(f"[bold]skills[/bold]     {', '.join(targeting.skills) or '-'}")
+    years = (
+        f"{targeting.min_years if targeting.min_years is not None else '?'}"
+        f"-{targeting.max_years if targeting.max_years is not None else '+'}"
+        if bands else "not stated"
+    )
+    console.print(f"[bold]experience[/bold] {years} -> bands {', '.join(bands) or '-'}")
+    console.print(
+        f"[bold]stage[/bold]      {companies.stage} ({companies.stage_basis})"
+    )
+    console.print(f"[bold]companies[/bold]  {', '.join(companies.companies) or '-'}")
+    if companies.inferred:
+        console.print(
+            "[yellow]the document does not state the funding stage - the company "
+            "list rests on Claude's inference; check it[/yellow]"
+        )
+    if not targeting.similar_titles and not targeting.skills:
+        raise PipelineError("no titles or skills could be drafted, so there is nothing to write.")
+    if dry_run:
+        return None
+
+    recipe = resolve("loxo", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'loxo'.")
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="loxo-source", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="loxo-source")
+        )
+        async with opener as (context, page):
+            try:
+                return await configure_source(
+                    page,
+                    job_id,
+                    titles=targeting.similar_titles,
+                    skills=targeting.skills,
+                    years=(targeting.min_years, targeting.max_years),
+                    companies=companies.companies,
+                    search_name=f"{role_name} - auto"[:80],
+                    base_url=recipe.defaults.get("base_url", "https://app.loxo.co"),
+                    agency_id=str(recipe.defaults.get("agency_id", "28356")),
+                )
+            except PipelineError:
+                await save_failure(context, page, "loxo-source-failed", settings)
                 raise
 
 

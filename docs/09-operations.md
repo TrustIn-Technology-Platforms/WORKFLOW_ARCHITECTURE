@@ -53,6 +53,7 @@ are fixed here so the module has a target.
 | `python -m app.cli record <key> --url <url> --doc <file>` | Do the job once by hand; writes the recipe from it |
 | `python -m app.cli inspect <platform> --url <url>` | Map every element on a page, for fixing a selector |
 | `python -m app.cli post <platform> --doc <file>` | Run one recipe against one document. No Notion |
+| `python -m app.cli juicebox-sourcing --doc <file> [--project <url>] --set 'Location=<city>'` | Juicebox sourcing on its own: project (created, or `--project` reused), JD search, title/location/skills/years filters. Dry run by default; `--live --headed` to watch it. No Notion |
 | `python -m app.cli platforms` | List recipes, enabled state, session age |
 | `python -m app.cli check` | Validate config, Notion access, database columns, recipes, and the Anthropic key + model (a free `count_tokens` call - proves the criteria drafting before a run depends on it) |
 | `python -m app.cli run` | One poll: claim ready rows, process, write back |

@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # back to matching by name, skipping rather than guessing when unsure.
     prop_loxo_job: str = "Loxo Job"
     prop_juicebox_search: str = "Juicebox Search"
+    # Optional. The Juicebox project the row's sourcing search is built in.
+    # Blank creates one named after the document; a URL reuses a project a
+    # recruiter made - or one an earlier run created and then stopped short of
+    # the search, which is how Axle's row was left on 2026-09-02.
+    prop_juicebox_project: str = "Juicebox Project"
 
     # Status values the pipeline transitions between.
     status_ready: str = "Ready to Post"

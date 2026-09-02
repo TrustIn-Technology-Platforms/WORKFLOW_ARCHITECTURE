@@ -12,6 +12,8 @@
 > it drops, `python -m app.cli login juicebox` re-captures it.** See
 > [the working session](#what-the-working-session-showed) and
 > [the editor mechanics](#the-sequence-editor-2026-08-27).
+> **Sourcing — project, JD search, filters — BUILT AND PROVEN LIVE 2026-09-02**,
+> see [Sourcing](#sourcing--project-jd-search-filters-2026-09-02).
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md)
 
 | | |
@@ -21,7 +23,107 @@
 | **Login URL** | `https://app.juicebox.ai/` — app root handles auth; email+password, no SSO |
 | **App URL** | `https://app.juicebox.ai/` — wait on `commit`, it never fires `domcontentloaded` |
 | **Owner** | Sohaib |
-| **Last verified** | 2026-08-27 (created + saved a real 3-step sequence) |
+| **Last verified** | 2026-09-02 (sourcing: project, JD search, filters, read back after reload) · 2026-08-27 (created + saved a real 3-step sequence) |
+
+## Sourcing — project, JD search, filters (2026-09-02)
+
+> **Status** **BUILT AND PROVEN LIVE**, end to end, headed, on the throwaway
+> project "ZZ TEST 3 DELETE ME" (2026-09-02, 23:42–23:47 local): project
+> created and renamed, the Axle Client JD pasted, the search built by
+> Juicebox's AI, then 6 titles, 6 skills, one region and a 6–12 year band added
+> on top of what its AI had already set, Save Changes, Run search, reload, and
+> every section read back — 9 titles, 12 skills, New York + Atlanta, 6–12
+> years, 775 matches. [juicebox_sourcing.py](../../app/platforms/juicebox_sourcing.py)
+> · [tests](../../tests/test_juicebox_sourcing.py) · runner
+> `python -m app.cli juicebox-sourcing`.
+
+The half a recruiter does by hand after the sequence, as Sohaib described it:
+**create a project, name it, press Job description, paste the JD, Search, wait,
+open the search, then set the titles, location, skills and experience.** Wired
+into the adapter after the sequence saves, under `CRITERIA_ENABLED`.
+
+### What the first production run left behind (Axle, 2026-09-02, 22:56 local)
+
+A renamed project with an empty search box — Sohaib's screenshot. The Railway
+log has the cause in one line:
+
+```
+juicebox sourcing not set up  error="Attempt to overwrite 'name' in LogRecord"
+```
+
+`create_project` logged the new name as `extra={"name": ...}`. `name` is a field
+Python's logging reserves, so the log call itself raised — after the rename,
+before the JD paste — and the adapter swallowed it into a row warning. The
+sequence driver made the same mistake on 2026-08-28. The field is now `project`,
+and [tests/test_logging_conf.py](../../tests/test_logging_conf.py) sweeps every
+`extra=` in `app/` and `scripts/` for reserved keys so it cannot land a third
+time. A sourcing failure now also saves a screenshot
+(`artifacts/<stamp>-juicebox-sourcing-failed.png`); the first one left a single
+line of text to diagnose from.
+
+### The flow, and what each step needed
+
+- **Projects list.** The rail's `Projects` entry is a link to
+  `/project/<current>/projects`. It paints before React binds its handler, so on
+  a fast machine one click lands on a dead link and the page stays on Home
+  (headed local run; the slower Railway container never saw it). The driver
+  clicks, checks for `Create new project`, retries, and falls back to
+  `app.juicebox.ai/projects`, which redirects to the list.
+- **Create, or reuse.** `Create new project` creates instantly, no dialog, as
+  "New Project"; the newest such row is opened and renamed by double-clicking
+  the title. An existing project is used instead when the row's **`Juicebox
+  Project`** column holds its URL (`PROP_JUICEBOX_PROJECT`) — any URL inside the
+  project works; the driver lands on `/project/<id>/home`.
+- **JD search.** `Job description` opens the "Search by job description" modal
+  (Paste JD / Upload JD). The driver waits for its textarea (up to 30s), pastes
+  `ParsedDocument.job_description`, presses its `Search`. In every run so far
+  the search opened in the same tab at `/search?search_id=<id>&kickoff=1`; a
+  new tab (watched from before the click) and the newest title under
+  `Searches (N)` in the rail are handled too, because that is what a person
+  does when nothing opens on its own.
+- **Filters.** Juicebox's AI pre-fills from the JD — on Axle's it set 3 titles,
+  6 skills, and New York and Atlanta as cities — and the driver adds what Claude
+  drafted from the same JD ([targeting_ai](../../app/platforms/targeting_ai.py))
+  that is not there yet: **Job Titles**, **Location(s)** (one chip per place
+  from the row's `Location`: "NY, ATL" → NY, ATL; "hybrid"/"remote" dropped),
+  **Skills or Keywords**, and **Min / Max Experience (Years)**, which are plain
+  text inputs ("Example: 5 years"). Chip entry is type → ArrowDown → Enter. A
+  chip lands under Juicebox's own label — "NY" became `New York` with a REGION
+  tag — so the driver reads the section before and after and reports the label
+  that appeared, never the text typed.
+- **Save Changes, Run search, reload.** Filters persist only through Save
+  Changes. The saved search is then run and reloaded, every section is read
+  back, and anything missing is reported as refused on the row.
+
+Location is the one filter that does not come from the document: the advert
+never states it, and a Client-JD-only document (Axle) has no advert at all, so
+the adapter reads the row's `Location` column directly. `--set 'Location=...'`
+does the same for a run from a file.
+
+### Running it on its own
+
+```bash
+# dry run: drafts and shows the filters, opens no browser
+python -m app.cli juicebox-sourcing --doc <file-or-share-link> --set 'Location=NY, ATL'
+# create a project named after the document, watch it
+python -m app.cli juicebox-sourcing --doc <file> --set 'Location=NY, ATL' --live --headed
+# reuse a project - how to finish one left at "created, no search"
+python -m app.cli juicebox-sourcing --doc <file> --project <project url> --set 'Location=NY, ATL' --live
+```
+
+Do not flip a posted Notion row back to `Ready to Post` to redo the sourcing:
+that re-posts the sequence and re-creates the noon role. Point the command at
+the project.
+
+### Seen while proving it
+
+- Playwright cannot wrap a bound builtin as an event handler:
+  `context.on("page", popups.append)` fails with
+  `AttributeError: ... '_pw_impl_instance_'`. Use a plain function.
+- The test search sits at 775 matches with the filters; the first, unfiltered
+  test search of 2026-09-02 had 45k.
+- Throwaway projects left from the proving runs, to delete by hand:
+  "ZZ TEST DELETE ME", "ZZ TEST 2 DELETE ME", "ZZ TEST 3 DELETE ME".
 
 ## Search criteria (2026-08-31)
 

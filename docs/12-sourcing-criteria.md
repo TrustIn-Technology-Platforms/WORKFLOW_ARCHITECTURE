@@ -53,11 +53,13 @@ decide the pool.
 | noon location / titles / seniority | **yes** | not yet | **gap 1 — closed in code**, one live run away from proven |
 | Loxo Skill DNA, nice-to-haves promoted | yes | 2026-08-31 | job 3640874, read back through `jobDetail` |
 | Loxo empty buckets drafted from the advert | yes | 2026-08-31 | `criteria_ai.py`, Claude Opus 5 |
-| **Loxo similar titles / skills** | **no** | — | **gap 2 — still open**, blocked on one probe |
+| Loxo Source titles / skills | yes | 2026-09-02 | job 3658508, saved search reloaded chip-for-chip; again from Railway on the Axle row |
+| **Loxo Source years of experience / past companies** | **yes** | **not yet** | built 2026-09-02 from Loxo's bundle, the session having died first; one `loxo-source --live --headed` run away. [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage) |
 | Juicebox criteria, ranked, capped at 10 | yes | dry run only | live write not yet approved |
 | Wellfound advert fields | yes | 2026-08-31 | draft save, not publish; job 4656911 |
 | One JD for all three platforms | yes | — | **gap 4 — closed**; `Client JD` section, [D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch) |
 | Wellfound Skills | **yes** | never run | **gap 3 — closed**; `app/platforms/skills.py`, column then Claude |
+| **Juicebox titles / location / skills / years** | **yes** | 2026-09-02 | project + JD search + filter editor, `juicebox_sourcing.py`; the row's `Location`, Claude-drafted titles, skills and years |
 
 ## The gaps
 
@@ -220,19 +222,29 @@ Loxo pasted it literally and Juicebox would have Title-cased it into an
 paragraph and all — inside `juicebox_tokens` and Loxo's `_translate`; noon keeps
 converting it to its single-brace form. Pinned in `tests/test_templating.py`.
 
-### Juicebox sourcing - **BUILT AND PROVEN 2026-09-02**
+### Juicebox sourcing - **BUILT, PROVEN LIVE 2026-09-02, and the first production run explained**
 
-The full recruiter flow is now `juicebox_sourcing.py`, wired into the adapter
-after the sequence: **create a project** (instant, then renamed by
-double-click), **paste the JD** (the Paste JD dialog; Juicebox's AI builds and
-names the search), then **fill the filters its AI leaves thin** - job titles,
-location, skills or keywords - through the MUI editor, saved with Save Changes
-and run. Proven end to end by the module itself on the throwaway project
-"ZZ TEST 2 DELETE ME": 7 titles + New York + 7 skills added on top of the AI's
-own, zero refusals, verified by reload. On the first test search the filters
-took matches from 45k ("globally") to ~1k.
+The full recruiter flow is `juicebox_sourcing.py`, wired into the adapter after
+the sequence: **create a project** (instant, then renamed by double-click) - or
+reuse the one in the row's `Juicebox Project` column - **press Job description
+and paste the JD** (Juicebox's AI builds and names the search), open the
+search, then **fill the filters its AI leaves thin** - job titles, the row's
+location, skills, min/max years - in the MUI editor, Save Changes, Run search,
+reload and read back.
 
-### Previously: Juicebox has no sourcing setup at all — **open, the biggest remaining gap**
+The first production run (Axle, 2026-09-02, 22:56 local, on Railway) created
+and renamed the project and then died on `log.info(..., extra={"name": ...})`
+- a reserved LogRecord field - which the adapter turned into one warning on the
+row; that is the empty project Sohaib photographed. Fixed (`project`), the
+sweep in `tests/test_logging_conf.py` now guards every `extra=` in the
+codebase, and a sourcing failure saves a screenshot. Re-proven headed the same
+night on "ZZ TEST 3 DELETE ME" with the Axle Client JD: 9 titles, 12 skills,
+New York + Atlanta, 6-12 years, 775 matches, all read back after a reload. To
+finish Axle's own project: `python -m app.cli juicebox-sourcing --doc <axle
+doc> --project <project url> --set 'Location=NY, ATL' --live` - not a row
+re-run, which would re-post the sequence and re-create the noon role.
+
+### Previously: Juicebox has no sourcing setup at all — **closed 2026-09-02**, kept for the record
 
 What exists today writes criteria onto an *existing* search named by the
 `Juicebox Search` column, and skips without one. What a recruiter actually does,
@@ -256,6 +268,33 @@ and skills onto `/jobs/<id>/source` and saves them as a named, team-shared
 search, wired into the Loxo run after the criteria. Proven live on job 3658508,
 including the reload-and-restore round trip. (The Longlist Agent's own
 titles/skills panel remains the separate, still-unopened surface.)
+
+**Extended 2026-09-02 — years of experience and past companies (Sohaib's
+review: "years of experience is not added", and the company filter was
+empty).** Both were built the same day; neither has run live yet, because the
+automation's Loxo session was logged out first (two machines on one session —
+see [platforms/loxo](platforms/loxo.md#the-session-that-died-2026-09-02)).
+
+- **Years.** The same Claude call that drafts titles and skills now returns
+  the JD's total-experience requirement (`min_years` / `max_years`, null when
+  the JD gives none). Loxo's section is a checklist of five bands, not a
+  number box; `experience_bands()` ticks the bands whose midpoint falls inside
+  the requirement, so "5+ years" becomes `6-10` + `10+`. The same two numbers
+  feed Juicebox's Min/Max Experience inputs.
+- **Past companies**, by the rubric Sohaib set: read the client's funding
+  stage off the JD; if it is not there, ask Claude for it and **flag on the
+  row that it was inferred**; then ask for companies in the same sector at the
+  same stage or one later, in the row's region, the client removed; write
+  them into Loxo's **Past Company** box, matching Loxo's company records
+  exactly. Fifteen at most. Recorded as
+  [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage).
+  Only Loxo is wired; the drafting is platform-neutral for Juicebox's
+  `Companies` filter.
+- **Test on its own:** `python -m app.cli loxo-source --job <id> --doc <file>
+  --location <city> [--live --headed]` drafts, prints and (live) writes the
+  Source filters without re-posting the campaign. The `--location` matters for
+  the company list the way `--set Location=` does for noon: a file alone
+  carries none.
 
 ### Loxo sourcing needs the job to already exist — **by design, now needs a decision**
 

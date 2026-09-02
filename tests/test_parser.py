@@ -187,6 +187,55 @@ def test_shared_subject_heading_applies_to_emails_only():
     assert "up to $350k" not in by_channel["email"].body_text
 
 
+def test_inmail_without_its_own_subject_reuses_the_email_subject():
+    """noon gives the InMail step a subject box. A heading's name is not a
+    subject - "InMail" was posted as one on 2026-09-02 - so an InMail with no
+    Subject: line of its own goes out under the emails' subject, whether that
+    was written once under a shared "Subject" heading or on Email 1. Its own
+    Subject: line still wins.
+    """
+    from app.models import Block
+
+    def heading(text: str) -> Block:
+        return Block("heading", 2, text, f"<h2>{text}</h2>")
+
+    def body(text: str) -> Block:
+        return Block("body", 0, text, f"<p>{text}</p>")
+
+    shared = parser.parse_document([
+        heading("Subject"), body("Staff Platform Engineer / up to $350k"),
+        heading("Email 1 (Day 1)"), body("Hi {{first_name}}, first email."),
+        heading("Email 2 (Day 3)"), body("Hi {{first_name}}, second email."),
+        heading("InMail (Day 5)"), body("Hi {{first_name}}, the InMail."),
+        heading("Connect (Day 7)"), body("Quick note, no greeting."),
+    ])
+    steps = {e.channel: e for e in shared.emails}
+    assert steps["inmail"].subject == "Staff Platform Engineer / up to $350k"
+    assert steps["inmail"].body_text == "Hi {{first_name}}, the InMail."
+    # A connection note has no subject field anywhere: nothing is invented for
+    # it, its first line stays in the note, and no warning is raised.
+    assert steps["linkedin"].subject == ""
+    assert steps["linkedin"].body_text == "Quick note, no greeting."
+    assert not any("no subject" in w for w in shared.warnings), shared.warnings
+
+    on_email_1 = parser.parse_document([
+        heading("Email 1 (Day 1)"), body("Subject: Platform Engineer / AWS"),
+        body("Hi {{first_name}}, first email."),
+        heading("InMail (Day 5)"), body("Hi {{first_name}}, the InMail."),
+    ])
+    assert on_email_1.emails[1].channel == "inmail"
+    assert on_email_1.emails[1].subject == "Platform Engineer / AWS"
+
+    own = parser.parse_document([
+        heading("Subject"), body("Staff Platform Engineer / up to $350k"),
+        heading("Email 1 (Day 1)"), body("Hi {{first_name}}, first email."),
+        heading("InMail (Day 5)"), body("Subject: A different angle"),
+        body("Hi {{first_name}}, the InMail."),
+    ])
+    assert own.emails[1].subject == "A different angle"
+    assert "different angle" not in own.emails[1].body_text
+
+
 def test_fenced_lines_are_headings():
     """`=== Email 1 (Day 1 - Anonymous) ===` marks a section in generator-made
     documents that use no Word heading styles and no bold. The fences are

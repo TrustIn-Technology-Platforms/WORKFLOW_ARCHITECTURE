@@ -46,7 +46,7 @@ Hi {{first_name}},
 <body>
 
 InMail (Day 5)
-Subject: <InMail subject>
+Subject: <InMail subject — optional; leave it out to reuse the email subject>
 <InMail body>
 
 Connect (Day 7)
@@ -134,7 +134,8 @@ Format the output exactly as follows, as a Word document:
   (a bare "Wellfound" heading is that board's advert, never a message),
   and last of all "Client JD" holding the client's job description verbatim.
 - Email 1 starts with a line "Subject: <subject>". Emails 2 and 3 have no
-  subject (they reply in the same thread). InMail has its own Subject: line.
+  subject (they reply in the same thread). InMail may start with its own
+  Subject: line; without one it reuses Email 1's subject.
 - Use only these merge tokens: {{first_name}}, {{company}}. No other
   {{tokens}}.
 - Never put two messages under one heading.

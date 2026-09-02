@@ -293,18 +293,36 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
         for key, sections_for in found.platform_adverts.items()
     }
 
-    # An email with no subject of its own goes out under the role's title -
-    # which is what recruiters write by hand anyway.
+    # An email with no subject of its own goes out under the document's shared
+    # Subject, else the role's title - which is what recruiters write by hand
+    # anyway. A connection note has no subject field on any platform, so it is
+    # left alone rather than warned about.
     for email in emails:
-        if not email.subject.strip() and shared_subject and email.is_email:
+        if email.subject.strip() or not email.is_email:
+            continue
+        if shared_subject:
             # A document-level "Subject" heading is the author's intent for the
-            # email steps; it is not a subject for a LinkedIn note or an InMail.
+            # email steps.
             email.subject = shared_subject
             continue
-        if not email.subject.strip():
-            email.subject = advert.title if advert and advert.title else f"Email {email.order}"
+        email.subject = advert.title if advert and advert.title else f"Email {email.order}"
+        warnings.append(
+            f"Email {email.order} had no subject line; the advert title was used."
+        )
+
+    # An InMail is the same conversation carried onto LinkedIn, and noon gives
+    # it a subject box of its own. Without a Subject: line of its own it goes
+    # out under the emails' subject - the one the author wrote once, under a
+    # shared heading or on email 1 - never under its heading's name.
+    thread_subject = next((e.subject for e in emails if e.is_email), "")
+    for email in emails:
+        if email.channel != "inmail" or email.subject.strip():
+            continue
+        email.subject = thread_subject or (advert.title if advert else "")
+        if not email.subject:
             warnings.append(
-                f"Email {email.order} had no subject line; the advert title was used."
+                f"{email.label or 'InMail'} had no subject line and there was no "
+                "email subject to reuse; add a Subject: line under it."
             )
 
     document = ParsedDocument(
@@ -594,14 +612,25 @@ def _build_email(section: Section, position: int, warnings: list[str]) -> EmailS
             blocks.pop(index)
             break
 
-    if not subject:
+    # Only an email heading can carry a subject ("Email 2 - Following up"). A
+    # channel heading is the channel's name and nothing more, and reading it as
+    # one put the word "InMail" in noon's subject box (2026-09-02). The
+    # first-line fallback is email-only for the same reason: a connection note
+    # has no subject anywhere, and moving its first line into one would
+    # silently shorten the note.
+    if not subject and channel == "email":
         subject = _subject_from_heading(heading)
 
     # With no Subject: line and nothing usable in the heading, the first body
     # line stands in - unless it is the greeting. "Hi {{name}}," is how most
     # real emails open, and it is never a subject. Leave it empty instead;
     # parse_document falls back to the advert title once that is known.
-    if not subject and blocks and not _GREETING.match(blocks[0].text):
+    if (
+        not subject
+        and channel == "email"
+        and blocks
+        and not _GREETING.match(blocks[0].text)
+    ):
         subject = blocks[0].text.strip()
         if len(subject) <= _MAX_SUBJECT_CHARS:
             blocks.pop(0)

@@ -32,6 +32,33 @@ for the first fifteen seconds.
 Console shows `[Report Only]` CSP complaints about Font Awesome. Cosmetic —
 the app works.
 
+### The session that died (2026-09-02)
+
+The profile's `_session_id` cookie is issued for **30 days** (the 1 Sep export
+ran to 1 Oct), yet the saved session was alive at 00:11 on 2 Sep and rejected
+(`/login?goto=...`) by 23:10 the same day. In between, the **Railway container
+ran the Axle row on the same session** (22:44–22:48, per `railway logs`): the
+keep-alive had pushed this profile's cookies to the volume the night before,
+and the server's `/health` showed the import consumed. Loxo either rotated the
+session id on Railway's request or binds a session to one device; either way
+the laptop's copy was dead within the hour.
+
+Consequences:
+
+- **One home per Loxo session.** Production runs on Railway, so the laptop
+  profile should only *capture and push*. A local live test is fine, but
+  expect it to kill the other copy — re-run the keep-alive push afterwards,
+  and expect Railway's copy to be the one that survives.
+- Your own Chrome's login is a different cookie jar. "It works in my browser"
+  says nothing about `.profiles/loxo`.
+- `python -m app.cli login loxo` waits for **Enter in a real terminal**. Run
+  it from a console you can type into; from a script or a non-interactive
+  shell it reads end-of-file at once, checks the session immediately and
+  reports logged out.
+- `scripts/probe_loxo_source_sections.py --headed` waits for a sign-in in its
+  own window when the profile is logged out, then carries on. Closing that
+  window ends the probe.
+
 **Left-hand navigation, as seen logged in:** People · Lists · Jobs · Companies ·
 Schedule · Tasks · Sales CRM · **Outreach** · AI Chats (Beta) · Agent Impact ·
 Analytics · Settings · More · Help.
@@ -169,11 +196,16 @@ before typing. Pasting the document's braces verbatim would send them literally.
 
 ## The Source screen - similar titles and skills (2026-09-02)
 
-> **Status** **BUILT AND PROVEN LIVE** on job 3658508 (Axle): 10 titles and 12
-> skills written, saved as the team-shared search "Axle Infra Security -
-> automation", reloaded and restored chip-for-chip.
+> **Status** **Titles and skills BUILT AND PROVEN LIVE** on job 3658508 (Axle):
+> 10 titles and 12 skills written, saved as the team-shared search "Axle Infra
+> Security - automation", reloaded and restored chip-for-chip.
 > [loxo_source.py](../../app/platforms/loxo_source.py) drafts come from
 > [targeting_ai.py](../../app/platforms/targeting_ai.py) reading the JD.
+> **Years of Experience and Past Company added 2026-09-02 — BUILT, UNIT-TESTED,
+> NOT YET RUN LIVE.** The saved session was logged out before either section
+> could be opened (see [The session that died](#the-session-that-died-2026-09-02)),
+> so their shapes come from Loxo's own bundle, below. One
+> `loxo-source --live --headed` run proves them.
 
 `/agencies/<agency>/jobs/<job>/source` - a person reaches it via the job page
 -> **Add People** -> **Loxo Search**. The pipeline configures it right after
@@ -195,6 +227,72 @@ What three broken live runs taught, now encoded in the writer:
 - Titles commit on **exact** taxonomy matches only; skills match loosely,
   because Loxo files AWS under "Amazon Web Services (AWS)". A value the
   taxonomy refuses ("Infrastructure as Code") is cleared and reported.
+
+### Years of Experience and Company — read from the bundle (2026-09-02)
+
+> **Status** **WRITER BUILT, UNVERIFIED LIVE.** `.profiles/loxo` was logged out
+> before either section could be opened, so what follows was read out of Loxo's
+> own JavaScript (the `authenticated-*.js` bundle cached in the profile), not
+> off a screen. `python scripts/probe_loxo_source_sections.py --job <id>
+> --headed` opens both read-only and dumps what it finds; run it, then the
+> writer, and correct this section from what the screen shows.
+
+**Years of Experience is not a number box.** The section holds one read-only
+input (placeholder *"i.e. more than 10 years"*) that opens a checklist on
+click. Each ticked entry becomes a chip and the list stays open between
+clicks; Escape closes it. Loxo's state key is `personExperienceFilter`, saved
+to the search as `years_of_experience_ranges`. The five bands, with the ranges
+Loxo gives them:
+
+| Band | Years |
+|---|---|
+| `<1` | 0 – 1 |
+| `1-2` | 1 – 2.5 |
+| `3-5` | 2.5 – 5.5 |
+| `6-10` | 5.5 – 10.5 |
+| `10+` | 10.5 – 50 |
+
+`experience_bands()` ticks a band when its midpoint falls inside the JD's
+requirement: "5+ years" ticks `6-10` and `10+` and leaves `3-5` alone (half of
+that band is people with three years); "3-5 years" ticks `3-5`. A requirement
+no midpoint falls in ticks the band that holds the minimum, so it is never
+silently dropped. The years come out of the same Claude call that drafts the
+titles and skills (`SearchTargeting.min_years / max_years`) — total
+professional experience only, null when the JD gives no figure.
+
+**Company holds two chip boxes**, **Current Company** and **Past Company**,
+each with an *Include Subsidiaries* switch (default on), joined by the same
+AND/OR control the Title section has (`companyNameFilter`, periods `current`
+and `past`). Both autocomplete against Loxo's company records (placeholder
+*"Add company"*; each suggestion shows name + domain; 25 at most). The
+target-company list goes into **Past Company** — where a candidate has been is
+what says they have done this before — matched **exactly** after normalising
+legal suffixes: `match_company("Axle", ["Axle Logistics"])` is None on
+purpose. A company Loxo does not list is cleared and reported.
+
+Where the list comes from is
+[D-020](../11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage):
+the client's funding stage read off the `Client JD` (`stage_from_text`), else
+inferred by Claude and **flagged on the row**; then up to fifteen companies at
+that stage or the one after it, same sector and region, the client itself
+removed.
+
+Both sections are written after Title and Skills. A failure in either is a
+warning on the report, never a lost search — the titles and skills are what
+make the search worth saving. Test them on their own, without re-posting the
+campaign:
+
+```
+python -m app.cli loxo-source --job 3658508 --doc <file> --location "New York"                  # dry run: shows the draft
+python -m app.cli loxo-source --job 3658508 --doc <file> --location "New York" --live --headed
+```
+
+Also in the bundle, for whoever writes the next section: Tenure
+(`currentTenuresFilter`, same five bands with an Average/Current toggle) and
+Company Size (`companyHeadcountFilter`) are checklists of the same kind as the
+experience bands; Company Ranking (`companyRankingMinFilter`, "Top 1%" …) is a
+single pick. The Title section's *Include similar Job Titles* switch is
+`personTitleFilter.smart`.
 
 ## Candidate criteria — the Skill DNA (2026-08-31)
 
@@ -420,6 +518,7 @@ Two things the run settled that the docs did not know:
 - [ ] Does noon's `Create New Role` ATS picker list Loxo jobs created this way? If so, create the Loxo job **first** so noon's candidates land in it.
 - [ ] What does *Browse templates* offer, and does *Save as template...* on 693495 give the recruiter the template they want?
 - [ ] **Which GraphQL mutation saves the Longlist Agent's similar titles and skills, and are those fields free text or taxonomy lookups?** `scripts/probe_loxo_longlist.py` answers this in one session.
+- [ ] Does Loxo bind a session to one device, or rotate the id on each use? Either explains the 2026-09-02 logout; only a deliberate two-machine test tells them apart.
 
 ## Next
 
@@ -429,3 +528,9 @@ Two things the run settled that the docs did not know:
 4. Run `scripts/probe_loxo_longlist.py` on a real job, record the findings
    above, then write the Longlist Agent's titles and skills from the
    document's `Client JD`.
+5. **Sign in on `.profiles/loxo`, then prove the two new Source sections:**
+   `python scripts/probe_loxo_source_sections.py --job 3658508 --headed` to
+   see Years of Experience and Company for the first time, then
+   `python -m app.cli loxo-source --job 3658508 --doc <file> --location "New
+   York" --live --headed`. Correct the bundle-derived section above from what
+   the screen shows, and push the fresh session to Railway afterwards.

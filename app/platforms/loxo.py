@@ -175,8 +175,12 @@ class LoxoAdapter(RecipeAdapter):
         (Sohaib, 2026-09-01). Same failure containment as the criteria: a
         Source failure is a warning, never a lost campaign.
         """
-        from app.platforms.loxo_source import configure_source
-        from app.platforms.targeting_ai import draft_targeting
+        from app.platforms.loxo_source import configure_source, experience_bands
+        from app.platforms.targeting_ai import (
+            draft_companies,
+            draft_targeting,
+            stage_from_text,
+        )
 
         advert = document.advert or Advert(title="", body_text="", body_html="")
         name = _role_name(
@@ -194,10 +198,40 @@ class LoxoAdapter(RecipeAdapter):
                 "(is ANTHROPIC_API_KEY set here?)"
             )
             return
+
+        # The past-company filter follows the client's funding stage (D-020):
+        # read off the document when it states one, inferred when it does not.
+        # An inferred stage is said so on the row, because the list rests on it
+        # and a recruiter can check a guess in a minute that a search cannot.
+        company = (document.source_name or "").split(" - ")[0].strip()
+        stated = stage_from_text(document.job_description, advert.body_text)
+        companies = await draft_companies(
+            document.job_description,
+            company=company,
+            stage=stated,
+            location=advert.location or "",
+            role_title=name,
+            settings=self.settings,
+        )
+        bands = experience_bands(targeting.min_years, targeting.max_years)
+        if companies.companies and companies.inferred:
+            report.warnings.append(
+                f"the document does not state {company or 'the client'}'s funding "
+                f"stage; Claude inferred {companies.stage} and chose the past-company "
+                "filter from it - check the saved search's Past Company list"
+            )
+        elif not companies.companies:
+            report.warnings.append(
+                "no target companies could be drafted, so the Past Company filter "
+                "was left empty"
+            )
+
         if self.dry_run:
             report.warnings.append(
-                f"dry run: would set {len(targeting.similar_titles)} title(s) "
-                f"and {len(targeting.skills)} skill(s) on job {job_id}'s Source screen"
+                f"dry run: would set {len(targeting.similar_titles)} title(s), "
+                f"{len(targeting.skills)} skill(s), experience "
+                f"{'/'.join(bands) or 'unset'} and {len(companies.companies)} past "
+                f"company(ies) at {companies.stage} on job {job_id}'s Source screen"
             )
             return
 
@@ -207,6 +241,8 @@ class LoxoAdapter(RecipeAdapter):
                 job_id,
                 titles=targeting.similar_titles,
                 skills=targeting.skills,
+                years=(targeting.min_years, targeting.max_years),
+                companies=companies.companies,
                 search_name=f"{name} - auto"[:80],
                 base_url=self.recipe.defaults.get("base_url", "https://app.loxo.co"),
                 agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
@@ -220,6 +256,7 @@ class LoxoAdapter(RecipeAdapter):
             )
             report.warnings.append(f"Source filters not set on job {job_id}: {exc}")
             return
+        report.warnings.extend(result.warnings)
         report.warnings.append(f"Source search on job {job_id}: {result.summary}")
 
     async def _set_criteria(

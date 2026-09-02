@@ -475,3 +475,55 @@ advert is worse than the wrong one, but neither should be silent.
 **Revisit when** a platform needs per-destination copy for something that is not
 an advert — the mechanism is deliberately advert-shaped and should not be bent
 into a general per-platform override.
+
+## D-020 · Past-company filters follow the client's funding stage
+
+**Date** 2026-09-02 · **Status** Accepted
+
+**Context.** Loxo's Source screen and Juicebox's filters both offer a company
+filter, and both were left empty. Sohaib's rubric for filling it (2026-09-02):
+the people worth finding have built the same thing at a company of the same
+size, and for a startup "the same size" means the same funding stage. So the
+list of companies to filter on depends on knowing the client's stage.
+
+The stage is not a document field. Some JDs state it ("a Series B insurtech"),
+most do not, and the adverts anonymise the client on purpose. The company name
+is only in the filename's first segment.
+
+**Decision.** The company filter is built in two steps, both in
+[targeting_ai.py](../app/platforms/targeting_ai.py):
+
+1. **Read the stage off the document** - `stage_from_text` over the `Client
+   JD`, then the advert. A Series letter beats the vaguer words, and when a JD
+   narrates its funding history the latest round wins. Nothing is inferred
+   here; a stage this step returns was written by the client.
+2. **Ask Claude for the list**, telling it the stage when step 1 found one and
+   asking it to infer one when it did not. The list is companies in the same
+   sector at the **same stage or the one after it** - candidates who have
+   already seen the scale the client is heading for - in the same region when
+   the row has a location, named as LinkedIn profiles name them. The client
+   itself is removed (`_clean_companies`), in every spelling.
+
+The list goes into **Past Company** on Loxo (where a candidate has been is
+what says they have done this before), matched against Loxo's company records
+**exactly** after normalising legal suffixes - "Axle" never picks "Axle
+Logistics". A company Loxo does not know is dropped and reported.
+
+**An inferred stage is reported on the row.** The list rests on it, and a
+recruiter can check a guess in a minute that a search cannot. A stated stage is
+not reported; it is the client's own word.
+
+**Consequences.**
+
+- The document should state the stage where the recruiter knows it. One line
+  in the `Client JD` ("Stage: Series B") is enough, and it is the difference
+  between a list built on fact and one built on inference.
+- Fifteen companies is the cap (`MAX_COMPANIES`). A past-company filter is a
+  hard narrowing - a candidate must have worked at one of them - so the list
+  has to be short enough to be checked and long enough to leave a pool.
+- The drafting is platform-neutral. Juicebox's `Companies` filter reads the
+  same list when it is wired; only Loxo is wired today.
+
+**Revisit when** a client's stage is something the Notion row could carry as a
+column. That would replace step 1 outright and make step 2's inference the rare
+case rather than the common one.

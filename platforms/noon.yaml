@@ -165,7 +165,10 @@ steps:
     value: "{{ emails[0].subject | noon_tokens }}"
 
   - action: fill
-    description: the InMail's subject - the document's own InMail section when it has one, else email 1's
+    description: >-
+      the InMail's subject - the InMail section's own Subject: line when it has
+      one, else the emails' subject. The parser resolves that; a heading's name
+      is never a subject ("InMail" landed in this box once, 2026-09-02).
     selector: "input.absolute.inset-0 >> nth=1"
     value: "{{ inmail.subject | noon_tokens }}"
 

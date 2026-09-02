@@ -238,6 +238,9 @@ def test_channel_slots_use_document_copy_with_email_fallback():
     ctx = build_context(_multichannel_document(), None, {})
     assert ctx["inmail"]["body_text"] == "Hi {first_name}, an InMail."
     assert ctx["connection_note"]["body_text"] == "Hi {first_name}, connecting."
+    # noon types inmail.subject into step 4's subject box: the subject the
+    # author wrote for the emails, not the section heading's name.
+    assert ctx["inmail"]["subject"] == "Staff Platform Engineer / up to $350k"
 
     from app.models import Block
 

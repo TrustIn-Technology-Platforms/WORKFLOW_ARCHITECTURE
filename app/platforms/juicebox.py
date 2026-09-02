@@ -225,11 +225,31 @@ class JuiceboxAdapter(RecipeAdapter):
         This is the half Sohaib found missing entirely on 2026-09-01 ("not even
         20 percent configured"): a project, the JD pasted so Juicebox's AI
         builds the search, then the filters its AI leaves thin - titles,
-        location, skills. Same containment as everywhere else: a sourcing
-        failure is a warning on a run whose sequence already saved.
+        location, skills, years. Same containment as everywhere else: a
+        sourcing failure is a warning on a run whose sequence already saved.
+        It now also leaves a screenshot behind, because the first production
+        failure (2026-09-02) left one line of text and an empty project.
         """
-        from app.platforms.juicebox_sourcing import set_up_sourcing
+        from app.pipeline import _row_text
+        from app.platforms.browser import save_failure
+        from app.platforms.juicebox_sourcing import set_up_sourcing, years_span
         from app.platforms.targeting_ai import draft_targeting
+
+        # An existing project when the row names one - a recruiter made it, or
+        # an earlier run created it and stopped short of the search. Creating
+        # a second one beside it is the duplicate nobody asked for, and a value
+        # that is not a URL is a question for the recruiter, not a guess.
+        project_url: str | None = None
+        if row is not None:
+            column = self.settings.prop_juicebox_project
+            value = (_row_text(row, column) or "").strip()
+            if value and not value.startswith("http"):
+                report.warnings.append(
+                    f"sourcing skipped: {column!r} should hold the project's "
+                    f"full URL, not {value!r}"
+                )
+                return
+            project_url = value or None
 
         advert = document.advert or Advert(title="", body_text="", body_html="")
         name = _role_name(
@@ -247,14 +267,19 @@ class JuiceboxAdapter(RecipeAdapter):
                 "(is ANTHROPIC_API_KEY set here?)"
             )
             return
-        advert = document.advert
-        location = advert.location if advert and advert.location else None
+        # The row's column directly when the document has no advert to have
+        # been enriched: a Client-JD-only document (Axle) still has a location.
+        location = advert.location or None
+        if not location and row is not None:
+            location = _row_text(row, self.settings.prop_location)
         if self.dry_run:
+            where = f"search in {project_url}" if project_url else "create a sourcing project"
             report.warnings.append(
-                f"dry run: would create a sourcing project with "
+                f"dry run: would {where} with "
                 f"{len(targeting.similar_titles)} title(s), "
                 f"{len(targeting.skills)} skill(s)"
                 + (f", location {location}" if location else "")
+                + (f", {span}" if (span := years_span(targeting.min_years, targeting.max_years)) else "")
             )
             return
 
@@ -262,19 +287,32 @@ class JuiceboxAdapter(RecipeAdapter):
             result = await set_up_sourcing(
                 page,
                 project_name=name,
+                project_url=project_url,
                 jd=document.job_description,
                 titles=targeting.similar_titles,
                 skills=targeting.skills,
                 location=location,
+                min_years=targeting.min_years,
+                max_years=targeting.max_years,
             )
         except Exception as exc:  # noqa: BLE001 - a sourcing failure is a warning,
             # never a lost run whose sequence already saved.
             log.warning("juicebox sourcing not set up", extra={"error": str(exc)[:200]})
-            report.warnings.append(f"sourcing not set up: {exc}")
+            saved = await save_failure(
+                page.context, page, "juicebox-sourcing-failed", self.settings
+            )
+            report.warnings.append(
+                f"sourcing not set up: {exc}"
+                + (f" (screenshot: {saved[0]})" if saved else "")
+            )
             return
         report.warnings.extend(
             f"sourcing: {section} refused {', '.join(values)}"
             for section, values in result.refused.items() if values
+        )
+        report.warnings.append(
+            f"sourcing project: {result.project_url}"
+            + (" (created)" if result.project_created else " (existing)")
         )
         report.warnings.append(
             f"sourcing search: {result.search_url} ({result.summary})"

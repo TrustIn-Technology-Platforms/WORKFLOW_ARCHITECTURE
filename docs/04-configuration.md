@@ -56,6 +56,7 @@ to the same column even without an override.
 | `PROP_SKILLS` | `Skills` | **Optional.** Comma-separated skills for Wellfound's Skills tag field. Blank means they are drafted from the advert (`app/platforms/skills.py`); no `ANTHROPIC_API_KEY` means the field is left empty. |
 | `PROP_LOXO_JOB` | `Loxo Job` | **Optional.** The Loxo job whose criteria this row sets — URL or id. Blank falls back to matching by hiring company. |
 | `PROP_JUICEBOX_SEARCH` | `Juicebox Search` | **Optional.** The Juicebox search whose criteria this row sets — full URL. Blank skips that step. |
+| `PROP_JUICEBOX_PROJECT` | `Juicebox Project` | **Optional.** The Juicebox project the row's sourcing search is built in — full URL. Blank creates a project named after the document; fill it to reuse one a recruiter made, or one an earlier run created and then stopped short of the search. |
 
 ## Status values
 

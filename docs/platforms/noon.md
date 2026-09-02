@@ -131,9 +131,9 @@ previous step):
 | 1 | LinkedIn connection request | now | — | the connection note — `Add a note` warns it needs **LinkedIn Premium**, but `Add note anyways` saves it regardless (proven 2026-09-01: typed, closed, reopened, still there). 300-char cap, enforced by the editor |
 | 2 | Email | +4d, 08:00 Pacific | role title | document email 1 |
 | 3 | Email, same thread | +2d | (inherits) | document email 2 |
-| 4 | LinkedIn InMail | +2d | role title | document email 1 |
+| 4 | LinkedIn InMail | +2d | role title | the document's InMail section, else email 1. Subject: the section's own `Subject:` line, else the email subject — never the heading's name, which is how "InMail" was posted as a subject (fixed 2026-09-02) |
 | 5 | Email, same thread | +2d | (inherits) | document email 3 |
-| trigger | "If accepted → wait 30 min → send" (disabled) | | | document email 1 |
+| trigger | "If accepted → wait 30 min → send" (disabled) | | | the document's Connect section, else email 1 |
 
 **Finding the fields.** The DOM has no ids, so everything is positional, and
 the positions are not what the step numbers suggest:

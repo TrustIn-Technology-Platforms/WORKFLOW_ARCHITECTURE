@@ -79,9 +79,19 @@ both platforms sign in through SSO:
    <id>` maps the Longlist Agent's similar titles and skills, the last surface
    the automation has never opened. It saves nothing. Record what it finds in
    [docs/platforms/loxo.md](docs/platforms/loxo.md) before writing the writer.
+3. **One Loxo Source run for years and past companies.** The writers for the
+   Years of Experience bands and the Past Company box were built on 2026-09-02
+   from Loxo's bundle, not from a screen, because the saved session had died.
+   Sign in on the automation's own profile (`python -m app.cli login loxo`,
+   from a console you can press Enter in), run
+   `python scripts/probe_loxo_source_sections.py --job 3658508 --headed` to see
+   both sections, then `python -m app.cli loxo-source --job 3658508 --doc
+   <file> --location "New York" --live --headed`. Push the fresh session to
+   Railway afterwards: **one Loxo session used from two machines dies** —
+   [docs/platforms/loxo.md](docs/platforms/loxo.md#the-session-that-died-2026-09-02).
 
 [docs/12-sourcing-criteria.md](docs/12-sourcing-criteria.md) is the plan those
-two steps come from, and holds the state of every gap.
+steps come from, and holds the state of every gap.
 
 **Documents now carry a `Client JD` section** — the client's spec, verbatim,
 last. Every sourcing platform reads `ParsedDocument.job_description`, which is
