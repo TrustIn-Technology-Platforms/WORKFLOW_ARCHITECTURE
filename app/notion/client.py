@@ -267,16 +267,27 @@ class NotionClient:
     async def mark_posted(
         self, page_id: str, post_url: str | None, detail: str | None = None
     ) -> None:
+        """Status, URL, time - and the run's notes, kept out of `Error`.
+
+        `detail` is what the platforms reported about a run that succeeded:
+        the search built, what a taxonomy refused, a stage Claude inferred. It
+        goes to the `Notes` column when the database has one, and `Error` is
+        cleared. Without that column it has nowhere else to go, so it lands in
+        `Error` behind a "Posted OK" prefix - read as a failure on 2026-09-03.
+        """
         s = self.settings
-        await self.update_properties(
-            page_id,
-            {
-                s.prop_status: s.status_posted,
-                s.prop_post_url: post_url,
-                s.prop_posted_at: datetime.now(timezone.utc),
-                s.prop_error: detail or "",
-            },
-        )
+        values: dict[str, Any] = {
+            s.prop_status: s.status_posted,
+            s.prop_post_url: post_url,
+            s.prop_posted_at: datetime.now(timezone.utc),
+            s.prop_error: "",
+        }
+        if detail:
+            if await self.resolve_property(s.prop_notes) is not None:
+                values[s.prop_notes] = detail[:1800]
+            else:
+                values[s.prop_error] = f"Posted OK. Notes: {detail}"[:1800]
+        await self.update_properties(page_id, values)
 
     async def mark_failed(self, page_id: str, error: str) -> None:
         s = self.settings

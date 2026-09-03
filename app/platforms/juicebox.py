@@ -209,8 +209,12 @@ class JuiceboxAdapter(RecipeAdapter):
         )
 
         if self.settings.criteria_enabled:
-            await self._set_criteria(page, document, row, report)
-            await self._set_up_sourcing(page, document, row, report)
+            # Sourcing first: it builds the search, and the criteria step then
+            # has a search to rank on even when the row names none. Until
+            # 2026-09-03 the order was the other way round, and every row
+            # without a `Juicebox Search` column reported the criteria skipped.
+            search_url = await self._set_up_sourcing(page, document, row, report)
+            await self._set_criteria(page, document, row, report, built_search=search_url)
         return report
 
     async def _set_up_sourcing(
@@ -219,8 +223,11 @@ class JuiceboxAdapter(RecipeAdapter):
         document: ParsedDocument,
         row: NotionRow | None,
         report: RunReport,
-    ) -> None:
+    ) -> str | None:
         """A sourcing project for the role: JD search plus real filters.
+
+        Returns the URL of the search it built, for the criteria step; None
+        when it skipped, failed, or ran dry.
 
         This is the half Sohaib found missing entirely on 2026-09-01 ("not even
         20 percent configured"): a project, the JD pasted so Juicebox's AI
@@ -366,6 +373,7 @@ class JuiceboxAdapter(RecipeAdapter):
         report.warnings.append(
             f"sourcing search: {result.search_url} ({result.summary})"
         )
+        return result.search_url or None
 
     async def _set_criteria(
         self,
@@ -373,15 +381,15 @@ class JuiceboxAdapter(RecipeAdapter):
         document: ParsedDocument,
         row: NotionRow | None,
         report: RunReport,
+        built_search: str | None = None,
     ) -> None:
-        """Tighten the criteria of the search this sequence is for.
+        """Rank the criteria of the search this role belongs to.
 
-        The sequence and the search are separate objects, and nothing in a
-        document says which search a role belongs to — Juicebox names them by
-        hand ("Cloud Infra Engineer"). So the target comes from the row's
-        `Juicebox Search` column, and without it this stage is skipped and said
-        so rather than guessed at: writing criteria onto the wrong client's
-        search would quietly re-score their candidates.
+        The row's `Juicebox Search` column names it when a recruiter made the
+        search by hand. Otherwise the search this very run just built is the
+        one - it is the role's own, so ranking its criteria is safe. Only when
+        neither exists is the stage skipped and said so: writing criteria onto
+        a guessed search would quietly re-score another client's candidates.
         """
         from app.platforms.juicebox_criteria import set_criteria
 
@@ -390,18 +398,17 @@ class JuiceboxAdapter(RecipeAdapter):
             from app.pipeline import _row_text
 
             search = (_row_text(row, self.settings.prop_juicebox_search) or "").strip()
-
-        if not search:
-            report.warnings.append(
-                "search criteria skipped: no "
-                f"{self.settings.prop_juicebox_search!r} on the row, and a "
-                "document does not say which search a role belongs to"
-            )
-            return
-        if not search.startswith("http"):
+        if search and not search.startswith("http"):
             report.warnings.append(
                 f"search criteria skipped: {self.settings.prop_juicebox_search!r} "
                 "should hold the search's full URL"
+            )
+            return
+        search = search or built_search
+        if not search:
+            report.warnings.append(
+                "search criteria skipped: no search to rank - the row names none "
+                f"in {self.settings.prop_juicebox_search!r} and none was built"
             )
             return
 

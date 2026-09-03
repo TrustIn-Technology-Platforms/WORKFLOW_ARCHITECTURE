@@ -95,6 +95,11 @@ line of text to diagnose from.
 - **Save Changes, Run search, reload.** Filters persist only through Save
   Changes. The saved search is then run and reloaded, every section is read
   back, and anything missing is reported as refused on the row.
+- **Then the criteria.** The [search criteria](#search-criteria-2026-08-31)
+  step runs after the sourcing, on the search the run just built when the row
+  names none in `Juicebox Search` (since 2026-09-03; before that every such row
+  reported the criteria skipped). The criteria dialog's live write is still
+  unproven - a failure there is a note on the row, never a lost search.
 
 Location is the one filter that does not come from the document: the advert
 never states it, and a Client-JD-only document (Axle) has no advert at all, so

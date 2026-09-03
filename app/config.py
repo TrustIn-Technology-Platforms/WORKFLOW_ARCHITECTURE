@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     prop_post_url: str = "Post URL"
     prop_posted_at: str = "Posted At"
     prop_error: str = "Error"
+    # Optional. Where a successful run's notes go - which search was built,
+    # what a taxonomy refused, a stage Claude had to infer. Without this column
+    # they land in `Error` prefixed "Posted OK", which reads as a failure
+    # (Sohaib, 2026-09-03: "I got this error"). Add a rich-text column of this
+    # name and `Error` stays empty on success.
+    prop_notes: str = "Notes"
     prop_title: str = "Name"
     # Advert fields that live on the row rather than in the document. The
     # recruiters' adverts are prose with no labelled Location/Salary lines, and

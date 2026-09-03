@@ -49,6 +49,7 @@ to the same column even without an override.
 | `PROP_POST_URL` | `Post URL` | Written back on success. |
 | `PROP_POSTED_AT` | `Posted At` | Written back on success. |
 | `PROP_ERROR` | `Error` | Written back on failure. |
+| `PROP_NOTES` | `Notes` | **Optional.** Where a successful run's notes go: the search it built, what a taxonomy refused, a stage Claude inferred. Without this column the notes land in `Error` prefixed `Posted OK`, which reads as a failure. Add a rich-text column of this name and `Error` stays empty on success. |
 | `PROP_TITLE` | `Name` | Fallback title. The client also detects the real `title` column by type. |
 | `PROP_LOCATION` | `Location` | Fills `advert.location` when the document has none. Job boards (Wellfound) require it. |
 | `PROP_SALARY` | `Salary` | Fills `advert.salary` when the document has none. Wellfound hides a post without one. |
