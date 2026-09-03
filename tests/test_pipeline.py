@@ -147,3 +147,54 @@ def test_a_multi_select_skills_column_reads_as_a_list():
 
     assert doc.advert.tags == ["Kubernetes", "Terraform", "Go"]
     assert "tags <- Skills" in filled
+
+
+# -- rows a dead process left on Posting ----------------------------------------
+
+
+def _posting_row(page_id: str, minutes_ago: int | None) -> NotionRow:
+    from datetime import datetime, timedelta, timezone
+
+    edited = None if minutes_ago is None else datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    return NotionRow(page_id=page_id, title=page_id.title(), document_url=None,
+                     status="Posting", last_edited=edited)
+
+
+class _StuckClient:
+    def __init__(self, rows):
+        self.rows = rows
+        self.failed: dict[str, str] = {}
+
+    async def query_rows_by_status(self, status, limit=None):
+        assert status == "Posting"
+        return self.rows
+
+    async def mark_failed(self, page_id, error):
+        self.failed[page_id] = error
+
+
+def test_only_rows_stale_past_the_threshold_are_released():
+    """The Axle row of 2026-09-03: claimed, then the container was replaced.
+    A fresh claim may still be a live run; a row with no stamp is left alone."""
+    import asyncio
+
+    from app.config import Settings
+    from app.pipeline import recover_stuck_rows
+
+    client = _StuckClient([_posting_row("old", 50), _posting_row("fresh", 5), _posting_row("unknown", None)])
+    stuck = asyncio.run(recover_stuck_rows(client, Settings(), older_than_minutes=45))
+    assert [r.page_id for r in stuck] == ["old"]
+    assert set(client.failed) == {"old"}
+    assert "restarted" in client.failed["old"] and "Ready to Post" in client.failed["old"]
+
+
+def test_recover_dry_run_lists_but_changes_nothing():
+    import asyncio
+
+    from app.config import Settings
+    from app.pipeline import recover_stuck_rows
+
+    client = _StuckClient([_posting_row("old", 50)])
+    stuck = asyncio.run(recover_stuck_rows(client, Settings(), older_than_minutes=45, dry_run=True))
+    assert [r.page_id for r in stuck] == ["old"]
+    assert client.failed == {}

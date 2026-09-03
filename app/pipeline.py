@@ -8,7 +8,7 @@ platforms cannot race three updates.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.config import Settings, get_settings
@@ -305,12 +305,68 @@ async def _write_back(report: RowReport, client: NotionClient, dry_run: bool) ->
         log.warning("row failed", extra={"page_id": report.row.page_id, "error": detail})
         return
 
-    warnings = "; ".join(report.document.warnings[:3]) if report.document else ""
-    await client.mark_posted(report.row.page_id, report.post_urls_text, warnings or None)
+    # The platforms' own notes go on the row too: which search was built, what
+    # a taxonomy refused, a stage Claude had to infer. Until 2026-09-03 only
+    # parse warnings were written, so a Loxo run that refused nineteen chips
+    # showed a recruiter nothing but "Posted".
+    notes = [f"{r.platform}: {r.detail}" for r in report.results if r.detail]
+    if report.document and report.document.warnings:
+        notes.append("parse: " + "; ".join(report.document.warnings[:3]))
+    detail = " | ".join(notes)[:1800]
+    await client.mark_posted(report.row.page_id, report.post_urls_text, detail or None)
     log.info(
         "row posted",
         extra={"page_id": report.row.page_id, "post_url": report.post_urls_text},
     )
+
+
+STUCK_MESSAGE = (
+    "The posting service restarted while this row was being posted (a deploy or "
+    "a crash), so the run never finished and nothing was written back. Parts may "
+    "already be posted - check the platforms for a saved sequence or campaign "
+    "before re-running. To reuse what exists, fill Juicebox Project / Loxo Job; "
+    "then set the status back to Ready to Post."
+)
+
+
+async def recover_stuck_rows(
+    client: NotionClient,
+    settings: Settings | None = None,
+    *,
+    older_than_minutes: int | None = None,
+    dry_run: bool = False,
+) -> list[NotionRow]:
+    """Release rows a dead process left on `Posting`.
+
+    A row is claimed as `Posting` and released by the write-back at the end of
+    its run. When the process dies in between - a redeploy stopped the
+    container eight minutes into the Axle row on 2026-09-03 - nothing releases
+    it. A row untouched on `Posting` for longer than any live run takes is
+    marked Failed with a note that says what happened and what to check. Rows
+    without a last-edited stamp are left alone: not knowing is not evidence.
+    """
+    settings = settings or get_settings()
+    minutes = settings.stuck_posting_minutes if older_than_minutes is None else older_than_minutes
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    rows = await client.query_rows_by_status(settings.status_posting)
+    stuck = [r for r in rows if r.last_edited is not None and r.last_edited <= cutoff]
+    for row in stuck:
+        log.warning(
+            "row stuck in posting",
+            extra={
+                "page_id": row.page_id,
+                "title": row.title,
+                "since": row.last_edited.isoformat() if row.last_edited else None,
+                "dry_run": dry_run,
+            },
+        )
+        if not dry_run:
+            await client.mark_failed(
+                row.page_id,
+                f"{STUCK_MESSAGE} (claimed {row.last_edited:%Y-%m-%d %H:%M} UTC, "
+                f"untouched for over {minutes} minutes.)",
+            )
+    return stuck
 
 
 async def run_once(

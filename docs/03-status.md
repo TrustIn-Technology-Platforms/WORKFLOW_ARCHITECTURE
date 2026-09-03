@@ -45,6 +45,17 @@ stopped needing a terminal. Loxo's Past Company and Years of Experience
 writers are wired and unit-tested but still await one live run, which needs a
 person who can sign in to Loxo.
 
+**Amended 2026-09-03, afternoon: a row can no longer be left on `Posting`.**
+A push redeployed the service eight minutes into the Axle row; the old
+container was stopped mid-run and nothing wrote back, so the row sat on
+`Posting`. The service now sweeps for rows untouched on `Posting` for
+`STUCK_POSTING_MINUTES` on startup and every `STUCK_SWEEP_MINUTES`, marking
+them Failed with a note that says what to check (`pipeline.recover_stuck_rows`;
+`python -m app.cli recover --live` by hand). The platforms' own notes - which
+search was built, what a taxonomy refused, a stage Claude inferred - are now
+written to the row's `Error` column on success too; before this a Loxo run
+that refused nineteen chips showed a recruiter nothing but `Posted`.
+
 **Amended 2026-08-31, later: one JD, and noon knows where the job is.**
 The three platforms were building their criteria from three different texts —
 noon from the document's advert, Loxo from the description already on the Loxo

@@ -26,6 +26,10 @@ class NotionRow:
     platforms: list[str] = field(default_factory=list)
     url: str | None = None
     raw_properties: dict[str, Any] = field(default_factory=dict)
+    # Notion's own last-edited stamp (minute precision). A row claimed as
+    # `Posting` and not touched since is how long a run has been going - or how
+    # long ago the process running it died.
+    last_edited: datetime | None = None
 
     def property_text(self, name: str) -> str | None:
         """Read an arbitrary extra property as plain text.

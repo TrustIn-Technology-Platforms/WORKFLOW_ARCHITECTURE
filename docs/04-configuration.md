@@ -119,6 +119,8 @@ supported state: the gaps stay empty and the run says which ones did.
 | `SOURCING_MAX_TITLES` | `15` | How many similar job titles Claude drafts for a search's title filter (Loxo Source, Juicebox). Raised from 10 on 2026-09-03. |
 | `SOURCING_MAX_SKILLS` | `20` | How many hard skills Claude drafts for the skills filter. Raised from 12 on 2026-09-03. |
 | `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
+| `STUCK_POSTING_MINUTES` | `45` | A row untouched on `Posting` this long is taken as orphaned by a dead process (a redeploy) and marked Failed with a note. Longer than any live run on three platforms takes. |
+| `STUCK_SWEEP_MINUTES` | `10` | How often the deployed service sweeps for such rows (also once at startup). |
 
 ## Storage
 

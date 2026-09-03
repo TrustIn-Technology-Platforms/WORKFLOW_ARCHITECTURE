@@ -128,6 +128,17 @@ class Settings(BaseSettings):
     sourcing_max_skills: int = 20
     sourcing_max_companies: int = 30
 
+    # --- stuck rows ---------------------------------------------------------
+    # A row is claimed as `Posting` and released by the write-back at the end
+    # of its run. When the process dies in between - a redeploy stopped the
+    # container eight minutes into the Axle row on 2026-09-03 - nothing
+    # releases it, and the row sits on `Posting` until a person notices. The
+    # service sweeps for such rows on startup and every `stuck_sweep_minutes`,
+    # marking one Failed once it has been untouched for `stuck_posting_minutes`
+    # - long enough that no live run on three platforms can still be going.
+    stuck_posting_minutes: int = 45
+    stuck_sweep_minutes: int = 10
+
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")
     # Where the deployed service answers. Only the upload script reads it, so

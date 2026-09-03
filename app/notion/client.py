@@ -156,18 +156,43 @@ class NotionClient:
         if doc_type in ("url", "rich_text", "title"):
             filters.append({"property": doc_name, doc_type: {"is_not_empty": True}})
 
-        payload: dict[str, Any] = {"page_size": min(limit or s.poll_limit, 100)}
+        rows = await self._query(filters, limit or s.poll_limit)
+        log.info("queried notion", extra={"ready_rows": len(rows)})
+        return rows
+
+    async def query_rows_by_status(
+        self, status: str, limit: int | None = None
+    ) -> list[NotionRow]:
+        """Every row whose status column holds `status` - `Posting`, say.
+
+        The status column is a select or a status property; a checkbox column
+        has no such value and returns nothing.
+        """
+        s = self.settings
+        status_prop = await self.resolve_property(s.prop_status)
+        if status_prop is None:
+            raise PipelineError(
+                f"Database has no {s.prop_status!r} property. "
+                "Set PROP_STATUS to the real column name."
+            )
+        name, ptype = status_prop
+        if ptype not in ("status", "select"):
+            return []
+        return await self._query(
+            [{"property": name, ptype: {"equals": status}}], limit or 100
+        )
+
+    async def _query(self, filters: list[dict[str, Any]], limit: int) -> list[NotionRow]:
+        s = self.settings
+        payload: dict[str, Any] = {"page_size": min(limit, 100)}
         if len(filters) == 1:
             payload["filter"] = filters[0]
         elif filters:
             payload["filter"] = {"and": filters}
-
         data = await self._request(
             "POST", f"/databases/{s.notion_database_id}/query", json=payload
         )
-        rows = [self._to_row(page) for page in data.get("results", [])]
-        log.info("queried notion", extra={"ready_rows": len(rows)})
-        return rows[: limit or s.poll_limit]
+        return [self._to_row(page) for page in data.get("results", [])][:limit]
 
     async def get_row(self, page_id: str) -> NotionRow:
         data = await self._request("GET", f"/pages/{normalise_page_id(page_id)}")
@@ -195,6 +220,7 @@ class NotionClient:
             platforms=schema.multi_select_names(pick(s.prop_platforms)),
             url=page.get("url"),
             raw_properties=props,
+            last_edited=_parse_time(page.get("last_edited_time")),
         )
 
     # ------------------------------------------------------------------
@@ -262,6 +288,16 @@ class NotionClient:
 
 def _loose(name: str) -> str:
     return name.strip().lower().replace("_", " ").replace("-", " ")
+
+
+def _parse_time(value: object) -> datetime | None:
+    """Notion's ISO-8601 stamps ("2026-09-03T09:34:00.000Z") as aware datetimes."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def normalise_page_id(page_id: str) -> str:

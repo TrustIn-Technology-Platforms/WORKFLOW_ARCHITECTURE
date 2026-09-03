@@ -211,7 +211,7 @@ so keep row concurrency low on a small instance.
 | Every platform fails at once | Session expired, or a volume is not mounted | Re-capture logins; check `SESSION_DIR` |
 | `has no browser profile in <dir>` | The message names the directory it looked in. Under the checkout, the login was never captured. Under `/data`, the profile was never uploaded to the volume | Locally: `python -m app.cli login <key>`. On the server: capture on a workstation and copy it up — see [Getting the logins onto the server](#getting-the-logins-onto-the-server) |
 | One platform fails at the same step every time | The UI changed | Update the selector in `platforms/<key>.yaml` |
-| Rows stuck in `Posting` | Process died mid-row | Set them back to `Ready to Post` |
+| Rows stuck in `Posting` | The process died mid-row. A redeploy stops the container, and a Railway deploy straight after a push did exactly that eight minutes into a row on 2026-09-03 | The service sweeps on startup and every `STUCK_SWEEP_MINUTES` for rows untouched on `Posting` for `STUCK_POSTING_MINUTES` (45) and marks them Failed with a note; `python -m app.cli recover --live` does it by hand. Check the platforms for half-posted work first (a saved sequence, a campaign), fill `Juicebox Project` / `Loxo Job` to reuse it, then set the row back to `Ready to Post`. Do not push while a row is running |
 | Playwright errors on first browser run | Browsers not installed in the image | `playwright install --with-deps chromium` |
 
 ## Monitoring

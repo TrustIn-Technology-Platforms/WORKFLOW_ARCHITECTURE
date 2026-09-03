@@ -61,10 +61,48 @@ async def _process(page_id: str, dry_run: bool | None) -> None:
         log.exception("webhook row crashed", extra={"page_id": page_id})
 
 
+async def _sweep_stuck_rows(settings) -> None:
+    """Release rows a dead process left on `Posting`, now and on a timer.
+
+    A row is claimed as `Posting` when its run starts and released by the
+    write-back when it ends. A redeploy stops this container between the two
+    (the Axle row, 2026-09-03, eight minutes in), and the row would otherwise
+    sit on `Posting` until a person noticed. See pipeline.recover_stuck_rows.
+    """
+    import asyncio
+
+    from app.notion.client import NotionClient
+    from app.pipeline import recover_stuck_rows
+
+    if not settings.notion_configured:
+        return
+    while True:
+        try:
+            async with NotionClient(settings) as client:
+                stuck = await recover_stuck_rows(client, settings)
+            if stuck:
+                log.info("stuck rows released", extra={"count": len(stuck)})
+        except Exception:  # noqa: BLE001 - the sweep must never take the service down
+            log.exception("stuck-row sweep failed")
+        await asyncio.sleep(max(60, settings.stuck_sweep_minutes * 60))
+
+
 def create_app() -> FastAPI:
+    import asyncio
+    from contextlib import asynccontextmanager
+
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
-    app = FastAPI(title="Agentic posting service", version="1.0")
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        sweep = asyncio.create_task(_sweep_stuck_rows(settings))
+        try:
+            yield
+        finally:
+            sweep.cancel()
+
+    app = FastAPI(title="Agentic posting service", version="1.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict:

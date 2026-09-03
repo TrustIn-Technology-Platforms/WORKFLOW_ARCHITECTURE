@@ -561,14 +561,30 @@ async def create_project(page: "Page", name: str) -> str:
     if "/project/" not in page.url:
         raise PlatformError(f"opening the new project landed on {page.url}")
 
-    title = page.get_by_text("New Project", exact=True).first
-    await title.dblclick(timeout=10_000)
-    await page.wait_for_timeout(1_500)
-    editor = page.locator("input:visible").first
-    if "New Project" in (await editor.input_value() if await editor.count() else ""):
+    # The rename: double-click the title, wait for the inline input (the
+    # Railway container takes longer than 1.5s to show it - the 2026-09-03
+    # run left a project called "New Project"), type, Enter, check, retry.
+    for attempt in range(3):
+        title = page.get_by_text("New Project", exact=True).first
+        try:
+            await title.dblclick(timeout=10_000)
+        except Exception:
+            break
+        editor = None
+        for _ in range(8):
+            await page.wait_for_timeout(1_000)
+            candidate = page.locator("input:visible").first
+            if await candidate.count() and "New Project" in await candidate.input_value():
+                editor = candidate
+                break
+        if editor is None:
+            continue
         await editor.fill(name)
         await page.keyboard.press("Enter")
         await page.wait_for_timeout(3_000)
+        if name in await page.evaluate(_BODY_TEXT):
+            break
+        log.info("juicebox project rename retry", extra={"project": name, "attempt": attempt + 1})
     if name not in await page.evaluate(_BODY_TEXT):
         log.warning("juicebox project rename did not stick", extra={"project": name})
     # `project`, not `name`: `name` is a reserved LogRecord field, and a log

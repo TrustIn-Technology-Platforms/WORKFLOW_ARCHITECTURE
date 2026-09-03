@@ -1367,6 +1367,52 @@ def run(
         console.print("\n[dim]stopped[/dim]")
 
 
+@app.command()
+def recover(
+    older_than: Optional[int] = typer.Option(
+        None, "--older-than",
+        help="Minutes a row must have sat untouched on Posting. Defaults to "
+             "STUCK_POSTING_MINUTES.",
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="A dry run lists the stuck rows and changes nothing."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Release rows left on `Posting` by a process that died mid-run.
+
+    The deployed service does this on its own on startup and on a timer; this
+    is the same sweep by hand, for a row you can see is stuck right now.
+    """
+    from app.notion.client import NotionClient
+    from app.pipeline import recover_stuck_rows
+
+    settings = _setup(verbose)
+
+    async def _go() -> list[Any]:
+        async with NotionClient(settings) as client:
+            return await recover_stuck_rows(
+                client, settings, older_than_minutes=older_than, dry_run=dry_run
+            )
+
+    try:
+        stuck = asyncio.run(_go())
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    if not stuck:
+        console.print("[green]No rows stuck on Posting.[/green]")
+        return
+    for row in stuck:
+        since = f"{row.last_edited:%Y-%m-%d %H:%M} UTC" if row.last_edited else "unknown"
+        console.print(f"  {row.title}  [dim]{row.page_id}  claimed {since}[/dim]")
+    verb = "Would mark" if dry_run else "Marked"
+    console.print(f"\n{verb} {len(stuck)} row(s) Failed with the restart note.")
+    if dry_run:
+        console.print("[dim]Use --live to apply.[/dim]")
+
+
 async def _watch(interval: int, limit: int | None, dry_run: bool) -> None:
     from app.pipeline import run_once
 
