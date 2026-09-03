@@ -253,7 +253,11 @@ Nations) - and **Company Funding Stages** takes every stage from Seed up to
 the client's own: a Series C client selects Seed, Series A, Series B and
 Series C. The stage comes from the document when it states one and from
 Claude's inference when it does not, said so on the row. `--search <url>`
-sets the filters on a search that already exists.
+sets the filters on a search that already exists. The same morning the
+drafted lists grew on both platforms - 15 titles, 20 skills, 30 companies,
+the `SOURCING_MAX_*` settings - with the drafter told to fill the counts the
+JD supports rather than stop at a handful. Loxo has no funding-stage filter;
+its Past Company list is where the stage lands.
 
 ### Previously: Juicebox has no sourcing setup at all — **closed 2026-09-02**, kept for the record
 

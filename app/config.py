@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", description="Fills empty criteria from the advert")
     criteria_model: str = "claude-opus-5"
 
+    # --- sourcing lists -----------------------------------------------------
+    # How long the drafted filter lists are: the job titles and skills a search
+    # matches on, and the same-stage companies. Sohaib raised all three on
+    # 2026-09-03 after the first searches read thin. Every extra chip is one
+    # autocomplete round trip on the platform (about 6s on Juicebox), so a run
+    # grows with them.
+    sourcing_max_titles: int = 15
+    sourcing_max_skills: int = 20
+    sourcing_max_companies: int = 30
+
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")
     # Where the deployed service answers. Only the upload script reads it, so

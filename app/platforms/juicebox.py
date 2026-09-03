@@ -233,7 +233,6 @@ class JuiceboxAdapter(RecipeAdapter):
         from app.pipeline import _row_text
         from app.platforms.browser import save_failure
         from app.platforms.juicebox_sourcing import (
-            TARGET_COMPANIES,
             set_up_sourcing,
             stage_plan,
             years_span,
@@ -295,7 +294,7 @@ class JuiceboxAdapter(RecipeAdapter):
             stage=stated,
             location=location or "",
             role_title=name,
-            limit=TARGET_COMPANIES,
+            limit=self.settings.sourcing_max_companies,
             settings=self.settings,
         )
         stage = stated or (

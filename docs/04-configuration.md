@@ -116,6 +116,9 @@ supported state: the gaps stay empty and the run says which ones did.
 |----------|---------|-------|
 | `ANTHROPIC_API_KEY` | *(empty)* | Fills empty criteria buckets from the advert. Unset means the gaps are reported, not filled — never a failed run. |
 | `CRITERIA_MODEL` | `claude-opus-5` | Model used for that drafting. |
+| `SOURCING_MAX_TITLES` | `15` | How many similar job titles Claude drafts for a search's title filter (Loxo Source, Juicebox). Raised from 10 on 2026-09-03. |
+| `SOURCING_MAX_SKILLS` | `20` | How many hard skills Claude drafts for the skills filter. Raised from 12 on 2026-09-03. |
+| `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
 
 ## Storage
 

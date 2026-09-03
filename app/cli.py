@@ -723,7 +723,6 @@ async def _juicebox_sourcing(
     from app.platforms.browser import save_failure
     from app.platforms.engine import _role_name
     from app.platforms.juicebox_sourcing import (
-        TARGET_COMPANIES,
         is_search_url,
         set_up_sourcing,
         split_locations,
@@ -797,7 +796,7 @@ async def _juicebox_sourcing(
     stated = stage_from_text(jd, advert.body_text)
     drafted = await draft_companies(
         jd, company=company, stage=stated, location=location or "",
-        role_title=project_name, limit=TARGET_COMPANIES, settings=settings,
+        role_title=project_name, limit=settings.sourcing_max_companies, settings=settings,
     )
     stage = stated or (drafted.stage if drafted.stage and drafted.stage != "Unknown" else None)
     basis = "stated in the document" if stated else ("inferred by Claude" if stage else "unknown")
@@ -1095,7 +1094,7 @@ async def _loxo_source(
     stated = stage_from_text(jd, advert.body_text if advert else "")
     companies = await draft_companies(
         jd, company=company, stage=stated, location=where,
-        role_title=role_name, settings=settings,
+        role_title=role_name, limit=settings.sourcing_max_companies, settings=settings,
     )
     bands = experience_bands(targeting.min_years, targeting.max_years)
 
@@ -1143,7 +1142,7 @@ async def _loxo_source(
         )
         async with opener as (context, page):
             try:
-                return await configure_source(
+                report = await configure_source(
                     page,
                     job_id,
                     titles=targeting.similar_titles,
@@ -1154,6 +1153,18 @@ async def _loxo_source(
                     base_url=recipe.defaults.get("base_url", "https://app.loxo.co"),
                     agency_id=str(recipe.defaults.get("agency_id", "28356")),
                 )
+                # The proof, kept: the Source panel as the run left it.
+                from datetime import datetime, timezone
+
+                shots = Path(settings.artifact_dir) / "loxo-source"
+                shots.mkdir(parents=True, exist_ok=True)
+                final = shots / f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-source-saved.png"
+                try:
+                    await page.screenshot(path=str(final))
+                    console.print(f"[dim]screenshot: {final}[/dim]")
+                except Exception:
+                    pass
+                return report
             except PipelineError:
                 await save_failure(context, page, "loxo-source-failed", settings)
                 raise

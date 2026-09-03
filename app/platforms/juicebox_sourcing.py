@@ -403,9 +403,6 @@ def stages_up_to(stage: str | None, available: list[str]) -> list[str]:
 
 
 ALL_STAGE_KEYS = ["pre_seed", *_SERIES_ORDER, "ipo"]
-# How many same-stage companies to ask for. Sohaib's number (2026-09-02);
-# Loxo's Past Company box takes fifteen.
-TARGET_COMPANIES = 20
 
 
 def stage_plan(stage: str | None) -> list[str]:

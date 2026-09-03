@@ -211,6 +211,7 @@ class LoxoAdapter(RecipeAdapter):
             stage=stated,
             location=advert.location or "",
             role_title=name,
+            limit=self.settings.sourcing_max_companies,
             settings=self.settings,
         )
         bands = experience_bands(targeting.min_years, targeting.max_years)

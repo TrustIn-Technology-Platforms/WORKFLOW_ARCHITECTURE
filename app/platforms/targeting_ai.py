@@ -39,13 +39,13 @@ log = get_logger(__name__)
 
 MAX_TOKENS = 1_500
 
-# Enough breadth to widen a search without drowning it. Loxo's own UI caps
-# nothing, but every extra chip is an autocomplete round trip.
-MAX_TITLES = 10
-MAX_SKILLS = 12
-# Past-company filters narrow hard: a candidate must have worked at one of
-# them. Fifteen well-chosen names keep a pool; fifty would be a wish list.
-MAX_COMPANIES = 15
+# How long the lists are is a setting (SOURCING_MAX_TITLES / _SKILLS /
+# _COMPANIES): Sohaib raised all three on 2026-09-03 after the first searches
+# read thin. Every extra chip is one autocomplete round trip on the platform.
+# These are the fallbacks when a caller passes no settings.
+MAX_TITLES = 15
+MAX_SKILLS = 20
+MAX_COMPANIES = 30
 # A years figure outside this range is a parsing accident, not a requirement.
 MAX_YEARS = 40
 
@@ -70,7 +70,11 @@ role asks for, as the JD states them ("5+ years" -> min 5, no max; "3-5
 years" -> 3 and 5). Use the overall requirement, not years with one tool.
 Leave both null when the JD gives no figure; never guess one.
 
-Fewer, right entries beat long padded lists."""
+The user message says how many titles and skills to return. Fill those counts
+where the job description supports them - adjacent titles, the seniority
+variants the JD allows, every tool and regime the stack names or plainly
+implies - and stop short only where nothing real is left. Never pad with
+titles or skills the role does not call for."""
 
 COMPANIES_SYSTEM = """You build a target-company list for a technical recruiter's candidate search.
 
@@ -213,8 +217,11 @@ async def draft_targeting(
         log.warning("targeting not drafted - anthropic package not installed")
         return empty
 
+    max_titles = getattr(settings, "sourcing_max_titles", MAX_TITLES)
+    max_skills = getattr(settings, "sourcing_max_skills", MAX_SKILLS)
     prompt = (
-        f"Role: {role_title or 'unnamed'}\n\n"
+        f"Role: {role_title or 'unnamed'}\n"
+        f"Return up to {max_titles} similar titles and up to {max_skills} skills.\n\n"
         f"<job_description>\n{job_description.strip()}\n</job_description>"
     )
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -238,8 +245,8 @@ async def draft_targeting(
 
     min_years, max_years = _years(draft.min_years, draft.max_years)
     result = SearchTargeting(
-        similar_titles=_clean(draft.similar_titles, MAX_TITLES),
-        skills=_clean(draft.skills, MAX_SKILLS),
+        similar_titles=_clean(draft.similar_titles, max_titles),
+        skills=_clean(draft.skills, max_skills),
         min_years=min_years,
         max_years=max_years,
     )
@@ -262,7 +269,7 @@ async def draft_companies(
     stage: str | None = None,
     location: str = "",
     role_title: str = "",
-    limit: int = MAX_COMPANIES,
+    limit: int | None = None,
     settings: Settings | None = None,
 ) -> CompanyTargeting:
     """Target companies at the client's stage or one later, from the JD. Never raises.
@@ -274,6 +281,7 @@ async def draft_companies(
     """
     empty = CompanyTargeting()
     settings = settings or get_settings()
+    limit = limit or getattr(settings, "sourcing_max_companies", MAX_COMPANIES)
     if not settings.anthropic_api_key:
         log.info("target companies not drafted - no ANTHROPIC_API_KEY")
         return empty

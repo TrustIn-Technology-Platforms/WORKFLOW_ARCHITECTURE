@@ -51,10 +51,13 @@ Consequences:
   and expect Railway's copy to be the one that survives.
 - Your own Chrome's login is a different cookie jar. "It works in my browser"
   says nothing about `.profiles/loxo`.
-- `python -m app.cli login loxo` waits for **Enter in a real terminal**. Run
-  it from a console you can type into; from a script or a non-interactive
-  shell it reads end-of-file at once, checks the session immediately and
-  reports logged out.
+- `python -m app.cli login loxo` no longer needs a terminal (fixed
+  2026-09-03). It used to wait for Enter, and from a script, a VS Code task or
+  an agent's shell it read end-of-file at once, checked a session nobody had
+  signed into and reported it dead - which is what "the login is not working"
+  meant. It now saves on its own when Loxo's shell (the `Outreach` nav)
+  appears in the window; Enter still works from a real terminal, and closing
+  the window cancels.
 - `scripts/probe_loxo_source_sections.py --headed` waits for a sign-in in its
   own window when the profile is logged out, then carries on. Closing that
   window ends the probe.
@@ -205,7 +208,13 @@ before typing. Pasting the document's braces verbatim would send them literally.
 > NOT YET RUN LIVE.** The saved session was logged out before either section
 > could be opened (see [The session that died](#the-session-that-died-2026-09-02)),
 > so their shapes come from Loxo's own bundle, below. One
-> `loxo-source --live --headed` run proves them.
+> `loxo-source --live --headed` run proves them. **Still true on 2026-09-03:**
+> nobody could sign in that day either, so the writers are ready for that run
+> but unproven; the lists they will write are now 15 titles, 20 skills and 30
+> companies (`SOURCING_MAX_*`). Loxo's Source screen has **no funding-stage
+> filter**, so the Seed-to-own-stage rule Juicebox applies has no home here -
+> the stage shapes the Past Company list instead. Company Size is the nearest
+> control, and is not written until someone decides it should be.
 
 `/agencies/<agency>/jobs/<job>/source` - a person reaches it via the job page
 -> **Add People** -> **Loxo Search**. The pipeline configures it right after
@@ -273,9 +282,9 @@ purpose. A company Loxo does not list is cleared and reported.
 Where the list comes from is
 [D-020](../11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage):
 the client's funding stage read off the `Client JD` (`stage_from_text`), else
-inferred by Claude and **flagged on the row**; then up to fifteen companies at
-that stage or the one after it, same sector and region, the client itself
-removed.
+inferred by Claude and **flagged on the row**; then up to thirty companies
+(`SOURCING_MAX_COMPANIES`, raised from fifteen on 2026-09-03) at that stage or
+the one after it, same sector and region, the client itself removed.
 
 Both sections are written after Title and Skills. A failure in either is a
 warning on the report, never a lost search — the titles and skills are what

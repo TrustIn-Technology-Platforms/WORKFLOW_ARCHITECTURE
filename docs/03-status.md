@@ -38,7 +38,12 @@ in that state without re-posting the row. See
 The next morning (2026-09-03) the same run gained the **Companies** filter —
 about twenty companies of the client's stage and kind, drafted by Claude and
 matched to Juicebox's index by exact name — and **Company Funding Stages**,
-set to every stage from Seed up to the client's own.
+set to every stage from Seed up to the client's own. The drafted lists grew
+the same morning on both platforms — 15 titles, 20 skills, 30 companies, as
+`SOURCING_MAX_TITLES` / `_SKILLS` / `_COMPANIES` — and `login <platform>`
+stopped needing a terminal. Loxo's Past Company and Years of Experience
+writers are wired and unit-tested but still await one live run, which needs a
+person who can sign in to Loxo.
 
 **Amended 2026-08-31, later: one JD, and noon knows where the job is.**
 The three platforms were building their criteria from three different texts —

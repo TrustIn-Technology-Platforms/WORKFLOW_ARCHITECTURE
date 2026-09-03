@@ -61,3 +61,30 @@ def test_a_board_advert_section_is_enough():
 
     with pytest.raises(AuthenticationRequired):
         asyncio.run(adapter.post(document))
+
+
+# -- login capture without a terminal -----------------------------------------
+
+
+def test_login_wait_does_not_take_eof_for_the_operator(monkeypatch):
+    """From a script or an agent's shell, stdin is end-of-file at once. The old
+    wait read that as Enter, checked a session nobody had signed into, and
+    reported the login dead (Loxo, 2026-09-02/03). Without a terminal the wait
+    now watches the browser and runs to its timeout instead."""
+    import asyncio
+
+    from app.platforms.adapter import _await_login
+
+    class Login:
+        ready_selector = None
+        logged_out_pattern = None
+
+    class Page:
+        def is_closed(self):
+            return False
+
+        async def wait_for_event(self, name, timeout=0):
+            await asyncio.Event().wait()
+
+    # pytest's captured stdin raises on read, the way a closed pipe does.
+    assert asyncio.run(_await_login(Page(), Login(), timeout_seconds=1)) == "timeout"

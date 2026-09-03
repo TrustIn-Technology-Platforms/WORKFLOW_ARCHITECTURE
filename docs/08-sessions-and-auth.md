@@ -53,7 +53,13 @@ The command:
 2. Opens a **visible** browser at `login.url`, regardless of the `HEADLESS`
    setting — the whole point is that a person interacts with it.
 3. Waits for `login.ready_selector` to appear, which is what proves the login
-   actually completed rather than the page merely having loaded.
+   actually completed rather than the page merely having loaded - or for Enter
+   in the terminal, when there is one. **A shell with no terminal is fine**
+   (fixed 2026-09-03): stdin handing back end-of-file at once used to count as
+   Enter, so a login started from a script, a VS Code task or an agent's shell
+   checked a session nobody had signed into and reported it dead. Now such a
+   stdin is ignored and only the selector, Enter from a real terminal, or the
+   window closing ends the wait.
 4. Writes `storage_state` to `SESSION_DIR` and reports the path and the time.
 
 Nothing is typed for the user, and nothing is read back from the form.

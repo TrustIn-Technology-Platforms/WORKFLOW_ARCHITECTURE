@@ -315,8 +315,9 @@ async def capture_login(
 
             print(f"\n  A browser has opened at {login.url}")
             print(f"  Log in to {recipe.label} - take as long as you need.")
-            print("\n  Press Enter here once you are logged in. "
-                  "(It also saves on its own if it can tell.)\n")
+            print("\n  Press Enter here once you are logged in - or just wait: the "
+                  "session saves itself once the app's own shell appears. Closing "
+                  "the window cancels.\n")
 
             signal = await _await_login(page, login, timeout_seconds)
 
@@ -434,10 +435,28 @@ async def capture_login(
 
 async def _await_login(page: "Page", login: Any, timeout_seconds: int) -> str:
     """Finish on Enter, on a detected login, or when the browser is closed."""
+    # Only a real terminal gets the Enter key. From a script, a VS Code task
+    # or an agent's shell, stdin is end-of-file at once - `input()` returned
+    # immediately, the session was checked before anyone had signed in, and
+    # the login was reported dead (Loxo, 2026-09-02/03). Without a terminal
+    # the detector and the window are the only signals.
+    async def operator() -> None:
+        # A stdin that is closed, or that hands back end-of-file the instant it
+        # is read - a script, a VS Code task, an agent's shell, even one whose
+        # pseudo-terminal claims isatty() - is not a person. Such a task never
+        # resolves, and the detector and the window carry the wait.
+        started = asyncio.get_event_loop().time()
+        try:
+            line = await asyncio.to_thread(input)
+        except (EOFError, OSError):
+            line = None
+        if line is None or (line == "" and asyncio.get_event_loop().time() - started < 2.0):
+            await asyncio.Event().wait()
+
     tasks = {
-        asyncio.create_task(asyncio.to_thread(input)): "operator",
         asyncio.create_task(_poll_logged_in(page, login)): "detected",
         asyncio.create_task(page.wait_for_event("close", timeout=0)): "closed",
+        asyncio.create_task(operator()): "operator",
     }
 
     done, pending = await asyncio.wait(
