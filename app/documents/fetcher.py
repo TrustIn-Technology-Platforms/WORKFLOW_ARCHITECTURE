@@ -155,12 +155,30 @@ class ShareLinkFetcher:
 
 
 def _filename_from(response: httpx.Response) -> str | None:
+    """The name in Content-Disposition, decoded.
+
+    SharePoint percent-encodes what it cannot say in ASCII (`Firecrawl %C2%B7
+    Backend ...` for a middle dot) and may add the RFC 5987 `filename*=` form.
+    The raw value became the sequence, project and search name on every
+    platform on 2026-09-03, so both forms are decoded and `filename*` wins.
+    """
+    from urllib.parse import unquote
+
     disposition = response.headers.get("content-disposition", "")
+    plain: str | None = None
+    star: str | None = None
     for part in disposition.split(";"):
         part = part.strip()
-        if part.lower().startswith("filename="):
-            return part.split("=", 1)[1].strip().strip('"') or None
-    return None
+        low = part.lower()
+        if low.startswith("filename*="):
+            value = part.split("=", 1)[1].strip().strip('"')
+            if "''" in value:  # UTF-8''<percent-encoded>
+                value = value.split("''", 1)[1]
+            star = unquote(value)
+        elif low.startswith("filename="):
+            plain = unquote(part.split("=", 1)[1].strip().strip('"'))
+    name = (star or plain or "").strip()
+    return name or None
 
 
 def build_fetcher(settings: Settings | None = None) -> DocumentFetcher:

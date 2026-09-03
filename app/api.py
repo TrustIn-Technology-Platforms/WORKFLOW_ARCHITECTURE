@@ -37,6 +37,46 @@ class WebhookPayload(BaseModel):
     page_id: str
 
 
+# One row at a time on this box. Two browser contexts on one account are how a
+# platform logs both out, and the webhook and the poller below must not race
+# for the same row: whichever holds the lock re-reads the row and takes it only
+# while it still says Ready, so a row claimed by one path is invisible to the
+# other.
+_ROW_LOCK = None
+
+
+def _row_lock():
+    global _ROW_LOCK
+    import asyncio
+
+    if _ROW_LOCK is None:
+        _ROW_LOCK = asyncio.Lock()
+    return _ROW_LOCK
+
+
+async def _run_if_ready(page_id: str, dry_run: bool | None, *, source: str) -> None:
+    """Run one row, under the lock, only while it still reads Ready to Post."""
+    from app.notion.client import NotionClient
+    from app.pipeline import process_row
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    async with _row_lock():
+        async with NotionClient(settings) as client:
+            row = await client.get_row(page_id)
+            if (row.status or "").strip() != settings.status_ready:
+                log.info(
+                    "row skipped - not ready",
+                    extra={"page_id": page_id, "status": row.status, "source": source},
+                )
+                return
+            report = await process_row(row, client, settings, dry_run)
+    log.info(
+        f"{source} row done",
+        extra={"page_id": page_id, "ok": report.ok, "post_url": report.post_urls_text},
+    )
+
+
 async def _process(page_id: str, dry_run: bool | None) -> None:
     """Background worker: run one row and let write-back record the outcome.
 
@@ -44,21 +84,43 @@ async def _process(page_id: str, dry_run: bool | None) -> None:
     the row's Error column and the log rather than returned to the caller — the
     Notion automation only needs to know the request was accepted.
     """
-    from app.pipeline import run_page
-
     try:
-        report = await run_page(page_id, dry_run=dry_run)
-        log.info(
-            "webhook row done",
-            extra={"page_id": page_id, "ok": report.ok, "post_url": report.post_urls_text},
-        )
+        await _run_if_ready(page_id, dry_run, source="webhook")
     except PipelineError as exc:
-        # run_page already marks the row Failed for pipeline errors it raises
-        # inside process_row; this catches anything before that (e.g. the row
-        # could not be fetched) so the task never dies silently.
+        # process_row marks the row Failed for pipeline errors raised inside
+        # it; this catches anything before that (e.g. the row could not be
+        # fetched) so the task never dies silently.
         log.error("webhook row failed", extra={"page_id": page_id, "error": str(exc)})
     except Exception:  # noqa: BLE001 - a background task must not crash the worker
         log.exception("webhook row crashed", extra={"page_id": page_id})
+
+
+async def _poll_ready_rows(settings) -> None:
+    """Pick up `Ready to Post` rows without waiting for n8n.
+
+    The webhook is only as prompt as whatever calls it: on 2026-09-03 every
+    call arrived at five seconds past a minute, and a row sat on Ready to Post
+    for half an hour after the previous one had finished. The service now asks
+    Notion itself every `poll_minutes` and runs what it finds, one row at a
+    time. The webhook keeps working alongside; the lock and the Ready re-check
+    stop the two from posting the same row twice.
+    """
+    import asyncio
+
+    from app.notion.client import NotionClient
+
+    if not settings.notion_configured or settings.poll_minutes <= 0:
+        return
+    await asyncio.sleep(30)  # let the app come up before the first Notion call
+    while True:
+        try:
+            async with NotionClient(settings) as client:
+                rows = await client.query_ready_rows()
+            for row in rows:
+                await _run_if_ready(row.page_id, None, source="poll")
+        except Exception:  # noqa: BLE001 - the poll must never take the service down
+            log.exception("ready-row poll failed")
+        await asyncio.sleep(max(60, settings.poll_minutes * 60))
 
 
 async def _sweep_stuck_rows(settings) -> None:
@@ -96,11 +158,15 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        sweep = asyncio.create_task(_sweep_stuck_rows(settings))
+        tasks = [
+            asyncio.create_task(_sweep_stuck_rows(settings)),
+            asyncio.create_task(_poll_ready_rows(settings)),
+        ]
         try:
             yield
         finally:
-            sweep.cancel()
+            for task in tasks:
+                task.cancel()
 
     app = FastAPI(title="Agentic posting service", version="1.0", lifespan=lifespan)
 

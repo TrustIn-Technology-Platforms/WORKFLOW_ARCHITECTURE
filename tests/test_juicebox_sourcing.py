@@ -17,6 +17,7 @@ from app.platforms.juicebox_sourcing import (
     pick_option,
     present,
     project_home,
+    project_title,
     same_company,
     split_locations,
     stage_key,
@@ -53,6 +54,16 @@ def test_a_company_needs_its_own_name_not_the_nearest():
     # Loose matching (titles, skills) may take a containing or first real option.
     assert pick_option(["Platform Lead\nTITLE", "Platform Engineer"], "engineer") == 1
     assert pick_option(['Ask AI for "x"', "Something"], "x") == 1
+
+
+def test_project_titles_are_cut_to_what_juicebox_keeps():
+    # Juicebox keeps 50 characters; the full name is what the check looked for,
+    # which is why three successful renames were reported as failures.
+    long = "Axle Insurance - Platform Infrastructure Eng - NY-ATLANTA"
+    assert len(project_title(long)) <= 50
+    assert project_title(long) == "Axle Insurance - Platform Infrastructure Eng - NY"
+    assert project_title("Short name") == "Short name"
+    assert project_title("  spaced   out  ") == "spaced out"
 
 
 def test_a_short_name_with_the_full_name_in_the_domain_is_the_same_company():

@@ -163,18 +163,22 @@ rather than take a lookalike. Re-runs skip what is already there. The
 whole-word location rule is pinned by unit test only: the run that would have
 exercised it found the earlier Nyack chip and read "NY" as present.
 
-### Open: the rename fails on the server
+### The fifty-character project name (2026-09-03)
 
-`create_project` renames the new "New Project" by double-clicking its title
-and typing into the inline input. That worked in every local run and on the
-first production run (2026-09-02), and has now failed twice on the Railway
-container (2026-09-03), leaving projects literally named "New Project" -
-`BBt995iKw162kVUjwG6H` and `D0sbyTrSQ9aUNhBdJWut` - with the search inside
-them. The driver retries three times, and a failure now logs the visible
-inputs and saves `artifacts/<stamp>-juicebox-rename-failed.png` on the volume
-(`scripts/pull_artifacts.py`). Until it is understood, the reliable path is the
-row's `Juicebox Project` column: with the project's URL there nothing is
-created or renamed.
+Juicebox keeps the first **50 characters** of a project name and drops the
+rest without a word. "Axle Insurance - Platform Infrastructure Eng - NY-ATLANTA"
+became "… Eng - NY-" on 2026-09-02 — the name in Sohaib's first screenshot —
+and the driver's check for the *full* name then reported three successful
+server-side renames as "rename did not stick" on 2026-09-03; the screenshot
+saved on the volume showed the project correctly named and cut. Names are now
+cut to what Juicebox keeps (`project_title`) before they are typed, and the
+check looks for that. There are no projects called "New Project" from those
+runs, only correctly cut names. The `Juicebox Project` column still avoids a
+new project altogether when one exists.
+
+Related: the `.docx` filename came off SharePoint percent-encoded
+("Firecrawl %C2%B7 Backend …") and was used raw as the sequence, project and
+search name; `fetcher._filename_from` now decodes it.
 
 ### Running it on its own
 

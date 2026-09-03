@@ -139,6 +139,13 @@ class Settings(BaseSettings):
     stuck_posting_minutes: int = 45
     stuck_sweep_minutes: int = 10
 
+    # --- picking up rows ----------------------------------------------------
+    # The service asks Notion for `Ready to Post` rows itself, every this many
+    # minutes, instead of waiting for n8n's call (which arrived up to half an
+    # hour after a row was set, 2026-09-03). 0 turns the poll off and leaves
+    # the webhook as the only trigger. Rows run one at a time either way.
+    poll_minutes: int = 2
+
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")
     # Where the deployed service answers. Only the upload script reads it, so

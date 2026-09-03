@@ -138,3 +138,52 @@ def test_artifact_paths_cannot_escape_the_directory(tmp_path, monkeypatch):
         assert response.status_code == 404
     finally:
         get_settings.cache_clear()
+
+
+# -- one row at a time, only while it still says Ready ---------------------------
+
+
+def test_a_row_is_run_only_while_it_still_reads_ready(monkeypatch):
+    """The webhook and the poller can both see a row; whichever takes it first
+    marks it Posting, and the other must then leave it alone."""
+    import asyncio
+
+    from app import api
+    from app.models import NotionRow
+
+    rows = {
+        "ready": NotionRow(page_id="ready", title="R", document_url="x", status="Ready to Post"),
+        "taken": NotionRow(page_id="taken", title="T", document_url="x", status="Posting"),
+    }
+    processed: list[str] = []
+
+    class FakeClient:
+        def __init__(self, settings):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def get_row(self, page_id):
+            return rows[page_id]
+
+    async def fake_process_row(row, client, settings, dry_run):
+        processed.append(row.page_id)
+
+        class Report:
+            ok = True
+            post_urls_text = None
+
+        return Report()
+
+    monkeypatch.setattr("app.notion.client.NotionClient", FakeClient)
+    monkeypatch.setattr("app.pipeline.process_row", fake_process_row)
+    monkeypatch.setattr("app.api.get_settings", lambda: __import__("app.config").config.Settings(
+        notion_token="t", notion_database_id="d"))
+
+    asyncio.run(api._run_if_ready("ready", None, source="test"))
+    asyncio.run(api._run_if_ready("taken", None, source="test"))
+    assert processed == ["ready"]

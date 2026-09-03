@@ -85,6 +85,15 @@ X-Webhook-Secret: <WEBHOOK_SECRET>
 Both can run together. Claiming a row by setting it to `Posting` is what stops a
 webhook and a poll from double-posting the same row.
 
+**The service also polls (2026-09-03).** Every `POLL_MINUTES` (2) it asks
+Notion for rows on `Ready to Post` and runs them itself, one at a time, so a
+row no longer waits for n8n's call — which on 2026-09-03 arrived only at five
+seconds past a minute and left a row waiting half an hour after the previous
+one had finished. The webhook still works alongside: whichever path takes a
+row re-reads it under a lock and runs it only while it still says
+`Ready to Post`, so the two cannot post the same row twice. A row that is not
+on `Ready to Post` when the webhook fires is skipped and logged, not run.
+
 ## Getting the logins onto the server
 
 **A deployed run cannot log itself in.** `.profiles/` is excluded from git *and*

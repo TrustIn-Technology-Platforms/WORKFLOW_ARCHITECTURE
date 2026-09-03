@@ -229,6 +229,22 @@ class SourcingReport:
 # ----------------------------------------------------------------------
 
 
+# Juicebox keeps the first fifty characters of a project name and drops the
+# rest without a word: "Axle Insurance - Platform Infrastructure Eng - NY-ATLANTA"
+# became "... Eng - NY-" (2026-09-02), and a check for the full name then read
+# as a failed rename three times over (2026-09-03).
+PROJECT_NAME_MAX = 50
+
+
+def project_title(name: str) -> str:
+    """The name Juicebox will actually keep: cut to its limit, no dangling
+    separator left at the end."""
+    cleaned = " ".join((name or "").split())
+    if len(cleaned) <= PROJECT_NAME_MAX:
+        return cleaned
+    return cleaned[:PROJECT_NAME_MAX].rstrip(" -–·/|,").strip()
+
+
 def project_home(url: str) -> str:
     """The project page that offers the JD search, from any URL inside it.
 
@@ -603,8 +619,9 @@ async def create_project(page: "Page", name: str) -> str:
         raise PlatformError(f"opening the new project landed on {page.url}")
 
     # The rename: double-click the title, wait for the inline input (the
-    # Railway container takes longer than 1.5s to show it - the 2026-09-03
-    # run left a project called "New Project"), type, Enter, check, retry.
+    # Railway container takes longer than 1.5s to show it), type the name as
+    # Juicebox will keep it, Enter, check for that, retry.
+    title_text = project_title(name)
     for attempt in range(3):
         title = page.get_by_text("New Project", exact=True).first
         try:
@@ -620,13 +637,13 @@ async def create_project(page: "Page", name: str) -> str:
                 break
         if editor is None:
             continue
-        await editor.fill(name)
+        await editor.fill(title_text)
         await page.keyboard.press("Enter")
         await page.wait_for_timeout(3_000)
-        if name in await page.evaluate(_BODY_TEXT):
+        if title_text in await page.evaluate(_BODY_TEXT):
             break
-        log.info("juicebox project rename retry", extra={"project": name, "attempt": attempt + 1})
-    if name not in await page.evaluate(_BODY_TEXT):
+        log.info("juicebox project rename retry", extra={"project": title_text, "attempt": attempt + 1})
+    if title_text not in await page.evaluate(_BODY_TEXT):
         # Twice on the server (2026-09-03) and never locally - so leave the
         # evidence a laptop cannot reproduce: what inputs the page had, and a
         # screenshot in the artifact dir (pulled with scripts/pull_artifacts.py).
