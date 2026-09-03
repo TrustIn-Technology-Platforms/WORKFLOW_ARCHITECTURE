@@ -12,11 +12,96 @@ from app.platforms.juicebox_sourcing import (
     _landed,
     chip_label,
     is_search_url,
+    match_mode,
     new_lines,
+    pick_option,
+    present,
     project_home,
     split_locations,
+    stage_key,
+    stages_up_to,
     years_span,
 )
+
+
+# -- autocomplete options ----------------------------------------------------
+
+STRIPE_OPTIONS = [
+    'Ask AI for "Stripe"', "Stripe\nstripe.com", "Stripes\nstripes.co",
+    "Stripe-A-Zone, LLC\nstripe-a-zone.com", "Stripe Olt\nstripeolt.com",
+]
+
+
+def test_the_ask_ai_suggestion_is_never_the_answer():
+    # Live, 2026-09-02: the first suggestion for every company is 'Ask AI for
+    # "<name>"', which contains the name. The exact name is the second.
+    assert pick_option(STRIPE_OPTIONS, "Stripe", mode="exact") == 1
+    assert pick_option(['Ask AI for "Foo"'], "Foo") is None
+
+
+def test_a_company_needs_its_own_name_not_the_nearest():
+    assert pick_option(STRIPE_OPTIONS, "Stripe Olt", mode="exact") == 4
+    assert pick_option(STRIPE_OPTIONS, "Stripey", mode="exact") is None
+    # The first live run (2026-09-03): a name that merely starts with the value
+    # is a different company.
+    assert pick_option(["United Nations\nun.org"], "Unit", mode="exact") is None
+    assert pick_option(["Sureskills\nsureskills.com"], "Sure", mode="exact") is None
+    assert pick_option(["Method Financial Planning"], "Method Financial", mode="exact") is None
+    # Legal suffixes and punctuation are not part of the name.
+    assert pick_option(["Stripe, Inc.\nstripe.com"], "Stripe", mode="exact") == 0
+    # Loose matching (titles, skills) may take a containing or first real option.
+    assert pick_option(["Platform Lead\nTITLE", "Platform Engineer"], "engineer") == 1
+    assert pick_option(['Ask AI for "x"', "Something"], "x") == 1
+
+
+def test_a_location_abbreviation_matches_a_whole_word_never_a_prefix():
+    # Live, 2026-09-03: "NY" picked "Nyack" under the start-of-name rule.
+    options = ['Ask AI for "NY"', "Nyack\nCITY", "New York, NY, United States\nCITY", "New York\nREGION"]
+    assert pick_option(options, "NY", mode="token") == 2
+    assert pick_option(['Ask AI for "NY"', "Nyack\nCITY"], "NY", mode="token") is None
+    assert pick_option(["Atlanta, GA, United States\nCITY"], "Atlanta", mode="token") == 0
+    assert pick_option(["Atlanta\nCITY", "Atlanta, GA\nCITY"], "Atlanta", mode="token") == 0
+    assert match_mode("Location(s)") == "token"
+    assert match_mode("Companies") == "exact"
+    assert match_mode("Job Titles") == "loose"
+
+
+def test_present_is_exact_for_companies_and_loose_elsewhere():
+    block = "Current + Past\nClear all\nUnited Nations\nStripe, Inc.\n+ Add company group"
+    assert present(block, "Stripe", mode="exact")
+    assert not present(block, "Unit", mode="exact")
+    assert present("CITY\nAtlanta", "ATL")
+    assert not present("CITY\nAtlanta", "NY")
+
+
+# -- funding stages ----------------------------------------------------------
+
+
+def test_stage_keys_follow_juicebox_spelling():
+    assert stage_key("Series B") == "series_b"
+    assert stage_key("series-a") == "series_a"
+    assert stage_key("Series D+") == "series_d"
+    assert stage_key("Pre-seed") == "pre_seed"
+    assert stage_key("Seed") == "seed"
+    assert stage_key("Public") == "ipo"
+    assert stage_key("Growth stage") == "series_d"
+    assert stage_key("Early stage") == "series_a"
+    assert stage_key("Bootstrapped") is None
+    assert stage_key("Unknown") is None
+    assert stage_key(None) is None
+
+
+def test_stages_run_from_seed_up_to_the_clients_own():
+    menu = ["pre_seed", "seed", "series_a", "series_b", "series_c", "series_d", "ipo"]
+    # Sohaib's rule: a Series C client takes Seed, A, B and C - not Pre-seed,
+    # not D.
+    assert stages_up_to("Series C", menu) == ["seed", "series_a", "series_b", "series_c"]
+    assert stages_up_to("Seed", menu) == ["seed"]
+    assert stages_up_to("Pre-seed", menu) == ["pre_seed"]
+    assert stages_up_to("Public", menu) == ["seed", "series_a", "series_b", "series_c", "series_d", "ipo"]
+    assert stages_up_to("Unknown", menu) == []
+    # Only what the menu offers, in the menu's own order.
+    assert stages_up_to("Series C", ["series_c", "seed"]) == ["seed", "series_c"]
 
 
 # -- URLs --------------------------------------------------------------------
@@ -138,8 +223,35 @@ def test_an_existing_project_is_opened_not_created(monkeypatch):
     assert calls[0] == ("search", existing, "jd")
     assert calls[1][2] == {
         "titles": ["T"], "skills": ["S"], "location": "NY, ATL",
-        "min_years": 5, "max_years": None,
+        "min_years": 5, "max_years": None, "companies": None, "stage": None,
     }
+
+
+def test_an_existing_search_skips_the_project_and_the_jd_paste(monkeypatch):
+    calls: list = []
+    _fakes(monkeypatch, calls)
+
+    async def must_not_create(page, name):
+        raise AssertionError("no project should be created for an existing search")
+
+    async def must_not_search(page, project_url, jd):
+        raise AssertionError("no JD search should run for an existing search")
+
+    monkeypatch.setattr(sourcing, "create_project", must_not_create)
+    monkeypatch.setattr(sourcing, "jd_search", must_not_search)
+    search = "https://app.juicebox.ai/project/abc/search?search_id=S9"
+    report = asyncio.run(
+        sourcing.set_up_sourcing(
+            None, project_name="x", jd="jd", titles=[], skills=["S"], location=None,
+            companies=["Stripe"], stage="Series B", search_url=search,
+        )
+    )
+    assert report.project_created is False
+    assert report.project_url == "https://app.juicebox.ai/project/abc/home"
+    assert calls == [("filters", search, {
+        "titles": [], "skills": ["S"], "location": None, "min_years": None,
+        "max_years": None, "companies": ["Stripe"], "stage": "Series B",
+    })]
 
 
 def test_years_span_reads_as_a_person_would_say_it():

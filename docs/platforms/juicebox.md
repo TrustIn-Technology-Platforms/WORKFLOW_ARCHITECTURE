@@ -39,8 +39,9 @@
 
 The half a recruiter does by hand after the sequence, as Sohaib described it:
 **create a project, name it, press Job description, paste the JD, Search, wait,
-open the search, then set the titles, location, skills and experience.** Wired
-into the adapter after the sequence saves, under `CRITERIA_ENABLED`.
+open the search, then set the titles, location, skills and experience** — and,
+from 2026-09-03, **the companies and the funding stages** too. Wired into the
+adapter after the sequence saves, under `CRITERIA_ENABLED`.
 
 ### What the first production run left behind (Axle, 2026-09-02, 22:56 local)
 
@@ -100,6 +101,62 @@ never states it, and a Client-JD-only document (Axle) has no advert at all, so
 the adapter reads the row's `Location` column directly. `--set 'Location=...'`
 does the same for a run from a file.
 
+### Companies and funding stages (2026-09-03)
+
+Sohaib's second rule, the morning after: fill **Companies** with about twenty
+companies of the client's own stage and kind, and set **Company Funding Stages**
+to every stage from Seed up to the client's own — a Series C client takes people
+who worked at Seed, Series A, Series B and Series C companies, not the stages
+ahead of it. Both rest on the client's stage. `stage_from_text` reads it off the
+document when the JD or advert states one ("a Series B fintech");
+`draft_companies` — the [D-020](../11-decisions.md) drafter Loxo uses, asked
+for 20 here — infers it when they do not, and an inferred stage is said so on
+the row, because two filters that decide the pool then rest on a guess a
+recruiter can check in a minute.
+
+- **Companies** is an autocomplete whose *first* suggestion is always
+  `Ask AI for "<name>"`, which contains the name and is never the answer. An
+  option's first line is the company, its second the domain. A company must
+  match its own name exactly (legal suffixes and punctuation aside): the first
+  live run took the nearest name and turned "Unit" into United Nations, "Sure"
+  into Sureskills, "Ascend" into Ascendion and "Method Financial" into Method
+  Financial Planning. A name Juicebox does not know (Herald and Boost Insurance
+  on 2026-09-03) is reported as refused, never approximated. The chips render
+  as bare `<text>` nodes rather than `<p>`, so the section reader now reads
+  `<p>`, `<text>` and `span.MuiChip-label` alike — the first run reported all
+  eighteen of its chips refused for want of looking.
+- **Company Funding Stages** is a MUI multi-select, not an autocomplete. Its
+  hidden native input holds the chosen keys comma-joined
+  (`seed,series_a,series_b,series_c` on the search Juicebox's AI had set) and
+  clicking its combobox opens a listbox of `li[role=option]` carrying
+  `data-value`. The driver toggles the options to exactly the wanted set — what
+  the AI pre-selected beyond it is deselected — and reads the value back after
+  the reload. Keys: `pre_seed`, `seed`, `series_a` … ; "Growth" and "Late
+  stage" are read as Series D, "Public" selects every series and `ipo`,
+  "Bootstrapped" and "Unknown" leave the field as Juicebox set it.
+- Juicebox warns "You have selected both companies and industries" when its
+  AI's Company Industries and our Companies are both set. Both are left as they
+  are; a recruiter who wants the wider net clears the industries.
+- Three matching rules, one per kind of section, because one rule broke each
+  way in turn: **exact** for Companies (above); **whole-word** for Location(s),
+  after a start-of-name rule turned "NY" into *Nyack* — "NY" is in "New York,
+  NY, United States" and not in "Nyack"; **loose** for titles and skills, where
+  the nearest suggestion is what a person would take. Every section is
+  scrolled into view before it is read, because the editor virtualises what is
+  off-screen and a cold read once missed a skill that was already there.
+
+Proven live on the test search on 2026-09-03, three headed runs: Claude
+inferred Series A for Axle (YC-backed, 15 people, founded 2022); Seed and
+Series A were selected, the AI's Series B and C deselected, and the select
+read `seed,series_a` after every reload. Of the twenty companies drafted per
+run, Juicebox's index knew most (Herald, Nirvana Insurance, Marble, Vouch,
+Argyle, Pinwheel, Alloy, Lithic, Middesk, Greenlight, Counterpart, Federato,
+Sixfold, Anzen, Truv, Coverdash, Cover Genius, Increase …) and the exact-name
+rule refused the rest (Boost Insurance, Sure, Unit, Ascend, Method Financial)
+rather than take a lookalike. Re-runs skip what is already there. The
+whole-word location rule is pinned by unit test only: the run that would have
+exercised it found the earlier Nyack chip and read "NY" as present.
+
 ### Running it on its own
 
 ```bash
@@ -109,6 +166,8 @@ python -m app.cli juicebox-sourcing --doc <file-or-share-link> --set 'Location=N
 python -m app.cli juicebox-sourcing --doc <file> --set 'Location=NY, ATL' --live --headed
 # reuse a project - how to finish one left at "created, no search"
 python -m app.cli juicebox-sourcing --doc <file> --project <project url> --set 'Location=NY, ATL' --live
+# only the filters, on a search that already exists
+python -m app.cli juicebox-sourcing --doc <file> --search <search url> --set 'Location=NY, ATL' --live
 ```
 
 Do not flip a posted Notion row back to `Ready to Post` to redo the sourcing:

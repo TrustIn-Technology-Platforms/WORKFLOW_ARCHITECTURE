@@ -262,6 +262,7 @@ async def draft_companies(
     stage: str | None = None,
     location: str = "",
     role_title: str = "",
+    limit: int = MAX_COMPANIES,
     settings: Settings | None = None,
 ) -> CompanyTargeting:
     """Target companies at the client's stage or one later, from the JD. Never raises.
@@ -295,7 +296,7 @@ async def draft_companies(
         f"Role: {role_title or 'unnamed'}\n"
         f"Location: {location or 'not given'}\n"
         f"{stage_line}\n"
-        f"Return up to {MAX_COMPANIES} companies.\n\n"
+        f"Return up to {limit} companies.\n\n"
         f"<job_description>\n{job_description.strip()}\n</job_description>"
     )
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -320,7 +321,7 @@ async def draft_companies(
     result = CompanyTargeting(
         stage=(stage or draft.stage or "Unknown").strip(),
         stage_basis="stated" if stage else (draft.stage_basis or "unknown").strip().lower(),
-        companies=_clean_companies(draft.companies, company),
+        companies=_clean_companies(draft.companies, company, limit),
     )
     log.info(
         "target companies drafted",
@@ -377,7 +378,9 @@ def _company_key(name: str) -> str:
     return " ".join(text.split())
 
 
-def _clean_companies(values: list[str], hiring_company: str) -> list[str]:
+def _clean_companies(
+    values: list[str], hiring_company: str, limit: int = MAX_COMPANIES
+) -> list[str]:
     """Distinct real-looking names, never the client itself."""
     own = _company_key(hiring_company) if hiring_company else ""
     seen: set[str] = set()
@@ -393,4 +396,4 @@ def _clean_companies(values: list[str], hiring_company: str) -> list[str]:
             continue
         seen.add(key)
         cleaned.append(item)
-    return cleaned[:MAX_COMPANIES]
+    return cleaned[:limit]

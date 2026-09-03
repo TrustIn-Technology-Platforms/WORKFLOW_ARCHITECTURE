@@ -17,15 +17,16 @@ runner = CliRunner()
 def test_the_command_exists_and_documents_its_options():
     result = runner.invoke(cli.app, ["juicebox-sourcing", "--help"])
     assert result.exit_code == 0, result.output
-    for option in ("--doc", "--project", "--name", "--live", "--set", "--headed"):
+    for option in ("--doc", "--project", "--search", "--name", "--live", "--set", "--headed"):
         assert option in result.output, option
 
 
 def test_it_defaults_to_a_dry_run_that_opens_no_browser(monkeypatch):
     seen: dict = {}
 
-    async def fake_run(doc, project, name, settings, dry_run, row=None):
-        seen.update(doc=doc, project=project, name=name, dry_run=dry_run, row=row)
+    async def fake_run(doc, project, name, settings, dry_run, row=None, search=None):
+        seen.update(doc=doc, project=project, name=name, dry_run=dry_run, row=row,
+                    search=search)
         return None
 
     monkeypatch.setattr(cli, "_juicebox_sourcing", fake_run)

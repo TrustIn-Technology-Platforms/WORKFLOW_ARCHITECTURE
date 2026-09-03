@@ -232,8 +232,17 @@ class JuiceboxAdapter(RecipeAdapter):
         """
         from app.pipeline import _row_text
         from app.platforms.browser import save_failure
-        from app.platforms.juicebox_sourcing import set_up_sourcing, years_span
-        from app.platforms.targeting_ai import draft_targeting
+        from app.platforms.juicebox_sourcing import (
+            TARGET_COMPANIES,
+            set_up_sourcing,
+            stage_plan,
+            years_span,
+        )
+        from app.platforms.targeting_ai import (
+            draft_companies,
+            draft_targeting,
+            stage_from_text,
+        )
 
         # An existing project when the row names one - a recruiter made it, or
         # an earlier run created it and stopped short of the search. Creating
@@ -272,6 +281,43 @@ class JuiceboxAdapter(RecipeAdapter):
         location = advert.location or None
         if not location and row is not None:
             location = _row_text(row, self.settings.prop_location)
+
+        # Same-stage companies, and the stages themselves - every stage from
+        # Seed up to the client's own (Sohaib's rule, 2026-09-02; D-020 for the
+        # companies). The stage is read off the document when it states one and
+        # inferred by Claude when it does not, and an inferred stage is said so
+        # on the row: two of the filters that decide the pool rest on it.
+        company = (document.source_name or "").split(" - ")[0].strip()
+        stated = stage_from_text(document.job_description, advert.body_text)
+        drafted = await draft_companies(
+            document.job_description,
+            company=company,
+            stage=stated,
+            location=location or "",
+            role_title=name,
+            limit=TARGET_COMPANIES,
+            settings=self.settings,
+        )
+        stage = stated or (
+            drafted.stage if drafted.stage and drafted.stage != "Unknown" else None
+        )
+        if stage and not stated:
+            report.warnings.append(
+                f"the document does not state {company or 'the client'}'s funding "
+                f"stage; Claude inferred {stage}, and the Companies and Company "
+                "Funding Stages filters rest on it - check them"
+            )
+        elif not stage:
+            report.warnings.append(
+                "no funding stage could be read or inferred, so Company Funding "
+                "Stages was left as Juicebox set it"
+            )
+        if not drafted.companies:
+            report.warnings.append(
+                "no target companies could be drafted, so the Companies filter "
+                "was left empty"
+            )
+
         if self.dry_run:
             where = f"search in {project_url}" if project_url else "create a sourcing project"
             report.warnings.append(
@@ -280,6 +326,8 @@ class JuiceboxAdapter(RecipeAdapter):
                 f"{len(targeting.skills)} skill(s)"
                 + (f", location {location}" if location else "")
                 + (f", {span}" if (span := years_span(targeting.min_years, targeting.max_years)) else "")
+                + f", {len(drafted.companies)} company(ies) at {stage or 'an unknown stage'}"
+                + (f", stages {'/'.join(stage_plan(stage))}" if stage_plan(stage) else "")
             )
             return
 
@@ -294,6 +342,8 @@ class JuiceboxAdapter(RecipeAdapter):
                 location=location,
                 min_years=targeting.min_years,
                 max_years=targeting.max_years,
+                companies=drafted.companies,
+                stage=stage,
             )
         except Exception as exc:  # noqa: BLE001 - a sourcing failure is a warning,
             # never a lost run whose sequence already saved.

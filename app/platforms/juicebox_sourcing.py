@@ -62,6 +62,12 @@ LOCATIONS = "Location(s)"
 SKILLS = "Skills or Keywords"
 MIN_YEARS = "Min Experience (Years)"
 MAX_YEARS = "Max Experience (Years)"
+COMPANIES = "Companies"
+STAGES = "Company Funding Stages"
+
+# Juicebox's funding-stage keys, in order, as its hidden select value spells
+# them ("seed,series_a,series_b,series_c" was read off a live search).
+_SERIES_ORDER = ["seed"] + [f"series_{letter}" for letter in "abcdefghij"]
 
 _PROJECT_PATH = re.compile(r"(/project/[A-Za-z0-9_-]+)")
 _SEARCH_PATH = re.compile(r"/search/[A-Za-z0-9_-]+")
@@ -101,13 +107,20 @@ _HELPERS = """
 # Each section is read up to the next known heading. The two experience inputs
 # sit side by side under General, so the Max heading bounds the Min window.
 _STOPS = ("['Power Filters', 'Past Job Titles', 'Past Locations', 'Companies', 'Timezone',"
-          " 'Max Experience (Years)', 'Required Contact Info']")
+          " 'Max Experience (Years)', 'Required Contact Info', 'Excluded Companies',"
+          " 'Estimated Revenue']")
 
+# A section's chips are `<p>` typography in most sections, bare `<text>` nodes
+# in Companies, and `span.MuiChip-label` in Company Funding Stages - all three
+# are read, so a chip that landed is never reported as refused for want of
+# looking (the first Companies run reported all 18 of its chips refused).
 _BLOCK_TEXT = ("(label) => {" + _HELPERS +
                "const w = followUntil(label, " + _STOPS + ");"
                "if (!w) return '';"
-               "return w.filter(el => el.tagName === 'P')"
-               ".map(el => (el.innerText || '').trim()).join(String.fromCharCode(10)); }")
+               "return w.filter(el => el.tagName === 'P'"
+               " || (el.querySelectorAll('*').length === 0 && (el.tagName === 'TEXT'"
+               " || (el.tagName === 'SPAN' && (el.className || '').toString().includes('MuiChip-label')))))"
+               ".map(el => (el.innerText || '').trim()).filter(Boolean).join(String.fromCharCode(10)); }")
 
 _FIND_INPUT = ("const inp = w.find(el => el.tagName === 'INPUT'"
                " && (el.className || '').includes('MuiInputBase-input')"
@@ -129,6 +142,31 @@ _READ_INPUT = ("(label) => {" + _HELPERS +
 _POPPER = ("() => [...document.querySelectorAll('.MuiAutocomplete-popper li, [role=option]')]"
            ".filter(el => el.getBoundingClientRect().width)"
            ".map(el => (el.innerText || '').trim()).filter(Boolean).slice(0, 10)")
+
+# Company Funding Stages is a MUI multi-select, not an autocomplete: a hidden
+# native input holds the chosen keys comma-joined, and its sibling combobox
+# opens a listbox of options carrying `data-value`. The section holds two such
+# selects - "Current + Past" first - so the stages one is the last.
+_MARK_STAGE_SELECT = ("() => {" + _HELPERS +
+    "document.querySelectorAll('[data-jbw]').forEach(el => el.removeAttribute('data-jbw'));"
+    "const w = followUntil('Company Funding Stages', ['Estimated Revenue']);"
+    "if (!w) return {state: 'no-window'};"
+    "const natives = w.filter(el => el.tagName === 'INPUT'"
+    " && (el.className || '').includes('MuiSelect-nativeInput'));"
+    "const native = natives[natives.length - 1];"
+    "if (!native) return {state: 'no-select'};"
+    "const root = native.parentElement;"
+    "const display = root && (root.querySelector('[role=combobox]')"
+    " || root.querySelector('.MuiSelect-select'));"
+    "if (!display) return {state: 'no-display'};"
+    "display.setAttribute('data-jbw', '1'); display.scrollIntoView({block: 'center'});"
+    "return {state: 'ok', value: native.value || ''}; }")
+
+_STAGE_OPTIONS = ("() => [...document.querySelectorAll('ul[role=listbox] li[role=option]')]"
+                  ".filter(el => el.getBoundingClientRect().width)"
+                  ".map(el => ({key: el.getAttribute('data-value') || '',"
+                  " label: (el.innerText || '').trim(),"
+                  " selected: el.getAttribute('aria-selected') === 'true'}))")
 
 _SAVE = """() => {
   const btn = [...document.querySelectorAll('button')]
@@ -169,6 +207,9 @@ class SourcingReport:
     search_url: str = ""
     added: dict[str, list[str]] = field(default_factory=dict)
     refused: dict[str, list[str]] = field(default_factory=dict)
+    # The funding-stage keys the select held after the save, e.g.
+    # ["seed", "series_a"]; empty when the stage was unknown and left alone.
+    stage_keys: list[str] = field(default_factory=list)
     saved: bool = False
 
     @property
@@ -237,6 +278,139 @@ def years_span(lo: int | None, hi: int | None) -> str:
     if lo is None:
         return f"up to {hi} years"
     return f"{lo}-{hi} years"
+
+
+_LEGAL_SUFFIXES = re.compile(
+    r"\b(?:inc|incorporated|ltd|limited|llc|plc|corp|corporation|co|gmbh|ag|sa|bv|pty|holdings)\b"
+)
+
+
+def _name_key(name: str) -> str:
+    """A company name reduced to what identifies it: "Stripe, Inc." is Stripe."""
+    text = re.sub(r"[^a-z0-9 ]+", " ", (name or "").lower())
+    return " ".join(_LEGAL_SUFFIXES.sub(" ", text).split())
+
+
+def match_mode(label: str) -> str:
+    """How a section's values are matched against Juicebox's suggestions."""
+    if label == COMPANIES:
+        return "exact"
+    if label == LOCATIONS:
+        return "token"
+    return "loose"
+
+
+def pick_option(options: list[str], value: str, *, mode: str = "loose") -> int | None:
+    """Which autocomplete option is `value`.
+
+    Juicebox's first suggestion is often `Ask AI for "<value>"`, which contains
+    the value and is never the answer. An option's first line is its name (the
+    second is a domain or a category tag).
+
+    - `exact` (companies): the name must match exactly, legal suffixes and
+      punctuation aside, because the nearest name is a different company - the
+      first live run turned "Unit" into United Nations, "Sure" into Sureskills
+      and "Ascend" into Ascendion.
+    - `token` (locations): the name matches, or the value appears in the option
+      as a whole word - "NY" is in "New York, NY, United States" and not in
+      "Nyack", which is what a start-of-name rule picked on 2026-09-03.
+    - `loose` (titles, skills): an exact name, then one starting with the
+      value, then one containing it, then the first real suggestion - what a
+      person does with an autocomplete.
+    """
+    wanted = " ".join(value.split()).lower()
+    heads = [
+        (option.strip().splitlines() or [""])[0].strip().lower() for option in options
+    ]
+    real = [i for i, head in enumerate(heads) if not head.startswith("ask ai")]
+    if mode == "exact":
+        key = _name_key(value)
+        return next((i for i in real if _name_key(heads[i]) == key), None)
+    for index in real:
+        if heads[index] == wanted:
+            return index
+    if mode == "token":
+        word = re.compile(r"(?<![a-z0-9])" + re.escape(wanted) + r"(?![a-z0-9])")
+        return next((i for i in real if word.search(options[i].lower())), None)
+    for index in real:
+        if heads[index].startswith(wanted):
+            return index
+    for index in real:
+        if wanted in options[index].lower():
+            return index
+    return real[0] if real else None
+
+
+def present(block: str, value: str, *, mode: str = "loose") -> bool:
+    """Is `value` already a chip in a section's text?
+
+    Exact (companies): a chip whose name is the value, no more - "Unit" is not
+    present because "United Nations" is. Otherwise the value appears anywhere,
+    which is how "ATL" is found inside "Atlanta".
+    """
+    if mode == "exact":
+        key = _name_key(value)
+        return any(_name_key(line) == key for line in block.splitlines() if line.strip())
+    return value.lower() in block.lower()
+
+
+def stage_key(stage: str | None) -> str | None:
+    """A funding stage as Juicebox keys it, or None when it is not a stage.
+
+    Accepts the drafter's labels ("Series B", "Pre-seed", "Growth stage",
+    "Public") and Juicebox's own option labels. "Growth"/"Late stage" is read
+    as Series D, "Early stage" as Series A; "Bootstrapped" and "Unknown" are
+    not funding stages, so nothing is selected for them.
+    """
+    text = (stage or "").strip().lower().replace("-", " ").replace("_", " ")
+    text = " ".join(text.split())
+    if not text or text == "unknown":
+        return None
+    if text.startswith("pre seed"):
+        return "pre_seed"
+    if text.startswith("seed"):
+        return "seed"
+    match = re.match(r"series\s*([a-j])\b", text)
+    if match:
+        return f"series_{match.group(1)}"
+    if text in {"public", "ipo", "publicly traded", "publicly listed", "post ipo"}:
+        return "ipo"
+    if "growth" in text or "late" in text:
+        return "series_d"
+    if "early" in text:
+        return "series_a"
+    return None
+
+
+def stages_up_to(stage: str | None, available: list[str]) -> list[str]:
+    """Every stage from Seed up to and including the client's own.
+
+    Sohaib's rule (2026-09-02): a role at a Series C company should take
+    people who worked at Seed, Series A, Series B and Series C companies -
+    the stages the client has been through, not the ones ahead of it. The
+    result is limited to what Juicebox's menu offers, in stage order.
+    """
+    key = stage_key(stage)
+    if key is None:
+        return []
+    if key == "pre_seed":
+        wanted = ["pre_seed"]
+    elif key == "ipo":
+        wanted = _SERIES_ORDER + ["ipo"]
+    else:
+        wanted = _SERIES_ORDER[: _SERIES_ORDER.index(key) + 1]
+    return [k for k in wanted if k in available]
+
+
+ALL_STAGE_KEYS = ["pre_seed", *_SERIES_ORDER, "ipo"]
+# How many same-stage companies to ask for. Sohaib's number (2026-09-02);
+# Loxo's Past Company box takes fifteen.
+TARGET_COMPANIES = 20
+
+
+def stage_plan(stage: str | None) -> list[str]:
+    """The stages a run will try to select, before seeing Juicebox's menu."""
+    return stages_up_to(stage, ALL_STAGE_KEYS)
 
 
 def new_lines(before: str, after: str) -> list[str]:
@@ -510,7 +684,26 @@ async def _await_search(page: "Page", popups: list["Page"], *, tries: int = 45) 
 # ----------------------------------------------------------------------
 
 
-async def _add_chip(page: "Page", label: str, value: str) -> str | None:
+async def _clear_box(page: "Page", label: str) -> None:
+    if await page.evaluate(_MARK, label) == "ok":
+        await page.locator("[data-jbw='1']").focus()
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Delete")
+
+
+async def _section_text(page: "Page", label: str) -> str:
+    """A section's chips, read after scrolling it into view.
+
+    The editor virtualises what is off-screen, so a section read cold can come
+    back short and a chip that is there gets added twice (a skill, 2026-09-03).
+    `_MARK` scrolls the section's input into view as a side effect.
+    """
+    await page.evaluate(_MARK, label)
+    await page.wait_for_timeout(500)
+    return await page.evaluate(_BLOCK_TEXT, label)
+
+
+async def _add_chip(page: "Page", label: str, value: str, *, mode: str = "loose") -> str | None:
     """Type one value into a section's box and return the chip label it landed
     as, or None when nothing landed (the half-typed text is then cleared)."""
     state = await page.evaluate(_MARK, label)
@@ -518,6 +711,7 @@ async def _add_chip(page: "Page", label: str, value: str) -> str | None:
         log.info("juicebox filter input missing",
                  extra={"section": label, "state": state})
         return None
+    await page.wait_for_timeout(400)
     before = await page.evaluate(_BLOCK_TEXT, label)
     box = page.locator("[data-jbw='1']")
     await box.focus(timeout=10_000)
@@ -526,9 +720,22 @@ async def _add_chip(page: "Page", label: str, value: str) -> str | None:
     options = await page.evaluate(_POPPER)
     chosen = ""
     if options:
-        index = next((i for i, o in enumerate(options)
-                      if o.lower() == value.lower() or value.lower() in o.lower()), 0)
+        index = pick_option(options, value, mode=mode)
+        if index is None:
+            # Suggestions came, none of them this one: Juicebox does not know
+            # it, and taking the nearest name would filter on the wrong company.
+            await page.keyboard.press("Escape")
+            await _clear_box(page, label)
+            log.info("juicebox option not offered",
+                     extra={"section": label, "value": value, "offered": options[:5]})
+            return None
         chosen = options[index]
+        if _landed(chosen, before.lower()):
+            # The suggestion is a chip the section already has ("NY" typed,
+            # "New York" already there): nothing to add, nothing refused.
+            await page.keyboard.press("Escape")
+            await _clear_box(page, label)
+            return chip_label([chosen.strip().splitlines()[0]], value)
         for _ in range(index + 1):
             await page.keyboard.press("ArrowDown")
             await page.wait_for_timeout(150)
@@ -541,11 +748,80 @@ async def _add_chip(page: "Page", label: str, value: str) -> str | None:
     lowered = after.lower()
     if value.lower() in lowered or _landed(chosen, lowered):
         return value
-    if await page.evaluate(_MARK, label) == "ok":
-        await page.locator("[data-jbw='1']").focus()
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Delete")
+    await _clear_box(page, label)
     return None
+
+
+@dataclass(slots=True)
+class StageResult:
+    labels: list[str] = field(default_factory=list)   # selected, as the menu names them
+    missing: list[str] = field(default_factory=list)  # wanted keys that did not land
+    offered: list[str] = field(default_factory=list)  # keys the menu had
+    value: str = ""                                    # the select's value afterwards
+
+
+async def _set_stages(page: "Page", stage: str | None) -> StageResult:
+    """Select every funding stage from Seed up to the client's own.
+
+    An unknown stage leaves Juicebox's own choice alone and selects nothing:
+    a guess here would decide who is searched.
+    """
+    result = StageResult()
+    marked = await page.evaluate(_MARK_STAGE_SELECT)
+    if marked.get("state") != "ok":
+        log.info("juicebox stage select missing", extra={"state": marked.get("state")})
+        return result
+    result.value = str(marked.get("value") or "")
+    await page.locator("[data-jbw='1']").click(timeout=10_000)
+    await page.wait_for_timeout(1_200)
+    options = await page.evaluate(_STAGE_OPTIONS)
+    if not options:
+        await page.keyboard.press("Escape")
+        log.info("juicebox stage menu did not open")
+        return result
+
+    # Match on the key Juicebox gives each option, else on what its label
+    # reads as, so a renamed key still lands on the right stage.
+    keyed: dict[str, dict] = {}
+    for option in options:
+        key = option["key"] if option["key"] in ALL_STAGE_KEYS \
+            else (stage_key(option["label"]) or option["key"])
+        if key:
+            keyed.setdefault(key, option)
+    result.offered = list(keyed)
+    wanted = stages_up_to(stage, result.offered)
+    result.missing = [k for k in stage_plan(stage) if k not in keyed]
+    if not wanted:
+        await page.keyboard.press("Escape")
+        return result
+
+    # Toggle to exactly the wanted set: what the AI pre-selected beyond it is
+    # deselected, what it missed is selected.
+    for key, option in keyed.items():
+        should = key in wanted
+        if option["selected"] == should:
+            continue
+        target = page.locator(f'ul[role=listbox] li[role=option][data-value="{option["key"]}"]')
+        if not await target.count():
+            target = page.locator("ul[role=listbox] li[role=option]").filter(
+                has_text=option["label"]
+            )
+        try:
+            await target.first.click(timeout=5_000)
+            await page.wait_for_timeout(400)
+        except Exception as exc:
+            log.info("juicebox stage toggle failed",
+                     extra={"stage": key, "error": str(exc)[:120]})
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(800)
+
+    after = await page.evaluate(_MARK_STAGE_SELECT)
+    result.value = str(after.get("value") or "")
+    selected = [k for k in result.value.split(",") if k]
+    result.labels = [keyed[k]["label"] for k in wanted if k in selected]
+    result.missing += [k for k in wanted if k not in selected]
+    log.info("juicebox stages set", extra={"wanted": wanted, "value": result.value})
+    return result
 
 
 async def _set_years(page: "Page", label: str, years: int) -> bool:
@@ -572,6 +848,8 @@ async def configure_filters(
     location: str | None,
     min_years: int | None = None,
     max_years: int | None = None,
+    companies: list[str] | None = None,
+    stage: str | None = None,
 ) -> SourcingReport:
     """Open the search's filter editor, add what is missing, save, verify."""
     report = SourcingReport(search_url=search_url)
@@ -583,14 +861,19 @@ async def configure_filters(
     if places:
         sections.append((LOCATIONS, places))
     sections.append((SKILLS, skills))
+    if companies:
+        sections.append((COMPANIES, companies))
     for label, values in sections:
         added: list[str] = []
         refused: list[str] = []
+        mode = match_mode(label)
         for value in values:
-            current = await page.evaluate(_BLOCK_TEXT, label)
-            if value.lower() in current.lower():
+            current = await _section_text(page, label)
+            if present(current, value, mode=mode):
                 continue
-            landed = await _add_chip(page, label, value)
+            # A company is a name, and the nearest name is a different
+            # company; titles and skills may take the nearest suggestion.
+            landed = await _add_chip(page, label, value, mode=mode)
             # `added` holds the chip as Juicebox labels it - what a recruiter
             # sees in the editor - and `refused` what was typed and did not land.
             (added if landed else refused).append(landed or value)
@@ -607,6 +890,14 @@ async def configure_filters(
         (report.added if ok else report.refused)[label] = [str(value)]
         log.info("juicebox years",
                  extra={"section": label, "value": value, "committed": ok})
+
+    stages = StageResult()
+    if stage:
+        stages = await _set_stages(page, stage)
+        if stages.labels:
+            report.added[STAGES] = stages.labels
+        if stages.missing:
+            report.refused[STAGES] = stages.missing
 
     report.saved = bool(await page.evaluate(_SAVE))
     await page.wait_for_timeout(12_000)
@@ -629,8 +920,9 @@ async def configure_filters(
     await page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
     await _open_editor(page)
     for label, _values in sections:
-        block = (await page.evaluate(_BLOCK_TEXT, label)).lower()
-        lost = [chip for chip in report.added.get(label, []) if chip.lower() not in block]
+        block = await _section_text(page, label)
+        lost = [chip for chip in report.added.get(label, [])
+                if not present(block, chip, mode=match_mode(label))]
         if lost:
             report.added[label] = [c for c in report.added[label] if c not in lost]
             report.refused.setdefault(label, []).extend(lost)
@@ -644,6 +936,14 @@ async def configure_filters(
             report.refused[label] = report.added.pop(label)
             log.warning("juicebox years lost on reload",
                         extra={"section": label, "kept": kept})
+    if stage:
+        marked = await page.evaluate(_MARK_STAGE_SELECT)
+        report.stage_keys = [k for k in str(marked.get("value") or "").split(",") if k]
+        lost = [k for k in stages_up_to(stage, stages.offered) if k not in report.stage_keys]
+        if lost and STAGES in report.added:
+            log.warning("juicebox stages lost on reload",
+                        extra={"lost": lost, "kept": report.stage_keys})
+            report.refused.setdefault(STAGES, []).extend(lost)
     log.info("juicebox sourcing configured", extra={"summary": report.summary})
     return report
 
@@ -658,22 +958,30 @@ async def set_up_sourcing(
     location: str | None,
     min_years: int | None = None,
     max_years: int | None = None,
+    companies: list[str] | None = None,
+    stage: str | None = None,
     project_url: str | None = None,
+    search_url: str | None = None,
 ) -> SourcingReport:
     """The whole flow: project -> JD search -> filters -> saved.
 
     `project_url` reuses a project that already exists - one a recruiter made,
     or one an earlier run created and then stopped short of the search - rather
-    than standing a duplicate up beside it.
+    than standing a duplicate up beside it. `search_url` goes further and only
+    sets the filters on a search that already exists.
     """
-    created = project_url is None
-    if created:
-        project_url = await create_project(page, project_name)
-    search_url = await jd_search(page, project_url, jd)
+    created = False
+    if search_url is None:
+        created = project_url is None
+        if created:
+            project_url = await create_project(page, project_name)
+        search_url = await jd_search(page, project_url, jd)
+    elif project_url is None:
+        project_url = project_home(search_url)
     report = await configure_filters(
         page, search_url, titles=titles, skills=skills, location=location,
-        min_years=min_years, max_years=max_years,
+        min_years=min_years, max_years=max_years, companies=companies, stage=stage,
     )
-    report.project_url = project_url
+    report.project_url = project_url or ""
     report.project_created = created
     return report

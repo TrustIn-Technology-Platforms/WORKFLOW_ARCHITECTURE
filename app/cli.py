@@ -641,6 +641,11 @@ def juicebox_sourcing(
         help="URL of an existing Juicebox project to build the search in. "
              "Default: create one named after the document.",
     ),
+    search: Optional[str] = typer.Option(
+        None, "--search",
+        help="URL of an existing search to set the filters on. Skips the "
+             "project and the JD paste; only the filters are written.",
+    ),
     name: Optional[str] = typer.Option(
         None, "--name", help="Project name when creating one. Defaults to the document's."
     ),
@@ -673,7 +678,7 @@ def juicebox_sourcing(
 
     try:
         report = asyncio.run(
-            _juicebox_sourcing(doc, project, name, settings, dry_run, row)
+            _juicebox_sourcing(doc, project, name, settings, dry_run, row, search=search)
         )
     except PipelineError as exc:
         _fail(str(exc))
@@ -690,6 +695,8 @@ def juicebox_sourcing(
     for section, values in report.added.items():
         if values:
             console.print(f"  {section}: {', '.join(values)}")
+    if report.stage_keys:
+        console.print(f"  [dim]funding stages held: {', '.join(report.stage_keys)}[/dim]")
     for section, values in report.refused.items():
         if values:
             console.print(f"  [yellow]{section} refused: {', '.join(values)}[/yellow]")
@@ -706,6 +713,7 @@ async def _juicebox_sourcing(
     settings: Any,
     dry_run: bool,
     row: Any = None,
+    search: str | None = None,
 ) -> Any:
     from datetime import datetime, timezone
 
@@ -714,13 +722,30 @@ async def _juicebox_sourcing(
     from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
     from app.platforms.browser import save_failure
     from app.platforms.engine import _role_name
-    from app.platforms.juicebox_sourcing import set_up_sourcing, split_locations, years_span
-    from app.platforms.targeting_ai import configured, draft_targeting
+    from app.platforms.juicebox_sourcing import (
+        TARGET_COMPANIES,
+        is_search_url,
+        set_up_sourcing,
+        split_locations,
+        stage_plan,
+        years_span,
+    )
+    from app.platforms.targeting_ai import (
+        configured,
+        draft_companies,
+        draft_targeting,
+        stage_from_text,
+    )
 
     if project and not project.startswith("http"):
         raise PipelineError(
             "--project should be the project's full URL "
             "(app.juicebox.ai/project/<id>/...)."
+        )
+    if search and not (search.startswith("http") and is_search_url(search)):
+        raise PipelineError(
+            "--search should be the search's full URL "
+            "(app.juicebox.ai/project/<id>/search?search_id=...)."
         )
     if not configured(settings):
         raise PipelineError(
@@ -766,6 +791,20 @@ async def _juicebox_sourcing(
         console.print("[bold]location[/bold]   [yellow]none - pass --set 'Location=...'[/yellow]")
     span = years_span(targeting.min_years, targeting.max_years)
     console.print(f"[bold]years[/bold]      {span or '-'}")
+
+    # Same-stage companies and the stages from Seed up to the client's own.
+    company = (document.source_name or "").split(" - ")[0].strip()
+    stated = stage_from_text(jd, advert.body_text)
+    drafted = await draft_companies(
+        jd, company=company, stage=stated, location=location or "",
+        role_title=project_name, limit=TARGET_COMPANIES, settings=settings,
+    )
+    stage = stated or (drafted.stage if drafted.stage and drafted.stage != "Unknown" else None)
+    basis = "stated in the document" if stated else ("inferred by Claude" if stage else "unknown")
+    console.print(f"[bold]stage[/bold]      {stage or '-'}  [dim]({basis})[/dim]")
+    plan = stage_plan(stage)
+    console.print(f"[bold]stages[/bold]     {', '.join(plan) if plan else '[yellow]left as Juicebox set them[/yellow]'}")
+    console.print(f"[bold]companies[/bold]  {', '.join(drafted.companies) or '[yellow]none drafted[/yellow]'}")
     if dry_run:
         return None
 
@@ -793,12 +832,15 @@ async def _juicebox_sourcing(
                     page,
                     project_name=project_name,
                     project_url=project,
+                    search_url=search,
                     jd=jd,
                     titles=targeting.similar_titles,
                     skills=targeting.skills,
                     location=location,
                     min_years=targeting.min_years,
                     max_years=targeting.max_years,
+                    companies=drafted.companies,
+                    stage=stage,
                 )
                 # The proof, kept: the reloaded filter editor as the run left it.
                 # Not full_page - that blanks this app's virtualised view.

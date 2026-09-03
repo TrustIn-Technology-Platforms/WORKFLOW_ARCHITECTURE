@@ -60,6 +60,7 @@ decide the pool.
 | One JD for all three platforms | yes | — | **gap 4 — closed**; `Client JD` section, [D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch) |
 | Wellfound Skills | **yes** | never run | **gap 3 — closed**; `app/platforms/skills.py`, column then Claude |
 | **Juicebox titles / location / skills / years** | **yes** | 2026-09-02 | project + JD search + filter editor, `juicebox_sourcing.py`; the row's `Location`, Claude-drafted titles, skills and years |
+| **Juicebox companies / funding stages** | **yes** | 2026-09-03 | ~20 same-stage companies (`draft_companies`, exact-name matched); stages Seed up to the client's own; an inferred stage is warned on the row |
 
 ## The gaps
 
@@ -243,6 +244,16 @@ New York + Atlanta, 6-12 years, 775 matches, all read back after a reload. To
 finish Axle's own project: `python -m app.cli juicebox-sourcing --doc <axle
 doc> --project <project url> --set 'Location=NY, ATL' --live` - not a row
 re-run, which would re-post the sequence and re-create the noon role.
+
+**Added 2026-09-03, Sohaib's next rule:** the **Companies** filter takes
+about twenty companies of the client's own stage and kind - `draft_companies`
+(D-020) asked for 20, each matched to Juicebox's autocomplete by exact name,
+because the nearest name is a different company ("Unit" is not United
+Nations) - and **Company Funding Stages** takes every stage from Seed up to
+the client's own: a Series C client selects Seed, Series A, Series B and
+Series C. The stage comes from the document when it states one and from
+Claude's inference when it does not, said so on the row. `--search <url>`
+sets the filters on a search that already exists.
 
 ### Previously: Juicebox has no sourcing setup at all — **closed 2026-09-02**, kept for the record
 
