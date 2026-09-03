@@ -138,6 +138,24 @@ class RecipeAdapter:
                     )
                     exc.artifacts = artifacts  # type: ignore[attr-defined]
                     raise
+                except Exception as exc:  # noqa: BLE001 - see below
+                    # A Playwright error (the browser closed, a locked profile,
+                    # a timeout) is a failure of THIS platform, not of the row:
+                    # it used to escape as "Unexpected error: TargetClosedError.
+                    # Check the logs." and fail every platform on the row with
+                    # it (2026-09-03). Named here, with artifacts, it fails this
+                    # platform only, and the recruiter reads what happened.
+                    artifacts = await save_failure(
+                        context, page, f"{recipe.key}-failed", self.settings
+                    )
+                    first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+                    failure = PlatformError(
+                        f"{recipe.label}: the browser step failed - "
+                        f"{exc.__class__.__name__}: {first[:300]}. Re-run the row; "
+                        "if it repeats, check the platform and the saved screenshot."
+                    )
+                    failure.artifacts = artifacts  # type: ignore[attr-defined]
+                    raise failure from exc
 
                 outcome = Outcome.DRY_RUN if self.dry_run else Outcome.POSTED
                 detail = "; ".join(report.warnings) or None

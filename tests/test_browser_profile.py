@@ -128,3 +128,22 @@ def test_a_missing_profile_locally_still_says_to_run_login(tmp_path):
     message = str(raised.value)
     assert "python -m app.cli login nosuchplatform" in message
     assert "mounted volume" not in message
+
+
+# -- a lock left by a dead process ----------------------------------------------
+
+
+def test_stale_singleton_lock_is_removed_before_launch(tmp_path):
+    """A container stopped mid-run leaves Chrome's SingletonLock on the volume
+    pointing at a pid on 'another computer'; Chrome then exits at once and
+    Playwright reports TargetClosedError (Juicebox, 2026-09-03)."""
+    from app.platforms.browser import clear_stale_profile_lock
+
+    (tmp_path / "SingletonLock").write_text("6195e9d2de60-858")
+    (tmp_path / "SingletonCookie").write_text("1")
+    (tmp_path / "Preferences").write_text("{}")
+    removed = clear_stale_profile_lock(tmp_path)
+    assert sorted(removed) == ["SingletonCookie", "SingletonLock"]
+    assert not (tmp_path / "SingletonLock").exists()
+    assert (tmp_path / "Preferences").exists()
+    assert clear_stale_profile_lock(tmp_path) == []

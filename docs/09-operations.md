@@ -213,6 +213,7 @@ so keep row concurrency low on a small instance.
 | One platform fails at the same step every time | The UI changed | Update the selector in `platforms/<key>.yaml` |
 | Rows stuck in `Posting` | The process died mid-row. A redeploy stops the container, and a Railway deploy straight after a push did exactly that eight minutes into a row on 2026-09-03 | The service sweeps on startup and every `STUCK_SWEEP_MINUTES` for rows untouched on `Posting` for `STUCK_POSTING_MINUTES` (45) and marks them Failed with a note; `python -m app.cli recover --live` does it by hand. Check the platforms for half-posted work first (a saved sequence, a campaign), fill `Juicebox Project` / `Loxo Job` to reuse it, then set the row back to `Ready to Post`. Do not push while a row is running |
 | Playwright errors on first browser run | Browsers not installed in the image | `playwright install --with-deps chromium` |
+| A row fails within seconds with `TargetClosedError`, or `<Platform>: the browser step failed - TargetClosedError`; the trace says *the profile appears to be in use by another Google Chrome process on another computer* | A container stopped mid-run left Chrome's `SingletonLock` on the volume; the next Chrome refuses the profile and exits | Fixed 2026-09-03: every launch removes stale `Singleton*` markers first (`browser.clear_stale_profile_lock`). Re-run the row |
 
 ## Monitoring
 

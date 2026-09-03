@@ -224,7 +224,7 @@ async def draft_targeting(
         f"Return up to {max_titles} similar titles and up to {max_skills} skills.\n\n"
         f"<job_description>\n{job_description.strip()}\n</job_description>"
     )
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=4)
     try:
         response = await client.messages.parse(
             model=settings.criteria_model,
@@ -307,7 +307,7 @@ async def draft_companies(
         f"Return up to {limit} companies.\n\n"
         f"<job_description>\n{job_description.strip()}\n</job_description>"
     )
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=4)
     try:
         response = await client.messages.parse(
             model=settings.criteria_model,

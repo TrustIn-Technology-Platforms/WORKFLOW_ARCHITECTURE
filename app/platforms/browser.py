@@ -21,6 +21,41 @@ log = get_logger(__name__)
 CHANNEL_MARKER = ".browser-channel"
 
 
+# Chrome's single-instance markers. On Linux `SingletonLock` is a symlink to
+# "<hostname>-<pid>"; when the hostname is not this machine's, Chrome cannot
+# check the pid, assumes another computer holds the profile, and exits. A
+# container stopped mid-run (a redeploy) leaves exactly that behind on the
+# volume, and every later launch then dies within a second with Playwright's
+# TargetClosedError (Juicebox, 2026-09-03: "in use by another Google Chrome
+# process (858) on another computer (6195e9d2de60)").
+_SINGLETON_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+
+
+def clear_stale_profile_lock(directory: Path) -> list[str]:
+    """Remove Chrome's single-instance markers from a profile we are about to
+    open. One process drives a profile at a time here, so a marker present at
+    launch is always a leftover, never a live owner. Returns what was removed."""
+    removed: list[str] = []
+    for name in _SINGLETON_FILES:
+        marker = directory / name
+        # A dangling symlink is not `exists()`, but it is the lock.
+        if marker.is_symlink() or marker.exists():
+            try:
+                marker.unlink()
+                removed.append(name)
+            except OSError as exc:
+                log.warning(
+                    "could not remove profile lock",
+                    extra={"path": str(marker), "error": str(exc)[:120]},
+                )
+    if removed:
+        log.warning(
+            "stale profile lock removed",
+            extra={"profile_dir": str(directory), "removed": removed},
+        )
+    return removed
+
+
 def claim_profile_channel(directory: Path, channel: str | None) -> None:
     """Bind a profile directory to the browser that created it, and keep it there.
 
@@ -203,6 +238,7 @@ class BrowserRunner:
         directory.mkdir(parents=True, exist_ok=True)
         chosen_channel = channel or settings.browser_channel
         claim_profile_channel(directory, chosen_channel)
+        clear_stale_profile_lock(directory)
 
         options: dict[str, Any] = {
             "headless": self.headless,

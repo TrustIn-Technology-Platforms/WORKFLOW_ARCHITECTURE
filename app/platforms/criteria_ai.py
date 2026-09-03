@@ -125,7 +125,7 @@ async def draft_criteria(
         + f"\n<advert>\n{advert_text.strip()}\n</advert>"
     )
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=4)
     try:
         response = await client.messages.parse(
             model=settings.criteria_model,
