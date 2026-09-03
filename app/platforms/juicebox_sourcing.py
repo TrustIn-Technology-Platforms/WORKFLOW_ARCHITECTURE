@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.logging_conf import get_logger
@@ -291,6 +292,47 @@ def _name_key(name: str) -> str:
     return " ".join(_LEGAL_SUFFIXES.sub(" ", text).split())
 
 
+def _compact(name: str) -> str:
+    return _name_key(name).replace(" ", "")
+
+
+def _domain_label(option: str) -> str:
+    """The first label of the domain an option shows on its second line:
+    "Boost\\nboostinsurance.com" -> "boostinsurance". Empty when there is none."""
+    lines = [line.strip() for line in (option or "").strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return ""
+    host = re.sub(r"^https?://", "", lines[1].lower()).split("/")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host.split(".")[0] if "." in host else ""
+
+
+def same_company(value: str, option: str) -> bool:
+    """Does an autocomplete option name the drafted company?
+
+    By name first, legal suffixes aside. Then by domain: Juicebox lists some
+    companies under a short name with the full name in the domain - "Boost /
+    boostinsurance.com" is Boost Insurance, "Method / methodfi.com" is Method
+    Financial (both refused on 2026-09-03). The domain's first label must be a
+    prefix of the drafted name, start with the option's own name, and carry
+    more of the name than the option shows - so "United Nations / un.org" is
+    not Unit, "Alloy Automation / alloy.com" is not Alloy, and "Stripe /
+    stripe.com" is not Stripe Olt.
+    """
+    head = (option.strip().splitlines() or [""])[0]
+    if _name_key(head) == _name_key(value):
+        return True
+    wanted, shown, label = _compact(value), _compact(head), _domain_label(option)
+    return (
+        len(label) >= 4
+        and bool(shown)
+        and len(label) > len(shown)
+        and wanted.startswith(label)
+        and label.startswith(shown)
+    )
+
+
 def match_mode(label: str) -> str:
     """How a section's values are matched against Juicebox's suggestions."""
     if label == COMPANIES:
@@ -324,8 +366,7 @@ def pick_option(options: list[str], value: str, *, mode: str = "loose") -> int |
     ]
     real = [i for i, head in enumerate(heads) if not head.startswith("ask ai")]
     if mode == "exact":
-        key = _name_key(value)
-        return next((i for i in real if _name_key(heads[i]) == key), None)
+        return next((i for i in real if same_company(value, options[i])), None)
     for index in real:
         if heads[index] == wanted:
             return index
@@ -586,7 +627,29 @@ async def create_project(page: "Page", name: str) -> str:
             break
         log.info("juicebox project rename retry", extra={"project": name, "attempt": attempt + 1})
     if name not in await page.evaluate(_BODY_TEXT):
-        log.warning("juicebox project rename did not stick", extra={"project": name})
+        # Twice on the server (2026-09-03) and never locally - so leave the
+        # evidence a laptop cannot reproduce: what inputs the page had, and a
+        # screenshot in the artifact dir (pulled with scripts/pull_artifacts.py).
+        inputs = await page.evaluate(
+            "() => [...document.querySelectorAll('input')]"
+            ".filter(el => el.getBoundingClientRect().width)"
+            ".map(el => (el.getAttribute('placeholder') || el.value || el.type || '?').slice(0, 40))"
+        )
+        log.warning(
+            "juicebox project rename did not stick",
+            extra={"project": name, "url": page.url, "inputs": inputs[:10]},
+        )
+        try:
+            from datetime import datetime, timezone
+
+            from app.config import get_settings
+
+            shots = Path(get_settings().artifact_dir)
+            shots.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            await page.screenshot(path=str(shots / f"{stamp}-juicebox-rename-failed.png"))
+        except Exception:  # noqa: BLE001 - evidence is best effort
+            pass
     # `project`, not `name`: `name` is a reserved LogRecord field, and a log
     # call raising here is exactly what stopped the first production run.
     log.info("juicebox project created", extra={"project": name, "url": page.url})

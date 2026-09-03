@@ -120,8 +120,14 @@ recruiter can check in a minute.
   match its own name exactly (legal suffixes and punctuation aside): the first
   live run took the nearest name and turned "Unit" into United Nations, "Sure"
   into Sureskills, "Ascend" into Ascendion and "Method Financial" into Method
-  Financial Planning. A name Juicebox does not know (Herald and Boost Insurance
-  on 2026-09-03) is reported as refused, never approximated. The chips render
+  Financial Planning. Exact by name, or by domain: Juicebox lists some
+  companies under a short name with the full name in the domain - "Boost /
+  boostinsurance.com" *is* Boost Insurance and "Method / methodfi.com" *is*
+  Method Financial (both wrongly refused on the first server run) - so an
+  option counts when its domain's first label is a prefix of the drafted name,
+  starts with the option's own name, and carries more of it than the option
+  shows ("Stripe / stripe.com" is not Stripe Olt). A name Juicebox does not know is
+  reported as refused, never approximated. The chips render
   as bare `<text>` nodes rather than `<p>`, so the section reader now reads
   `<p>`, `<text>` and `span.MuiChip-label` alike — the first run reported all
   eighteen of its chips refused for want of looking.
@@ -156,6 +162,19 @@ rule refused the rest (Boost Insurance, Sure, Unit, Ascend, Method Financial)
 rather than take a lookalike. Re-runs skip what is already there. The
 whole-word location rule is pinned by unit test only: the run that would have
 exercised it found the earlier Nyack chip and read "NY" as present.
+
+### Open: the rename fails on the server
+
+`create_project` renames the new "New Project" by double-clicking its title
+and typing into the inline input. That worked in every local run and on the
+first production run (2026-09-02), and has now failed twice on the Railway
+container (2026-09-03), leaving projects literally named "New Project" -
+`BBt995iKw162kVUjwG6H` and `D0sbyTrSQ9aUNhBdJWut` - with the search inside
+them. The driver retries three times, and a failure now logs the visible
+inputs and saves `artifacts/<stamp>-juicebox-rename-failed.png` on the volume
+(`scripts/pull_artifacts.py`). Until it is understood, the reliable path is the
+row's `Juicebox Project` column: with the project's URL there nothing is
+created or renamed.
 
 ### Running it on its own
 

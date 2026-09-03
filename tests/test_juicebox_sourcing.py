@@ -17,6 +17,7 @@ from app.platforms.juicebox_sourcing import (
     pick_option,
     present,
     project_home,
+    same_company,
     split_locations,
     stage_key,
     stages_up_to,
@@ -52,6 +53,23 @@ def test_a_company_needs_its_own_name_not_the_nearest():
     # Loose matching (titles, skills) may take a containing or first real option.
     assert pick_option(["Platform Lead\nTITLE", "Platform Engineer"], "engineer") == 1
     assert pick_option(['Ask AI for "x"', "Something"], "x") == 1
+
+
+def test_a_short_name_with_the_full_name_in_the_domain_is_the_same_company():
+    # Server run, 2026-09-03: both were the right company and both were refused.
+    assert same_company("Boost Insurance", "Boost\nboostinsurance.com")
+    assert same_company("Method Financial", "Method\nmethodfi.com")
+    assert pick_option(['Ask AI for "Boost Insurance"', "Boost\nboostinsurance.com"],
+                       "Boost Insurance", mode="exact") == 1
+    # ... while a lookalike is still not.
+    assert not same_company("Unit", "United Nations\nun.org")
+    assert not same_company("Unit", "United Airlines\nunited.com")
+    assert not same_company("Sure", "Sureskills\nsureskills.com")
+    assert not same_company("Stripe", "Stripes\nstripes.co")
+    assert not same_company("Alloy", "Alloy Automation\nalloy.com")
+    assert not same_company("Boost Insurance", "Boost")  # no domain to vouch for it
+    # The domain must add to the name, or "Stripe / stripe.com" passes for Stripe Olt.
+    assert not same_company("Stripe Olt", "Stripe\nstripe.com")
 
 
 def test_a_location_abbreviation_matches_a_whole_word_never_a_prefix():
