@@ -629,6 +629,71 @@ async def _search_criteria(
                 raise
 
 
+@app.command()
+def retire(
+    platform: str = typer.Argument(..., help="Recipe key: noon (more to follow)."),
+    role: str = typer.Option(..., "--role", help="The role's uuid, or its portal URL."),
+    delete: bool = typer.Option(False, "--delete", help="Delete the role after stopping it."),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="A dry run reads the role and changes nothing."
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Stop a platform's sourcing for a role and, with --delete, remove it.
+
+    The reverse of posting, one platform at a time. noon first: its sourcing
+    is switched off through the role's autopilot and the role deleted through
+    the portal's own delete call; both are read back before being reported.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+    if platform != "noon":
+        _fail(f"retire is built for noon only so far; {platform!r} is not wired yet.")
+        return
+    try:
+        report = asyncio.run(_retire_noon(role, settings, delete, dry_run))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+    console.print(f"\n{report.summary}")
+    for warning in report.warnings:
+        console.print(f"[yellow]{warning}[/yellow]")
+
+
+async def _retire_noon(role: str, settings: Any, delete: bool, dry_run: bool) -> Any:
+    from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
+    from app.platforms.browser import save_failure
+    from app.platforms.noon_retire import retire_role
+
+    role_id = _role_uuid(role)
+    recipe = resolve("noon", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'noon'.")
+    sessions = SessionStore(settings)
+    state = None
+    if settings.use_browser_profile:
+        sessions.require_profile(recipe.key, recipe.label)
+    else:
+        state = sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+    async with BrowserRunner(settings) as runner:
+        opener = (
+            runner.profile_context(
+                recipe.key, trace_name="noon-retire", channel=recipe.browser_channel
+            )
+            if settings.use_browser_profile
+            else runner.context(storage_state=state, trace_name="noon-retire")
+        )
+        async with opener as (context, page):
+            try:
+                return await retire_role(page, role_id, delete=delete, dry_run=dry_run)
+            except PipelineError:
+                await save_failure(context, page, "noon-retire-failed", settings)
+                raise
+
+
 @app.command("juicebox-sourcing")
 def juicebox_sourcing(
     doc: str = typer.Option(
@@ -733,6 +798,7 @@ async def _juicebox_sourcing(
         configured,
         draft_companies,
         draft_targeting,
+        sourcing_location,
         stage_from_text,
     )
 
@@ -769,11 +835,15 @@ async def _juicebox_sourcing(
     project_name = (
         name or _role_name(document.source_name, row, advert, emails) or "New Project"
     )
-    # A Client-JD-only document has no advert for --set to enrich, so the
-    # column is read directly, the way the adapter reads a real row.
-    location = advert.location or (_row_text(row, settings.prop_location) if row else None)
-
     targeting = await draft_targeting(jd, role_title=project_name, settings=settings)
+    # The Client JD says where the candidate must be; the row's column (or
+    # --set) and the advert only fill the gap - the posting's location was the
+    # company's on Axle, not the hire's.
+    location = sourcing_location(
+        targeting.candidate_location,
+        _row_text(row, settings.prop_location) if row else None,
+        advert.location,
+    ) or None
     if not targeting.similar_titles and not targeting.skills:
         raise PipelineError(
             "No titles or skills could be drafted from this JD, so there are no "
@@ -1064,6 +1134,7 @@ async def _loxo_source(
     from app.platforms.targeting_ai import (
         draft_companies,
         draft_targeting,
+        sourcing_location,
         stage_from_text,
     )
 
@@ -1086,11 +1157,15 @@ async def _loxo_source(
     emails = sorted(document.emails, key=lambda e: e.order)
     role_name = name or _role_name(document.source_name, None, advert, emails)
     company = (document.source_name or "").split(" - ")[0].strip()
-    where = location or (advert.location if advert else None) or ""
     origin = "Client JD" if document.client_jd else "advert"
     console.print(f"[dim]{origin}: {len(jd)} chars from {doc}[/dim]")
 
     targeting = await draft_targeting(jd, role_title=role_name, settings=settings)
+    # --location is the operator's word and wins; then the JD's own statement
+    # of where the candidate must be; the advert's location last.
+    where = sourcing_location(
+        location, targeting.candidate_location, advert.location if advert else None
+    )
     stated = stage_from_text(jd, advert.body_text if advert else "")
     companies = await draft_companies(
         jd, company=company, stage=stated, location=where,

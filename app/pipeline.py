@@ -285,7 +285,31 @@ async def process_row(
         log.exception("unexpected error", extra={"page_id": row.page_id})
         report.error = f"Unexpected error: {exc.__class__.__name__}. Check the logs."
 
-    await _write_back(report, client, dry_run)
+    try:
+        await _write_back(report, client, dry_run)
+    except Exception as exc:  # noqa: BLE001 - the posts happened; only the
+        # final update did not. Left as it was, this row sits on `Posting`
+        # until the sweep blames a restart and tells a recruiter to re-run
+        # it - posting everything a second time (found in review,
+        # 2026-09-03). Say what really happened instead.
+        log.error(
+            "write-back failed",
+            extra={"page_id": row.page_id, "error": str(exc)[:200],
+                   "post_url": report.post_urls_text},
+        )
+        if not dry_run and not report.error:
+            try:
+                await client.mark_failed(
+                    row.page_id,
+                    "Every platform posted, but Notion rejected the final "
+                    f"update ({exc}). Do NOT re-run - the posts already "
+                    f"exist: {report.post_urls_text or 'see the log'}. Set "
+                    "this row to Posted by hand.",
+                )
+            except Exception:  # noqa: BLE001 - Notion is unreachable; the
+                # sweep is the right owner from here.
+                log.exception("could not record the write-back failure",
+                              extra={"page_id": row.page_id})
     return report
 
 
@@ -309,7 +333,14 @@ async def _write_back(report: RowReport, client: NotionClient, dry_run: bool) ->
     # a taxonomy refused, a stage Claude had to infer. Until 2026-09-03 only
     # parse warnings were written, so a Loxo run that refused nineteen chips
     # showed a recruiter nothing but "Posted".
-    notes = [f"{r.platform}: {r.detail}" for r in report.results if r.detail]
+    # A platform the row tags but has no recipe for (`TrustIn`) is skipped
+    # by design; saying so on every such row is noise that reads as a
+    # problem. Only what a real destination reported is worth writing.
+    notes = [
+        f"{r.platform}: {r.detail}"
+        for r in report.results
+        if r.detail and r.outcome is not Outcome.SKIPPED
+    ]
     if report.document and report.document.warnings:
         notes.append("parse: " + "; ".join(report.document.warnings[:3]))
     detail = " | ".join(notes)[:1800]
@@ -321,11 +352,12 @@ async def _write_back(report: RowReport, client: NotionClient, dry_run: bool) ->
 
 
 STUCK_MESSAGE = (
-    "The posting service restarted while this row was being posted (a deploy or "
-    "a crash), so the run never finished and nothing was written back. Parts may "
-    "already be posted - check the platforms for a saved sequence or campaign "
-    "before re-running. To reuse what exists, fill Juicebox Project / Loxo Job; "
-    "then set the status back to Ready to Post."
+    "The run that claimed this row never wrote back - the posting service "
+    "restarted mid-run (a deploy or a crash), or Notion rejected its final "
+    "update - so the row was released. Parts may already be posted: check the "
+    "platforms for a saved sequence or campaign before re-running. To reuse "
+    "what exists, fill Juicebox Project / Loxo Job; then set the status back "
+    "to Ready to Post."
 )
 
 

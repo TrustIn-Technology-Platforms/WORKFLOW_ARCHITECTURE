@@ -69,9 +69,10 @@ both platforms sign in through SSO:
 
 1. **One supervised noon run.** `python -m app.cli source --role <uuid> --doc
    <file> --live --headed --set 'Location=<city>'` on a throwaway role, to
-   confirm the targeting preamble sets `preferences.location`. The `--set` is
-   not optional: the location lives on the Notion row, so a file-only run has
-   none and proves nothing. Read
+   confirm the targeting preamble sets `preferences.location`. Since
+   2026-09-07 the location is drafted from the Client JD (where the candidate
+   must be) and the row's `Location` only fills the gap, so keep the `--set`
+   for a document whose JD names no place. Read
    [docs/platforms/noon.md](docs/platforms/noon.md#the-live-run-2026-08-27)
    first — the editor autosaves, so there is no harmless dry run past role
    creation.

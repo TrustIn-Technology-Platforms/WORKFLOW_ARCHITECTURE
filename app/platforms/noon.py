@@ -105,9 +105,16 @@ class NoonAdapter(RecipeAdapter):
         # The advert's title only, never `role_name`: that is the document's
         # filename, "Company - Role - Location", whose leading segment is the
         # company. `role_title` would hand noon a company name to search for.
+        # The preamble's location is where the CANDIDATE must be. The advert's
+        # (filled from the row) is the posting's location, which is not the
+        # same thing when the company sits elsewhere (Axle, 2026-09-07), so the
+        # Client JD is asked first and the advert fills the gap.
+        from app.platforms.targeting_ai import draft_targeting, sourcing_location
+
+        drafted = await draft_targeting(jd, role_title=advert.title, settings=self.settings)
         targeting = targeting_preamble(
             title=advert.title,
-            location=advert.location or "",
+            location=sourcing_location(drafted.candidate_location, advert.location),
             employment_type=advert.employment_type or "",
             skills=advert.tags,
         )

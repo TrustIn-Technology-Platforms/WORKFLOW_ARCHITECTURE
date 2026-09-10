@@ -57,10 +57,29 @@ def test_match_company_is_exact_after_normalisation_and_never_a_prefix():
     """"Axle" must not pick "Axle Logistics": a past-company filter on the
     wrong company finds the wrong people, silently."""
     offered = ["Stripe\nstripe.com", "Stripe Logistics", "stripe.com"]
-    assert match_company("Stripe", offered) == "Stripe"
-    assert match_company("Ramp, Inc.", ["Ramp\nramp.com"]) == "Ramp"
+    assert match_company("Stripe", offered) == "Stripe\nstripe.com"
+    assert match_company("Ramp, Inc.", ["Ramp\nramp.com"]) == "Ramp\nramp.com"
     assert match_company("Axle", ["Axle Logistics", "Axle Payments"]) is None
     assert match_company("", ["Anything"]) is None
+
+
+def test_match_company_breaks_a_name_tie_on_the_domain():
+    """Loxo offered three records called Alloy on 2026-09-07; the fintech is
+    alloy.com, third in the list. The whole row comes back so the click lands
+    on that record. With no domain that is the name, Loxo's first row stands."""
+    alloys = ["Alloy\nalloycrew.com", "Alloy\nalloy.it", "Alloy\nalloy.com", "AllOY\nalloy.boats"]
+    assert match_company("Alloy", alloys) == "Alloy\nalloy.com"
+    heralds = ["Herald\nheraldapi.com", "Herald\nweareherald.co", "Herald Sun\nheraldsun.com.au"]
+    assert match_company("Herald", heralds) == "Herald\nheraldapi.com"
+
+
+def test_match_company_accepts_a_short_name_when_the_domain_is_the_full_name():
+    """Loxo lists "Boost Insurance" as "Boost / boostinsurance.com" (refused
+    live 2026-09-07). The domain must be the whole drafted name: "Axle" is
+    still not "Axle Logistics" even through axlelogistics.com."""
+    assert match_company("Boost Insurance", ["Boost\nboostinsurance.com"]) == "Boost\nboostinsurance.com"
+    assert match_company("Axle", ["Axle Logistics\naxlelogistics.com"]) is None
+    assert match_company("Axle Logistics", ["Axle\naxlelogistics.com"]) == "Axle\naxlelogistics.com"
 
 
 def test_summary_reads_as_a_detail_line():

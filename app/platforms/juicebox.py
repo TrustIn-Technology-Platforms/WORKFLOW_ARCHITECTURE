@@ -247,6 +247,7 @@ class JuiceboxAdapter(RecipeAdapter):
         from app.platforms.targeting_ai import (
             draft_companies,
             draft_targeting,
+            sourcing_location,
             stage_from_text,
         )
 
@@ -282,11 +283,15 @@ class JuiceboxAdapter(RecipeAdapter):
                 "(is ANTHROPIC_API_KEY set here?)"
             )
             return
-        # The row's column directly when the document has no advert to have
-        # been enriched: a Client-JD-only document (Axle) still has a location.
-        location = advert.location or None
-        if not location and row is not None:
-            location = _row_text(row, self.settings.prop_location)
+        # Where the CANDIDATE must be, as the Client JD states it. The row's
+        # `Location` and the advert's are the job's location as the posting
+        # gives it, which on Axle was where the company sits and not where the
+        # hire had to be (Sohaib's review, 2026-09-07) - they only fill the gap.
+        location = sourcing_location(
+            targeting.candidate_location,
+            _row_text(row, self.settings.prop_location) if row is not None else None,
+            advert.location,
+        ) or None
 
         # Same-stage companies, and the stages themselves - every stage from
         # Seed up to the client's own (Sohaib's rule, 2026-09-02; D-020 for the

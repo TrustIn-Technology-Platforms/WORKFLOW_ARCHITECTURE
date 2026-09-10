@@ -54,15 +54,48 @@ decide the pool.
 | Loxo Skill DNA, nice-to-haves promoted | yes | 2026-08-31 | job 3640874, read back through `jobDetail` |
 | Loxo empty buckets drafted from the advert | yes | 2026-08-31 | `criteria_ai.py`, Claude Opus 5 |
 | Loxo Source titles / skills | yes | 2026-09-02 | job 3658508, saved search reloaded chip-for-chip; again from Railway on the Axle row |
-| **Loxo Source years of experience / past companies** | **yes** | **not yet** | built 2026-09-02 from Loxo's bundle, the session having died first; one `loxo-source --live --headed` run away. [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage) |
+| **Loxo Source past companies** | **yes** | **2026-09-07** | job 3658508: 27 of 30 drafted companies landed in Past Company, search saved, results narrowed to people with those companies in their history. Loxo's suggestion rows carry no ARIA role, which is why every earlier attempt refused everything - [platforms/loxo](platforms/loxo.md#years-of-experience-and-company--read-from-the-bundle-2026-09-02). [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage) |
+| **Loxo Source years of experience** | **yes** | **not live yet** | built 2026-09-02 from Loxo's bundle; the 2026-09-07 live run reported the `6-10` band missed. Probe the checklist on a screen (`probe_loxo_source_sections.py --sections "Years of Experience" --headed`) before touching `_fill_experience` |
 | Juicebox criteria, ranked, capped at 10 | yes | dry run only | live write not yet approved |
 | Wellfound advert fields | yes | 2026-08-31 | draft save, not publish; job 4656911 |
 | One JD for all three platforms | yes | — | **gap 4 — closed**; `Client JD` section, [D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch) |
 | Wellfound Skills | **yes** | never run | **gap 3 — closed**; `app/platforms/skills.py`, column then Claude |
-| **Juicebox titles / location / skills / years** | **yes** | 2026-09-02 | project + JD search + filter editor, `juicebox_sourcing.py`; the row's `Location`, Claude-drafted titles, skills and years |
+| **Juicebox titles / location / skills / years** | **yes** | 2026-09-02 | project + JD search + filter editor, `juicebox_sourcing.py`; the JD's candidate location (the row's `Location` fills the gap, since 2026-09-07), Claude-drafted titles, skills and years |
 | **Juicebox companies / funding stages** | **yes** | 2026-09-03 | ~20 same-stage companies (`draft_companies`, exact-name matched); stages Seed up to the client's own; an inferred stage is warned on the row |
 
 ## The gaps
+
+### 0. Location means where the candidate must be — **fixed 2026-09-07, proven live on Juicebox 2026-09-08**
+
+Sohaib's review of the Axle searches: the location written to Juicebox was
+not the one the client's JD gave. The row's `Location` column and the
+advert's field are the *posting's* location — where the job is advertised,
+which on Axle was where the company sits — and every sourcing platform had
+been reading them as where the candidate has to be.
+
+**What was built.** `draft_targeting` now returns `candidate_location`: the
+JD's own statement of where the person must be based, in the form a search
+box takes (city, country, or the remote region), with the prompt told in so
+many words that a company headquartered in one city hiring a hybrid engineer
+in another means the second. `sourcing_location()` in
+[targeting_ai](../app/platforms/targeting_ai.py) applies one order
+everywhere: **the JD first, then the row's `Location`, then the advert's**.
+Juicebox, Loxo (the company list's region), noon (the preamble's `Location:`
+line) and both CLI sourcing commands go through it; `--location` on
+`loxo-source` still wins as the operator's word. The row's column has not
+been demoted for *posting* — `enrich_advert` is unchanged — only for deciding
+who a search looks for.
+
+**Proven 2026-09-08** on a ZZ TEST Juicebox search with `--set Location=Chicago`
+and a JD that says New York / Atlanta: the editor read back New York and
+Atlanta and nothing else. Loxo and noon go through the same helper and have
+not had their own run since.
+
+Two more rules from the same review, Juicebox only, proven on the same run:
+**Job Titles** scope set to *Current + Past* (Juicebox defaults to Current +
+Recent); **Companies** takes company names only - industry and keyword
+options are refused, and Juicebox's own Company Industries chips are cleared.
+Details in [platforms/juicebox](platforms/juicebox.md#title-scope-the-candidates-location-and-company-names-only-2026-09-07).
 
 ### 1. noon has no location — **closed in code 2026-08-31**
 

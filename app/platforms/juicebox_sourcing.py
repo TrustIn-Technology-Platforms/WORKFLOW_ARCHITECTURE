@@ -65,6 +65,16 @@ MIN_YEARS = "Min Experience (Years)"
 MAX_YEARS = "Max Experience (Years)"
 COMPANIES = "Companies"
 STAGES = "Company Funding Stages"
+INDUSTRIES = "Company Industries"
+TITLE_SCOPE = "Job Titles scope"
+
+# The Job Titles block opens on a scope select. Juicebox defaults it to
+# "Current + Recent" (`cr`, the last two years); the recruiters want people who
+# have EVER held the title (Sohaib, 2026-09-07), which is "Current + Past".
+# Keys seen live 2026-09-07: c, cr, cp, nc (nested with companies), f (funding
+# stage). The Companies block has its own select, already `cp` by default.
+TITLE_SCOPE_KEY = "cp"
+TITLE_SCOPE_LABEL = "Current + Past"
 
 # Juicebox's funding-stage keys, in order, as its hidden select value spells
 # them ("seed,series_a,series_b,series_c" was read off a live search).
@@ -109,7 +119,7 @@ _HELPERS = """
 # sit side by side under General, so the Max heading bounds the Min window.
 _STOPS = ("['Power Filters', 'Past Job Titles', 'Past Locations', 'Companies', 'Timezone',"
           " 'Max Experience (Years)', 'Required Contact Info', 'Excluded Companies',"
-          " 'Estimated Revenue']")
+          " 'Estimated Revenue', 'Company HQ Locations', 'Company Sizes']")
 
 # A section's chips are `<p>` typography in most sections, bare `<text>` nodes
 # in Companies, and `span.MuiChip-label` in Company Funding Stages - all three
@@ -140,7 +150,12 @@ _READ_INPUT = ("(label) => {" + _HELPERS +
                "if (!w) return '';" + _FIND_INPUT +
                "return inp ? String(inp.value || '') : ''; }")
 
-_POPPER = ("() => [...document.querySelectorAll('.MuiAutocomplete-popper li, [role=option]')]"
+# Real options only. The Location(s) popper groups its options under "CITIES" /
+# "REGIONS" headers that are `<li>` elements holding the whole group; read as
+# an option, the header matched "New York" first, the ArrowDown count ran one
+# past it and the chip that landed was the REGION, which the save then dropped
+# (2026-09-08). Every option Juicebox offers carries `role=option`.
+_POPPER = ("() => [...document.querySelectorAll('[role=option]')]"
            ".filter(el => el.getBoundingClientRect().width)"
            ".map(el => (el.innerText || '').trim()).filter(Boolean).slice(0, 10)")
 
@@ -162,6 +177,34 @@ _MARK_STAGE_SELECT = ("() => {" + _HELPERS +
     "if (!display) return {state: 'no-display'};"
     "display.setAttribute('data-jbw', '1'); display.scrollIntoView({block: 'center'});"
     "return {state: 'ok', value: native.value || ''}; }")
+
+# The first MUI select inside a section's window - the scope select that heads
+# Job Titles ("Current + Recent") and Companies ("Current + Past"). Same shape
+# as the stages select: hidden native input with the value, sibling combobox.
+_MARK_SECTION_SELECT = ("(label) => {" + _HELPERS +
+    "document.querySelectorAll('[data-jbw]').forEach(el => el.removeAttribute('data-jbw'));"
+    "const w = followUntil(label, " + _STOPS + ");"
+    "if (!w) return {state: 'no-window'};"
+    "const native = w.find(el => el.tagName === 'INPUT'"
+    " && (el.className || '').includes('MuiSelect-nativeInput'));"
+    "if (!native) return {state: 'no-select'};"
+    "const root = native.parentElement;"
+    "const display = root && (root.querySelector('[role=combobox]')"
+    " || root.querySelector('.MuiSelect-select'));"
+    "if (!display) return {state: 'no-display'};"
+    "display.setAttribute('data-jbw', '1'); display.scrollIntoView({block: 'center'});"
+    "return {state: 'ok', value: native.value || ''}; }")
+
+# A section's own "Clear all" button. Location(s) has one; the AI pre-fills
+# cities from the JD (Atlanta on Axle, where the company sits) and a location
+# filter is the one place an extra chip widens the search to the wrong city.
+_CLICK_CLEAR_ALL = ("(label) => {" + _HELPERS +
+    "const w = followUntil(label, " + _STOPS + ");"
+    "if (!w) return 'no-window';"
+    "const btn = w.find(el => el.tagName === 'BUTTON'"
+    " && (el.innerText || '').trim() === 'Clear all' && el.getBoundingClientRect().width);"
+    "if (!btn) return 'no-button';"
+    "btn.click(); return 'ok'; }")
 
 _STAGE_OPTIONS = ("() => [...document.querySelectorAll('ul[role=listbox] li[role=option]')]"
                   ".filter(el => el.getBoundingClientRect().width)"
@@ -324,6 +367,24 @@ def _domain_label(option: str) -> str:
     return host.split(".")[0] if "." in host else ""
 
 
+def is_company_record(option: str) -> bool:
+    """Is an autocomplete option a company, as opposed to one of the other
+    kinds the Companies box offers alongside them?
+
+    A company row shows its domain on the second line ("Stripe / stripe.com").
+    The box also offers industries, keywords and the like, tagged on the second
+    line in words ("Insurance / INDUSTRY") - and Sohaib's rule (2026-09-07) is
+    that the Companies filter takes company names only. A tag has no dot; a
+    host does. A single-line option is left as a company, since that is how
+    the pure tests and some records read.
+    """
+    lines = [line.strip() for line in (option or "").strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return True
+    second = lines[1].lower()
+    return "." in second and " " not in second
+
+
 def same_company(value: str, option: str) -> bool:
     """Does an autocomplete option name the drafted company?
 
@@ -336,6 +397,8 @@ def same_company(value: str, option: str) -> bool:
     not Unit, "Alloy Automation / alloy.com" is not Alloy, and "Stripe /
     stripe.com" is not Stripe Olt.
     """
+    if not is_company_record(option):
+        return False
     head = (option.strip().splitlines() or [""])[0]
     if _name_key(head) == _name_key(value):
         return True
@@ -401,14 +464,27 @@ def pick_option(options: list[str], value: str, *, mode: str = "loose") -> int |
 def present(block: str, value: str, *, mode: str = "loose") -> bool:
     """Is `value` already a chip in a section's text?
 
-    Exact (companies): a chip whose name is the value, no more - "Unit" is not
-    present because "United Nations" is. Otherwise the value appears anywhere,
-    which is how "ATL" is found inside "Atlanta".
+    Exact (companies): a chip whose name is the value, no more - "Unit" is
+    not present because "United Nations" is.
+
+    Token (places): the value anywhere, because a place abbreviation is
+    written into a longer chip - "ATL" is Atlanta, "NY" is "New York, NY,
+    United States".
+
+    Loose (titles, skills): whole words only. As a substring test it read
+    "Go" as already present because the section held "Google Cloud", so Go
+    was skipped and reported neither added nor refused, and the search
+    never filtered on it (found in review, 2026-09-03).
     """
     if mode == "exact":
         key = _name_key(value)
         return any(_name_key(line) == key for line in block.splitlines() if line.strip())
-    return value.lower() in block.lower()
+    if mode == "token":
+        return value.lower() in block.lower()
+    wanted = re.escape(value.lower().strip())
+    if not wanted:
+        return False
+    return re.search(rf"(?<![0-9a-z]){wanted}(?![0-9a-z])", block.lower()) is not None
 
 
 def stage_key(stage: str | None) -> str | None:
@@ -812,6 +888,7 @@ async def _add_chip(page: "Page", label: str, value: str, *, mode: str = "loose"
     await page.wait_for_timeout(2_200)
     options = await page.evaluate(_POPPER)
     chosen = ""
+    head = ""
     if options:
         index = pick_option(options, value, mode=mode)
         if index is None:
@@ -823,12 +900,15 @@ async def _add_chip(page: "Page", label: str, value: str, *, mode: str = "loose"
                      extra={"section": label, "value": value, "offered": options[:5]})
             return None
         chosen = options[index]
-        if _landed(chosen, before.lower()):
-            # The suggestion is a chip the section already has ("NY" typed,
-            # "New York" already there): nothing to add, nothing refused.
+        head = (chosen.strip().splitlines() or [""])[0]
+        # Is the suggestion a chip the section already has ("NY" typed,
+        # "New York" already there)? Judged by the section's own matching
+        # rule: as a substring test this dropped 'Unit' onto a section
+        # holding 'Unit21' and reported it added (review, 2026-09-03).
+        if present(before, head, mode=mode):
             await page.keyboard.press("Escape")
             await _clear_box(page, label)
-            return chip_label([chosen.strip().splitlines()[0]], value)
+            return chip_label([head], value)
         for _ in range(index + 1):
             await page.keyboard.press("ArrowDown")
             await page.wait_for_timeout(150)
@@ -838,9 +918,8 @@ async def _add_chip(page: "Page", label: str, value: str, *, mode: str = "loose"
     gained = new_lines(before, after)
     if gained:
         return chip_label(gained, value)
-    lowered = after.lower()
-    if value.lower() in lowered or _landed(chosen, lowered):
-        return value
+    if present(after, value, mode=mode) or (head and present(after, head, mode=mode)):
+        return head or value
     await _clear_box(page, label)
     return None
 
@@ -850,6 +929,10 @@ class StageResult:
     labels: list[str] = field(default_factory=list)   # selected, as the menu names them
     missing: list[str] = field(default_factory=list)  # wanted keys that did not land
     offered: list[str] = field(default_factory=list)  # keys the menu had
+    # our key -> the key Juicebox's own select uses for it. The select's
+    # value is spelled Juicebox's way, so without this a stage that landed
+    # reads as missing whenever the two spellings differ.
+    raw: dict[str, str] = field(default_factory=dict)
     value: str = ""                                    # the select's value afterwards
 
 
@@ -862,7 +945,10 @@ async def _set_stages(page: "Page", stage: str | None) -> StageResult:
     result = StageResult()
     marked = await page.evaluate(_MARK_STAGE_SELECT)
     if marked.get("state") != "ok":
-        log.info("juicebox stage select missing", extra={"state": marked.get("state")})
+        # Reported, not swallowed: the row's note says the stage filter
+        # rests on Claude's inference, and a silent miss made that a lie.
+        result.missing = stage_plan(stage)
+        log.warning("juicebox stage select missing", extra={"state": marked.get("state")})
         return result
     result.value = str(marked.get("value") or "")
     await page.locator("[data-jbw='1']").click(timeout=10_000)
@@ -870,7 +956,8 @@ async def _set_stages(page: "Page", stage: str | None) -> StageResult:
     options = await page.evaluate(_STAGE_OPTIONS)
     if not options:
         await page.keyboard.press("Escape")
-        log.info("juicebox stage menu did not open")
+        result.missing = stage_plan(stage)
+        log.warning("juicebox stage menu did not open")
         return result
 
     # Match on the key Juicebox gives each option, else on what its label
@@ -882,6 +969,7 @@ async def _set_stages(page: "Page", stage: str | None) -> StageResult:
         if key:
             keyed.setdefault(key, option)
     result.offered = list(keyed)
+    result.raw = {key: option["key"] for key, option in keyed.items() if option["key"]}
     wanted = stages_up_to(stage, result.offered)
     result.missing = [k for k in stage_plan(stage) if k not in keyed]
     if not wanted:
@@ -910,11 +998,49 @@ async def _set_stages(page: "Page", stage: str | None) -> StageResult:
 
     after = await page.evaluate(_MARK_STAGE_SELECT)
     result.value = str(after.get("value") or "")
-    selected = [k for k in result.value.split(",") if k]
-    result.labels = [keyed[k]["label"] for k in wanted if k in selected]
-    result.missing += [k for k in wanted if k not in selected]
+    selected = {k for k in result.value.split(",") if k}
+    landed = [k for k in wanted if result.raw.get(k, k) in selected]
+    result.labels = [keyed[k]["label"] for k in landed]
+    result.missing += [k for k in wanted if k not in landed]
     log.info("juicebox stages set", extra={"wanted": wanted, "value": result.value})
     return result
+
+
+async def _set_scope(page: "Page", label: str, key: str) -> str:
+    """Pick one entry of a section's scope select by its `data-value`.
+    Returns the select's value afterwards ('' when the select was not found)."""
+    marked = await page.evaluate(_MARK_SECTION_SELECT, label)
+    if marked.get("state") != "ok":
+        log.info("juicebox scope select missing",
+                 extra={"section": label, "state": marked.get("state")})
+        return ""
+    if marked.get("value") == key:
+        return key
+    await page.locator("[data-jbw='1']").click(timeout=10_000)
+    await page.wait_for_timeout(1_000)
+    option = page.locator(f'ul[role=listbox] li[role=option][data-value="{key}"]')
+    if not await option.count():
+        await page.keyboard.press("Escape")
+        log.info("juicebox scope option missing", extra={"section": label, "key": key})
+        return str(marked.get("value") or "")
+    await option.first.click(timeout=5_000)
+    await page.wait_for_timeout(800)
+    after = await page.evaluate(_MARK_SECTION_SELECT, label)
+    value = str(after.get("value") or "")
+    log.info("juicebox scope set", extra={"section": label, "value": value})
+    return value
+
+
+async def _clear_section(page: "Page", label: str) -> bool:
+    """Press a section's own "Clear all", when it has one."""
+    await page.evaluate(_MARK, label)  # scrolls the section into view
+    await page.wait_for_timeout(300)
+    state = await page.evaluate(_CLICK_CLEAR_ALL, label)
+    if state != "ok":
+        log.info("juicebox clear all missing", extra={"section": label, "state": state})
+        return False
+    await page.wait_for_timeout(1_000)
+    return True
 
 
 async def _set_years(page: "Page", label: str, years: int) -> bool:
@@ -952,6 +1078,11 @@ async def configure_filters(
     sections: list[tuple[str, list[str]]] = [(JOB_TITLES, titles)]
     places = split_locations(location)
     if places:
+        # The AI's own cities go first. On Axle it had added the company's
+        # city beside the row's, and a search runs on every city it holds.
+        before = await _section_text(page, LOCATIONS)
+        if before.strip() and await _clear_section(page, LOCATIONS):
+            log.info("juicebox locations cleared", extra={"had": before.splitlines()[:6]})
         sections.append((LOCATIONS, places))
     sections.append((SKILLS, skills))
     if companies:
@@ -974,6 +1105,21 @@ async def configure_filters(
                      extra={"section": label, "value": value, "landed": landed})
         report.added[label] = added
         report.refused[label] = refused
+
+    if companies and report.added.get(COMPANIES):
+        # Juicebox's AI files industries of its own from the JD and then warns
+        # "You have selected both companies and industries". The Companies list
+        # is the filter (Sohaib, 2026-09-07); the industries widen it back out.
+        before = await _section_text(page, INDUSTRIES)
+        had = [l for l in before.splitlines() if l.strip() and l.strip() != "Current + Past"]
+        if had and await _clear_section(page, INDUSTRIES):
+            report.added[INDUSTRIES] = [f"cleared {len(had)}"]
+            log.info("juicebox industries cleared", extra={"had": had[:6]})
+        elif had:
+            report.refused[INDUSTRIES] = had
+
+    scope = await _set_scope(page, JOB_TITLES, TITLE_SCOPE_KEY)
+    (report.added if scope == TITLE_SCOPE_KEY else report.refused)[TITLE_SCOPE] = [TITLE_SCOPE_LABEL]
 
     years = [(MIN_YEARS, min_years), (MAX_YEARS, max_years)]
     for label, value in years:
@@ -1017,10 +1163,41 @@ async def configure_filters(
         lost = [chip for chip in report.added.get(label, [])
                 if not present(block, chip, mode=match_mode(label))]
         if lost:
+            # The editor paints its chips a beat after it opens; one more read
+            # before a chip that is there is reported gone (Location(s), 2026-09-08).
+            await page.wait_for_timeout(2_500)
+            block = await _section_text(page, label)
+            lost = [chip for chip in lost if not present(block, chip, mode=match_mode(label))]
+        if lost:
             report.added[label] = [c for c in report.added[label] if c not in lost]
             report.refused.setdefault(label, []).extend(lost)
             log.warning("juicebox filters lost on reload",
                         extra={"section": label, "lost": lost})
+    if places:
+        # Anything in Location(s) that is not ours is a city the search will
+        # also run on - say so, the way a lost chip is said.
+        block = await _section_text(page, LOCATIONS)
+        ours = {c.lower() for c in report.added.get(LOCATIONS, [])}
+        extra = [line.strip() for line in block.splitlines()
+                 if line.strip() and line.strip().lower() not in ours
+                 and line.strip().upper() != line.strip()          # CITY / REGION tags
+                 and not re.match(r"(?i)within \d+ miles$", line.strip())]  # the radius select
+        if extra:
+            log.warning("juicebox locations beyond ours", extra={"extra": extra})
+            report.refused.setdefault(LOCATIONS, []).extend(f"extra: {e}" for e in extra)
+    if INDUSTRIES in report.added:
+        block = await _section_text(page, INDUSTRIES)
+        left = [l for l in block.splitlines() if l.strip() and l.strip() != "Current + Past"]
+        if left:
+            report.refused[INDUSTRIES] = left
+            report.added.pop(INDUSTRIES, None)
+            log.warning("juicebox industries back after reload", extra={"left": left})
+    if TITLE_SCOPE in report.added:
+        marked = await page.evaluate(_MARK_SECTION_SELECT, JOB_TITLES)
+        if marked.get("value") != TITLE_SCOPE_KEY:
+            report.refused[TITLE_SCOPE] = report.added.pop(TITLE_SCOPE)
+            log.warning("juicebox title scope lost on reload",
+                        extra={"kept": marked.get("value")})
     for label, value in years:
         if value is None or label not in report.added:
             continue
@@ -1032,11 +1209,23 @@ async def configure_filters(
     if stage:
         marked = await page.evaluate(_MARK_STAGE_SELECT)
         report.stage_keys = [k for k in str(marked.get("value") or "").split(",") if k]
-        lost = [k for k in stages_up_to(stage, stages.offered) if k not in report.stage_keys]
-        if lost and STAGES in report.added:
+        held = set(report.stage_keys)
+        lost = [k for k in stages_up_to(stage, stages.offered)
+                if stages.raw.get(k, k) not in held]
+        if lost:
+            # Out of `added` as well as into `refused`, and each stage once:
+            # the summary counted stages it had just called refused.
+            kept = [label for label in report.added.get(STAGES, [])
+                    if (stage_key(label) or label) not in lost]
+            if kept:
+                report.added[STAGES] = kept
+            else:
+                report.added.pop(STAGES, None)
+            report.refused[STAGES] = sorted(
+                set(report.refused.get(STAGES, [])) | set(lost)
+            )
             log.warning("juicebox stages lost on reload",
                         extra={"lost": lost, "kept": report.stage_keys})
-            report.refused.setdefault(STAGES, []).extend(lost)
     log.info("juicebox sourcing configured", extra={"summary": report.summary})
     return report
 

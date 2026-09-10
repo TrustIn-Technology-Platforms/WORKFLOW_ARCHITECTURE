@@ -518,11 +518,13 @@ not reported; it is the client's own word.
 - The document should state the stage where the recruiter knows it. One line
   in the `Client JD` ("Stage: Series B") is enough, and it is the difference
   between a list built on fact and one built on inference.
-- Fifteen companies is the cap (`MAX_COMPANIES`). A past-company filter is a
-  hard narrowing - a candidate must have worked at one of them - so the list
-  has to be short enough to be checked and long enough to leave a pool.
+- The cap is a setting, `SOURCING_MAX_COMPANIES`, **thirty** since 2026-09-03
+  (fifteen when this was written). A past-company filter is a hard narrowing
+  - a candidate must have worked at one of them - so the list has to be short
+  enough to be checked and long enough to leave a pool; Sohaib raised it
+  after the first searches came back thin.
 - The drafting is platform-neutral. Juicebox's `Companies` filter reads the
-  same list when it is wired; only Loxo is wired today.
+  same list, wired 2026-09-03; Loxo's `Past Company` box was first.
 
 **Revisit when** a client's stage is something the Notion row could carry as a
 column. That would replace step 1 outright and make step 2's inference the rare

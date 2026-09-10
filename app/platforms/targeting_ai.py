@@ -70,6 +70,17 @@ role asks for, as the JD states them ("5+ years" -> min 5, no max; "3-5
 years" -> 3 and 5). Use the overall requirement, not years with one tool.
 Leave both null when the JD gives no figure; never guess one.
 
+`candidate_location` - where the CANDIDATE must be based, as the JD states
+it, in the form a search box takes: a city or metro ("New York"), a country
+or region ("United Kingdom", "United States"), or the remote region for a
+remote role ("Remote - United States" -> "United States"). Hybrid and onsite
+roles are based where the office the candidate reports to is. This is NOT the
+company's headquarters, its founding city or its other offices - a company
+headquartered in Atlanta hiring a hybrid engineer in New York is "New York".
+Plain place names only - "New York", never "New York, NY" or "NYC" - and
+several places joined with " / " when the JD offers a choice ("New York /
+Atlanta"). Null when the JD says nothing about where the person must be.
+
 The user message says how many titles and skills to return. Fill those counts
 where the job description supports them - adjacent titles, the seniority
 variants the JD allows, every tool and regime the stack names or plainly
@@ -141,6 +152,49 @@ class SearchTargeting(BaseModel):
         default=None,
         description="Maximum total years of experience the JD asks for; null when open-ended.",
     )
+    candidate_location: str | None = Field(
+        default=None,
+        description=(
+            "Where the candidate must be based, as a search box takes it; "
+            "never the company's headquarters. Null when the JD says nothing."
+        ),
+    )
+
+
+def sourcing_location(drafted: str | None, *fallbacks: str | None) -> str:
+    """The place a search filters candidates to.
+
+    The Client JD's own statement of where the person must be comes first.
+    The row's `Location` and the advert's are the job's location as the
+    posting states it, which on Axle (2026-09-02) was where the company sits
+    and not where the hire had to be - Juicebox went looking in the wrong
+    city. They fill the gap only when the JD says nothing.
+    """
+    for value in (drafted, *fallbacks):
+        text = _plain_places(value)
+        if text and text.lower() not in ("null", "none", "unknown", "not given", "n/a"):
+            return text
+    return ""
+
+
+_STATE_CODE = re.compile(r",\s*[A-Z]{2}(?=\s*(?:[/,;]|$))")
+
+
+def _plain_places(value: str | None) -> str:
+    """"New York, NY, Atlanta, GA" -> "New York / Atlanta".
+
+    The model writes places the American way even when told not to, and the
+    platforms split a location on commas - so "NY" and "GA" became chips of
+    their own on the first dry run (2026-09-07). A two-letter code after a
+    comma is a state, not a place; the places that remain are joined the way
+    `split_locations` reads a choice.
+    """
+    text = " ".join((value or "").split())
+    if not text:
+        return ""
+    text = _STATE_CODE.sub("", text)
+    parts = [p.strip() for p in re.split(r"\s*(?:/|,|;|\|)\s*", text) if p.strip()]
+    return " / ".join(dict.fromkeys(parts))
 
 
 class CompanyTargeting(BaseModel):
@@ -249,6 +303,7 @@ async def draft_targeting(
         skills=_clean(draft.skills, max_skills),
         min_years=min_years,
         max_years=max_years,
+        candidate_location=sourcing_location(draft.candidate_location) or None,
     )
     log.info(
         "search targeting drafted",
@@ -257,6 +312,7 @@ async def draft_targeting(
             "titles": result.similar_titles,
             "skills": result.skills,
             "years": [result.min_years, result.max_years],
+            "candidate_location": result.candidate_location,
         },
     )
     return result

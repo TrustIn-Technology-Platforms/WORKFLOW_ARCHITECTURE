@@ -133,3 +133,29 @@ def test_no_key_returns_empty_company_targeting_not_an_error(monkeypatch):
         reset_settings_cache()
     assert result == CompanyTargeting()
     assert result.inferred is False
+
+
+def test_the_jd_says_where_the_candidate_is_and_the_row_only_fills_the_gap():
+    """Axle's row said New York; the JD said where the hire had to be. The
+    JD wins, the row and the advert fill in only when it says nothing, and a
+    model's "null" spelled out is nothing."""
+    from app.platforms.targeting_ai import sourcing_location
+
+    assert sourcing_location("Chicago", "New York", "Atlanta") == "Chicago"
+    assert sourcing_location(None, "New York", "Atlanta") == "New York"
+    assert sourcing_location("  ", None, "Atlanta") == "Atlanta"
+    assert sourcing_location("null", "New York") == "New York"
+    assert sourcing_location(None, None) == ""
+
+
+def test_places_come_out_plain_and_slash_joined():
+    """The model wrote "New York, NY, Atlanta, GA" on the first dry run and the
+    comma split made NY and GA chips. State codes go; places keep their order."""
+    from app.platforms.targeting_ai import sourcing_location
+
+    assert sourcing_location("New York, NY, Atlanta, GA") == "New York / Atlanta"
+    assert sourcing_location("New York / Atlanta") == "New York / Atlanta"
+    assert sourcing_location("United Kingdom") == "United Kingdom"
+    assert sourcing_location("Manchester, UK") == "Manchester"
+    assert sourcing_location("San Francisco, CA") == "San Francisco"
+

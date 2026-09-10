@@ -56,7 +56,7 @@ to the same column even without an override.
 | `PROP_EMPLOYMENT_TYPE` | `Employment Type` | Fills `advert.employment_type` when the document has none. |
 | `PROP_SKILLS` | `Skills` | **Optional.** Comma-separated skills for Wellfound's Skills tag field. Blank means they are drafted from the advert (`app/platforms/skills.py`); no `ANTHROPIC_API_KEY` means the field is left empty. |
 | `PROP_LOXO_JOB` | `Loxo Job` | **Optional.** The Loxo job whose criteria this row sets — URL or id. Blank falls back to matching by hiring company. |
-| `PROP_JUICEBOX_SEARCH` | `Juicebox Search` | **Optional.** The Juicebox search whose criteria this row sets — full URL. Blank skips that step. |
+| `PROP_JUICEBOX_SEARCH` | `Juicebox Search` | **Optional.** The Juicebox search whose criteria this row sets — full URL. Blank no longer skips the step (changed 2026-09-03): the criteria are ranked on the search the run's own sourcing step just built. Fill it to point at a search a recruiter made by hand instead. |
 | `PROP_JUICEBOX_PROJECT` | `Juicebox Project` | **Optional.** The Juicebox project the row's sourcing search is built in — full URL. Blank creates a project named after the document; fill it to reuse one a recruiter made, or one an earlier run created and then stopped short of the search. |
 
 ## Status values
@@ -122,7 +122,7 @@ supported state: the gaps stay empty and the run says which ones did.
 | `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
 | `STUCK_POSTING_MINUTES` | `45` | A row untouched on `Posting` this long is taken as orphaned by a dead process (a redeploy) and marked Failed with a note. Longer than any live run on three platforms takes. |
 | `STUCK_SWEEP_MINUTES` | `10` | How often the deployed service sweeps for such rows (also once at startup). |
-| `POLL_MINUTES` | `2` | How often the deployed service asks Notion for `Ready to Post` rows and runs them itself, one at a time, without waiting for n8n's webhook call. `0` leaves the webhook as the only trigger. |
+| `POLL_MINUTES` | `2` | How often the deployed service asks Notion for `Ready to Post` rows and runs them itself, one at a time, without waiting for n8n's webhook call. `0` leaves the webhook as the only trigger, and so does `DRY_RUN=true` — a dry run writes no row back, so polling would run the same rows for ever. |
 
 ## Storage
 

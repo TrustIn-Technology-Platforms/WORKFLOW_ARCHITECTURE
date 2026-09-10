@@ -368,6 +368,45 @@ available: drive the session in the browser but save through
 `page.evaluate(fetch(...))`, which sidesteps the Draft.js editor entirely.
 Undocumented, so ask noon (support@noon.ai) before depending on it.
 
+## Retiring a role (2026-09-08)
+
+> **Status** **BUILT AND PROVEN LIVE** on two ZZ TEST roles, 2026-09-08.
+> `python -m app.cli retire noon --role <uuid> [--delete] --live --headed`;
+> `app/platforms/noon_retire.py`. Headless the portal did not load within the
+> 45s the session capture allows, so run it headed until that is looked at.
+
+The reverse of posting, read out of the portal's bundle (`38.js`, every call is
+a literal `https://noon.fly.dev/<path>`). Two facts shape it:
+
+- **There is no pause endpoint and no `active` flag a client can set.** The
+  only client code that writes `active = false` is the delete handler. The
+  portal shows a role as paused when it is `active` **and**
+  `autopilot.enabled === false`, and the wizard's own final call is what
+  turns `enabled` on - so stopping the search is the same call with it off:
+  `POST /role_autopilot {id, autopilot: {...<the role's block>, enabled: false}}`,
+  no token, as the portal sends it. Read back through `refetch_roles`
+  (`all_roles` answers from a cache and returned an empty list all evening).
+- **Delete is `POST /delete_role {token, id}`**, behind the UI's "Confirm
+  deletion?" prompt (the red *Delete*). The role is out of `refetch_roles` at
+  once; the portal marks its copy `obsolete: true, active: false`.
+
+The full endpoint list the portal knows, for the next time something has to be
+found: `create_role update_role update_role_from_popup delete_role
+role_autopilot templates template_update template_diff create_project
+cancel_followups restart_email_outreach send_now reschedule_followup
+outdated_template_candidates get_template_by_hash` (plus the read calls the
+API section lists). `cancel_followups {token, role, candidate}` and
+`restart_email_outreach` are per candidate - the campaign itself has no
+on/off switch because sending only starts when a recruiter presses
+`Contact N candidates`.
+
+**Proof, 2026-09-08:** `ZZ TEST - Senior Recruitment Consultant - 20260831`
+(sourcing on since 2026-08-31) read back `enabled: false` in a fresh session
+after the stop; `ZZ TEST NOTE - delete me (1)` was gone from `refetch_roles`
+after the delete. Remaining test roles: `ZZ TEST - delete me`, `ZZ TEST 2 -
+delete me`, `ZZ TEST NOTE - delete me`, `ZZ TEST inmail subject - delete me`,
+and the 20260831 one (now stopped) - all deletable with `--delete --live`.
+
 ## Two things to know before calling this "posting"
 
 1. **Outreach sends through their Chrome extension.** Every page shows
@@ -414,7 +453,7 @@ Undocumented, so ask noon (support@noon.ai) before depending on it.
 - [x] **What is behind `Start sourcing`?** A seven-step wizard; every step, payload and endpoint is in [the sourcing wizard](#the-sourcing-wizard).
 - [ ] **Run the write half of the sourcing wizard against a live role.** `generate_params` is confirmed live (2026-08-31); `set_candidate_source`, `gpt_stream`, `role_autopilot`, `rank_non_negotiables`, `clarifying_questions` and `mark_clarifying_question` were read out of the portal bundle and have never been sent. `python scripts/probe_noon_sourcing.py` records them from a hand-driven run; the first `source --live` should be watched with `--headed`.
 - [ ] **Ask noon about the API.** The campaign already saves through `template_update` and the criteria now go through `role_autopilot`. Both are undocumented. support@noon.ai.
-- [ ] **Delete the two test roles** — `ZZ TEST - delete me` (project `03143de9-…`) and `ZZ TEST 2 - delete me` (project `2aeefeb6-…`). Both carry a complete campaign; neither has contacted anyone.
+- [ ] **Delete the test roles** — now one command each: `python -m app.cli retire noon --role <uuid> --delete --live --headed` (see *Retiring a role*). `ZZ TEST NOTE - delete me (1)` went that way on 2026-09-08.
 - [ ] **Decide the mapping rule** for documents with a different number of emails than the template has slots. The recipe expects exactly three and fails clearly on fewer; a fourth is ignored.
 - [x] **Connection-request note** — written since 2026-09-01. noon's warning
   ("You can't add a message to connection requests on a non-premium LinkedIn

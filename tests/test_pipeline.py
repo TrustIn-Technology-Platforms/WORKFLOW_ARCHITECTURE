@@ -198,3 +198,113 @@ def test_recover_dry_run_lists_but_changes_nothing():
     stuck = asyncio.run(recover_stuck_rows(client, Settings(), older_than_minutes=45, dry_run=True))
     assert [r.page_id for r in stuck] == ["old"]
     assert client.failed == {}
+
+
+# -- the last write of a row ----------------------------------------------------
+
+
+class _WriteBackClient:
+    """A Notion client whose final update is rejected, as a 409 would be."""
+
+    def __init__(self, fail_posted: bool = True) -> None:
+        self.fail_posted = fail_posted
+        self.posting: list[str] = []
+        self.posted: list[tuple] = []
+        self.failed: list[tuple] = []
+
+    async def mark_posting(self, page_id):
+        self.posting.append(page_id)
+
+    async def mark_posted(self, page_id, post_url, detail=None):
+        if self.fail_posted:
+            from app.notion.client import NotionAPIError
+
+            raise NotionAPIError(409, "conflict_error", "Conflict occurred while saving")
+        self.posted.append((page_id, post_url, detail))
+
+    async def mark_failed(self, page_id, error):
+        self.failed.append((page_id, error))
+
+
+def _posted_report(monkeypatch, results):
+    """Run process_row far enough to reach the write-back, with no browsers."""
+    import asyncio
+
+    from app.config import Settings
+    from app.models import NotionRow
+    from app.pipeline import process_row
+
+    document = ParsedDocument(
+        advert=Advert(title="T", body_text="b", body_html="<p>b</p>"), emails=[]
+    )
+
+    async def fake_load(url, settings=None):
+        return document
+
+    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None):
+        return results
+
+    monkeypatch.setattr("app.pipeline.load_document", fake_load)
+    monkeypatch.setattr("app.pipeline.post_document", fake_post)
+    row = NotionRow(page_id="p1", title="Row", document_url="http://x/doc.docx",
+                    status="Ready to Post", platforms=["loxo"])
+    return row, document, asyncio, process_row, Settings
+
+
+def test_a_rejected_final_update_is_recorded_instead_of_left_on_posting(monkeypatch):
+    """Review, 2026-09-03: every platform posted, Notion rejected the last
+    PATCH, the row stayed on Posting, and 45 minutes later the sweep blamed a
+    restart and invited a re-run - which would post everything twice."""
+    from app.models import Outcome, PostResult
+
+    row, _doc, asyncio, process_row, Settings = _posted_report(
+        monkeypatch,
+        [PostResult(platform="loxo", outcome=Outcome.POSTED,
+                    post_url="https://app.loxo.co/x", detail=None)],
+    )
+    client = _WriteBackClient()
+    report = asyncio.run(process_row(row, client, Settings(), dry_run=False))
+
+    assert report.ok  # the posting itself succeeded
+    assert client.failed, "the failed write-back was not recorded on the row"
+    _page, message = client.failed[0]
+    assert "Do NOT re-run" in message
+    assert "https://app.loxo.co/x" in message
+
+
+def test_a_row_whose_platform_has_no_recipe_says_nothing_in_its_notes(monkeypatch):
+    """`TrustIn` is a tag, not a destination. Reporting its skip on every row
+    read as a problem - and with no Notes column, as 'Posted OK' in Error."""
+    from app.models import Outcome, PostResult
+
+    row, _doc, asyncio, process_row, Settings = _posted_report(
+        monkeypatch,
+        [
+            PostResult(platform="TrustIn", outcome=Outcome.SKIPPED,
+                       detail="no recipe for 'TrustIn' - nothing to post to"),
+            PostResult(platform="loxo", outcome=Outcome.POSTED,
+                       post_url="https://app.loxo.co/x", detail=None),
+        ],
+    )
+    client = _WriteBackClient(fail_posted=False)
+    asyncio.run(process_row(row, client, Settings(), dry_run=False))
+
+    assert client.posted, "the row was not marked posted"
+    _page, _url, detail = client.posted[0]
+    assert detail is None, f"nothing should have been written as notes, got {detail!r}"
+
+
+def test_a_real_platforms_note_still_reaches_the_row(monkeypatch):
+    from app.models import Outcome, PostResult
+
+    row, _doc, asyncio, process_row, Settings = _posted_report(
+        monkeypatch,
+        [PostResult(platform="juicebox", outcome=Outcome.POSTED,
+                    post_url="https://app.juicebox.ai/x",
+                    detail="sourcing search: 26 companies, 4 refused")],
+    )
+    client = _WriteBackClient(fail_posted=False)
+    asyncio.run(process_row(row, client, Settings(), dry_run=False))
+
+    _page, _url, detail = client.posted[0]
+    assert "26 companies" in detail

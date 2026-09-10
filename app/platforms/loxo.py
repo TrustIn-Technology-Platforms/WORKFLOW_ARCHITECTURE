@@ -176,9 +176,11 @@ class LoxoAdapter(RecipeAdapter):
         Source failure is a warning, never a lost campaign.
         """
         from app.platforms.loxo_source import configure_source, experience_bands
+        from app.pipeline import _row_text
         from app.platforms.targeting_ai import (
             draft_companies,
             draft_targeting,
+            sourcing_location,
             stage_from_text,
         )
 
@@ -205,11 +207,18 @@ class LoxoAdapter(RecipeAdapter):
         # and a recruiter can check a guess in a minute that a search cannot.
         company = (document.source_name or "").split(" - ")[0].strip()
         stated = stage_from_text(document.job_description, advert.body_text)
+        # The candidate's location per the JD, not the posting's (see the
+        # Juicebox adapter): the company list is drawn from the same region.
+        where = sourcing_location(
+            targeting.candidate_location,
+            _row_text(row, self.settings.prop_location) if row is not None else None,
+            advert.location,
+        )
         companies = await draft_companies(
             document.job_description,
             company=company,
             stage=stated,
-            location=advert.location or "",
+            location=where,
             role_title=name,
             limit=self.settings.sourcing_max_companies,
             settings=self.settings,

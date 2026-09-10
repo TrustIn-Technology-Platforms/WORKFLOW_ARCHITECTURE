@@ -187,3 +187,23 @@ def test_a_row_is_run_only_while_it_still_reads_ready(monkeypatch):
     asyncio.run(api._run_if_ready("ready", None, source="test"))
     asyncio.run(api._run_if_ready("taken", None, source="test"))
     assert processed == ["ready"]
+
+
+def test_the_poller_stands_down_in_a_dry_run(monkeypatch):
+    """A dry run writes no row back, so every poll would find the same rows and
+    drive the real platforms again, for ever (review, 2026-09-03)."""
+    import asyncio
+
+    from app import api
+    from app.config import Settings
+
+    called: list[str] = []
+
+    class Boom:
+        def __init__(self, settings):
+            called.append("client")
+
+    monkeypatch.setattr("app.notion.client.NotionClient", Boom)
+    settings = Settings(notion_token="t", notion_database_id="d", dry_run=True)
+    asyncio.run(asyncio.wait_for(api._poll_ready_rows(settings), timeout=5))
+    assert called == [], "the poller queried Notion during a dry run"

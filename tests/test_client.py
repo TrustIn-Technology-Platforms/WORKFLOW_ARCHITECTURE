@@ -45,14 +45,32 @@ def test_without_a_notes_column_the_notes_say_posted_ok_in_error(monkeypatch):
     assert "Notes" not in written
 
 
-def test_a_run_with_nothing_to_say_leaves_error_empty(monkeypatch):
-    client, written = _client(monkeypatch, {"Notes", "Error"})
-    asyncio.run(client.mark_posted("p", "https://x", None))
-    assert written["Error"] == ""
-    assert "Notes" not in written
 
 
 def test_notion_timestamps_parse_as_aware_datetimes():
     assert _parse_time("2026-09-03T09:34:00.000Z") == datetime(2026, 9, 3, 9, 34, tzinfo=timezone.utc)
     assert _parse_time(None) is None
     assert _parse_time("not a time") is None
+
+
+def test_notes_are_cleared_when_a_run_has_nothing_to_say(monkeypatch):
+    """Otherwise the previous run's notes sit beside this run's result and read
+    as though this run had done that work (review, 2026-09-03)."""
+    client, written = _client(monkeypatch, {"Notes", "Error", "Post Status"})
+    asyncio.run(client.mark_posted("p", "https://x", None))
+    assert written["Notes"] == ""
+    assert written["Error"] == ""
+
+
+def test_a_failed_run_clears_the_previous_runs_notes(monkeypatch):
+    client, written = _client(monkeypatch, {"Notes", "Error", "Post Status"})
+    asyncio.run(client.mark_failed("p", "loxo: the session has expired"))
+    assert written["Notes"] == ""
+    assert "expired" in written["Error"]
+
+
+def test_mark_failed_without_a_notes_column_writes_only_the_error(monkeypatch):
+    client, written = _client(monkeypatch, {"Error", "Post Status"})
+    asyncio.run(client.mark_failed("p", "boom"))
+    assert written["Error"] == "boom"
+    assert "Notes" not in written

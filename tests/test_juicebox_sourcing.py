@@ -11,6 +11,7 @@ from app.platforms.juicebox_sourcing import (
     SourcingReport,
     _landed,
     chip_label,
+    is_company_record,
     is_search_url,
     match_mode,
     new_lines,
@@ -51,6 +52,12 @@ def test_a_company_needs_its_own_name_not_the_nearest():
     assert pick_option(["Method Financial Planning"], "Method Financial", mode="exact") is None
     # Legal suffixes and punctuation are not part of the name.
     assert pick_option(["Stripe, Inc.\nstripe.com"], "Stripe", mode="exact") == 0
+    # The box also offers industries and keywords, tagged in words on the second
+    # line. Companies are names only (Sohaib, 2026-09-07): a tag is never taken,
+    # even when it reads exactly like the drafted name.
+    assert pick_option(["Insurance\nINDUSTRY", "Insurance\ninsurance.com"], "Insurance", mode="exact") == 1
+    assert pick_option(["Alloy\nKEYWORD"], "Alloy", mode="exact") is None
+    assert same_company("Boost Insurance", "Boost\nCOMPANY INDUSTRY") is False
     # Loose matching (titles, skills) may take a containing or first real option.
     assert pick_option(["Platform Lead\nTITLE", "Platform Engineer"], "engineer") == 1
     assert pick_option(['Ask AI for "x"', "Something"], "x") == 1
@@ -99,8 +106,23 @@ def test_present_is_exact_for_companies_and_loose_elsewhere():
     block = "Current + Past\nClear all\nUnited Nations\nStripe, Inc.\n+ Add company group"
     assert present(block, "Stripe", mode="exact")
     assert not present(block, "Unit", mode="exact")
-    assert present("CITY\nAtlanta", "ATL")
-    assert not present("CITY\nAtlanta", "NY")
+    # Places are written into longer chips, so a place matches anywhere.
+    assert present("CITY\nAtlanta", "ATL", mode="token")
+    assert not present("CITY\nAtlanta", "NY", mode="token")
+
+
+def test_a_short_skill_is_not_hidden_inside_a_longer_one():
+    """Review, 2026-09-03: "Go" read as already present because the section
+    held "Google Cloud", so it was skipped and reported neither way."""
+    block = "Google Cloud\nKubernetes\nTerraform"
+    assert not present(block, "Go")
+    assert present(block + "\nGo", "Go")
+    assert present(block, "Kubernetes")
+    # Punctuation in a skill is matched literally, not as a pattern.
+    assert present("Node.js\nCI/CD", "Node.js")
+    assert present("CI/CD", "CI/CD")
+    # A skill inside a parenthesised alias is still present.
+    assert present("Amazon Web Services (AWS)", "AWS")
 
 
 # -- funding stages ----------------------------------------------------------
@@ -309,3 +331,11 @@ def test_without_a_project_url_one_is_created_and_named(monkeypatch):
     assert report.project_url == "https://app.juicebox.ai/project/new/home"
     assert calls[0] == ("create", "ZZ TEST")
     assert calls[1][1] == "https://app.juicebox.ai/project/new/home"
+
+
+def test_only_company_records_count_as_companies():
+    assert is_company_record("Stripe\nstripe.com")
+    assert is_company_record("Method Financial Planning")
+    assert not is_company_record("Insurance\nINDUSTRY")
+    assert not is_company_record("Fintech\nCOMPANY KEYWORD")
+

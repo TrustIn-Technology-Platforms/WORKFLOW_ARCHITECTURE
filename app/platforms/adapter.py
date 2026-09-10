@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import TYPE_CHECKING, Any, Protocol
@@ -18,7 +20,7 @@ from app.models import (
     PlatformError,
     PostResult,
 )
-from app.platforms.actions import StepRun, find
+from app.platforms.actions import StepRun, find, resolve_locator
 from app.platforms.browser import BrowserRunner, save_failure
 from app.platforms.engine import RecipeEngine, RunReport
 from app.platforms.recipe import Recipe
@@ -176,6 +178,20 @@ class RecipeAdapter:
                     detail=detail,
                     finished_at=datetime.now(timezone.utc),
                 )
+        except (PlatformError, AuthenticationRequired):
+            raise
+        except Exception as exc:  # noqa: BLE001 - opening or closing the
+            # browser, outside the guard above: a profile Chrome will not
+            # open, a container that killed it, a context that dies on
+            # close. All three used to reach the row as "Unexpected error:
+            # TargetClosedError" and fail every other platform with it.
+            first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+            raise PlatformError(
+                f"{recipe.label}: the browser could not be opened or closed "
+                f"cleanly - {exc.__class__.__name__}: {first[:300]}. Re-run "
+                "the row; if it repeats, the saved profile may be in use or "
+                "damaged."
+            ) from exc
         finally:
             if owned_runner:
                 await runner.stop()
@@ -339,6 +355,15 @@ async def capture_login(
 
             signal = await _await_login(page, login, timeout_seconds)
 
+            if signal == "closed":
+                # What the prompt promises. Without this the next line
+                # touches a dead context and the operator gets a traceback.
+                raise AuthenticationRequired(
+                    "The browser window was closed, so nothing was saved. Run "
+                    "the command again and leave the window open once the "
+                    "app's own screen has loaded."
+                )
+
             if signal == "timeout":
                 raise AuthenticationRequired(
                     f"Nothing happened for {timeout_seconds}s and the browser "
@@ -372,9 +397,19 @@ async def capture_login(
                         # which returns False when unset - so without this the
                         # check passes no matter what, and a failed login is
                         # recorded as a success.
+                        # Not `find(required=False)`: an optional lookup caps its
+                        # wait at 3s whatever timeout_ms says, and Loxo paints
+                        # nothing for 10-22s after a cold load. Logins that had
+                        # plainly worked were reported dead for exactly that
+                        # reason (2026-09-02, -03, -07).
                         run = StepRun(page=check, params={"selector": login.ready_selector})
-                        run.timeout_ms = 45_000
-                        still_out = await find(run, required=False) is None
+                        try:
+                            await resolve_locator(run, login.ready_selector).first.wait_for(
+                                state="visible", timeout=45_000
+                            )
+                            still_out = False
+                        except Exception:
+                            still_out = True
                     else:
                         await check.wait_for_timeout(6_000)
                         still_out = await _looks_logged_out(check, login)
@@ -416,16 +451,30 @@ async def capture_login(
             # command trusts it and fails somewhere far less obvious.
             if still_out or not app_cookies:
                 sso_only = len(cookies) > len(app_cookies)
-                raise AuthenticationRequired(
-                    f"Not logged in. {login.url} still bounces to {checked_url}, "
-                    f"and {app_host or 'the app'} set no session cookie"
-                    + (
-                        ".\n  The single-sign-on step did complete - there are "
-                        "identity-provider cookies - but the app never issued its "
-                        "own session, so the round trip stopped half way."
-                        if sso_only
-                        else "."
+                # Name the check that failed. The old text said "no session
+                # cookie" even when the cookie list printed just above showed
+                # one, and sent the operator chasing the wrong thing.
+                if app_cookies:
+                    why = (
+                        f"Not logged in. {app_host or 'the app'} did set a session "
+                        f"cookie, but a fresh tab at {login.url} landed on "
+                        f"{checked_url} and never showed {login.ready_selector!r} "
+                        "within 45s."
                     )
+                else:
+                    why = (
+                        f"Not logged in. {login.url} still bounces to {checked_url}, "
+                        f"and {app_host or 'the app'} set no session cookie"
+                        + (
+                            ".\n  The single-sign-on step did complete - there are "
+                            "identity-provider cookies - but the app never issued "
+                            "its own session, so the round trip stopped half way."
+                            if sso_only
+                            else "."
+                        )
+                    )
+                raise AuthenticationRequired(
+                    why
                     + "\n  Run it again and this time wait until the app's own "
                     "dashboard is fully loaded before pressing Enter. Signing in "
                     "will be quicker now, since the identity provider is already "
@@ -458,23 +507,41 @@ async def _await_login(page: "Page", login: Any, timeout_seconds: int) -> str:
     # immediately, the session was checked before anyone had signed in, and
     # the login was reported dead (Loxo, 2026-09-02/03). Without a terminal
     # the detector and the window are the only signals.
-    async def operator() -> None:
-        # A stdin that is closed, or that hands back end-of-file the instant it
-        # is read - a script, a VS Code task, an agent's shell, even one whose
-        # pseudo-terminal claims isatty() - is not a person. Such a task never
-        # resolves, and the detector and the window carry the wait.
-        started = asyncio.get_event_loop().time()
-        try:
-            line = await asyncio.to_thread(input)
-        except (EOFError, OSError):
-            line = None
-        if line is None or (line == "" and asyncio.get_event_loop().time() - started < 2.0):
-            await asyncio.Event().wait()
+    loop = asyncio.get_event_loop()
+    pressed: asyncio.Future[str] = loop.create_future()
+
+    def listen_for_enter() -> None:
+        # A daemon thread rather than asyncio.to_thread: the default
+        # executor is joined at interpreter exit, so a login saved by
+        # detection left the command hanging until someone pressed Enter.
+        #
+        # A closed or piped stdin answers instantly and for ever, and
+        # reading one such answer as Enter is what reported a live Loxo
+        # login dead (2026-09-02/03). But an operator who taps Enter while
+        # the page is still loading answers instantly too, so one instant
+        # empty line is discarded and we keep listening - their next press
+        # is heard. Only a stdin that keeps answering instantly is dead.
+        instant = 0
+        while instant < 5:
+            started = time.monotonic()
+            try:
+                line = input()
+            except (EOFError, OSError, ValueError):
+                return
+            if not line.strip() and time.monotonic() - started < 0.2:
+                instant += 1
+                continue
+            loop.call_soon_threadsafe(
+                lambda: pressed.done() or pressed.set_result("operator")
+            )
+            return
+
+    threading.Thread(target=listen_for_enter, name="login-enter", daemon=True).start()
 
     tasks = {
         asyncio.create_task(_poll_logged_in(page, login)): "detected",
         asyncio.create_task(page.wait_for_event("close", timeout=0)): "closed",
-        asyncio.create_task(operator()): "operator",
+        asyncio.ensure_future(pressed): "operator",
     }
 
     done, pending = await asyncio.wait(

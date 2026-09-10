@@ -101,10 +101,55 @@ line of text to diagnose from.
   reported the criteria skipped). The criteria dialog's live write is still
   unproven - a failure there is a note on the row, never a lost search.
 
-Location is the one filter that does not come from the document: the advert
-never states it, and a Client-JD-only document (Axle) has no advert at all, so
-the adapter reads the row's `Location` column directly. `--set 'Location=...'`
-does the same for a run from a file.
+Location is **where the candidate must be**, and since 2026-09-07 it comes
+from the Client JD first: `draft_targeting` returns `candidate_location`, and
+`sourcing_location()` falls back to the row's `Location` column and then the
+advert's only when the JD says nothing. The row's column is the posting's
+location — on Axle, where the company sits, not where the hire had to be —
+which is what put the wrong city on the search Sohaib reviewed. `--set
+'Location=...'` still stands in for the column on a run from a file.
+
+### Title scope, the candidate's location, and company names only (2026-09-07)
+
+> **Status** built and mock-free; **proven live on a ZZ TEST project 2026-09-08**
+> (project `CdqlKETEHn0hcG1Pp556`, search `pPZIy4jfPj2o2tkAzITm`) - the read-back
+> after reload showed the scope on Current + Past, the JD's cities and nothing
+> else in Location(s), company names only in Companies.
+
+Three rules from Sohaib's review of the Axle search, each with the control it
+lands on (mapped read-only on the "AI Research Engineer" search, 2026-09-07):
+
+- **Job Titles look at current AND past titles.** The block is headed by a MUI
+  scope select that Juicebox leaves on *Current + Recent* (`cr`, the last two
+  years). Its options, by `data-value`: `c` Current Only, `cr` Current +
+  Recent, `cp` Current + Past, `nc` Nested with Companies, `f` Funding Stage.
+  The driver sets `cp` (`_set_scope`, same hidden-native-input shape as the
+  stages select) and reads it back after the reload; the row reports it under
+  `Job Titles scope`. The Companies block has its own select and is already
+  `cp` by default - people who work or worked at those companies.
+- **Location(s) is where the candidate must be, and only that.** The value now
+  comes from the Client JD through `sourcing_location` (see above), and the
+  block's own **Clear all** is pressed before the driver's chips go in, because
+  Juicebox's AI adds cities of its own from the JD (Atlanta on Axle). After the
+  reload any chip that is not ours is reported as `extra: <city>`.
+- **Companies takes company names only.** The Companies box offers industries
+  and keywords alongside companies (its placeholder says so: "Large recruiting
+  agencies, Google, Indian IT companies"), each tagged in words on the second
+  line where a company shows its domain. `is_company_record` refuses anything
+  whose second line is not a host, so a drafted "Insurance" can never land as
+  the *Insurance* industry. The AI's own **Company Industries** chips (it set
+  Financial Services / Computer Software / IT Services on the ZZ TEST search)
+  are cleared through that block's own Clear all once the companies are in,
+  which also silences Juicebox's "You have selected both companies and
+  industries" warning; the row reports `Company Industries: cleared N`, and a
+  chip that comes back after the reload is reported instead.
+- **The Location(s) popper groups its options.** "CITIES" and "REGIONS" are
+  `<li>` group headers holding every option of the group; read as options
+  themselves they matched "New York" first, the ArrowDown count ran one past,
+  the chip that landed was the *region* and the save dropped it (2026-09-08).
+  The popper is now read as `[role=option]` only. For "New York" the first
+  real option is the city ("New York, New York, United States"); "New York
+  City" offers nothing, so the drafter is told to write plain place names.
 
 ### Companies and funding stages (2026-09-03)
 

@@ -158,18 +158,49 @@ _SUGGESTIONS = ("() => [...document.querySelectorAll('[role=option], [role=listb
                 ".filter(el => el.getBoundingClientRect().width && el.children.length <= 1)"
                 ".map(el => (el.innerText || '').trim()).filter(Boolean).slice(0, 10)")
 
-# Mark the first visible dropdown entry whose first line is `text` and that is
-# NOT inside the section itself - a chip already in the box carries the same
-# text, and Loxo can list several records under one company name, so the
-# best-ranked one (first) is the one to take.
+# Where a suggestion row can live. Skills and titles come as `[role=option]`
+# entries in a listbox. The company box does not: seen live on 2026-09-07, its
+# rows are role-less `<button id=":r53:-0" class="...ListItem...">` elements
+# portalled to the body, each wrapping a `CompanyNameFilterSelect__Suggestion*`
+# pair (name, then domain), fed by `global_directory/company_autocomplete.json`.
+# Every role-based reader saw an empty list and the writer refused every
+# company - which is why the mock-tested writer had never landed a chip. The
+# row's own `ListItem` class is no use as a hook: the panel's section headers
+# are `FilterLabel__ListItem` buttons and would fill the list first (they did,
+# on the first live run). The Suggestion container is the one marker unique to
+# the dropdown; clicking it reaches the row button's handler through bubbling.
+_OPTION_ROWS = "[role=option], [role=listbox] li, [class*=SuggestionContainer]"
+
+# A company suggestion carries a domain on a second line, so it is read at the
+# ROW and kept whole ("Stripe\ndomain"), not split into leaves the way
+# `_SUGGESTIONS` harvests a single-line skill. `match_company` reads the first
+# line, so this does not depend on how deeply Loxo nests the name inside the
+# row. A row and the container inside it carry the same text, hence the
+# de-duplication; the box's own chips are `<li>` without a listbox ancestor and
+# are left out, so a chip is never mistaken for an offer.
+_COMPANY_OPTIONS = ("() => { const seen = new Set(); const out = [];"
+                    f"for (const el of document.querySelectorAll('{_OPTION_ROWS}')) {{"
+                    "  if (!el.getBoundingClientRect().width) continue;"
+                    "  const t = (el.innerText || '').trim();"
+                    "  if (!t || seen.has(t)) continue; seen.add(t); out.push(t);"
+                    "  if (out.length >= 12) break; }"
+                    "return out; }")
+
+# Mark the first visible dropdown entry matching `text` that is NOT inside the
+# section itself - a chip already in the box carries the same text. A `text`
+# with a line break is a whole company row (name, then domain) and must match
+# the row's whole text: Loxo lists several records under one name, and the
+# first row with the right name is not necessarily the right record.
 _MARK_OPTION = ("([label, text]) => {" + _HELPERS +
                 "document.querySelectorAll('[data-lsw-opt]').forEach(el => el.removeAttribute('data-lsw-opt'));"
                 "const nodes = sectionNodes(label) || [];"
                 "const inside = (el) => nodes.some(n => n.contains(el));"
-                "const wanted = text.toLowerCase();"
-                "const hit = [...document.querySelectorAll('[role=option], [role=listbox] *, li')]"
+                "const wanted = text.trim().toLowerCase();"
+                "const whole = wanted.includes(String.fromCharCode(10));"
+                "const shown = (el) => (whole ? (el.innerText || '').trim() : firstLine(el)).toLowerCase();"
+                f"const hit = [...document.querySelectorAll('{_OPTION_ROWS}, [role=listbox] *, li')]"
                 "  .find(el => el.getBoundingClientRect().width && !inside(el)"
-                "    && firstLine(el).toLowerCase() === wanted);"
+                "    && shown(el) === wanted);"
                 "if (!hit) return false; hit.setAttribute('data-lsw-opt', '1'); return true; }")
 
 
@@ -247,20 +278,55 @@ def company_key(name: str) -> str:
     return " ".join(text.split())
 
 
+def _domain_host(option: str) -> str:
+    """The host on an option's second line: "Alloy\nalloy.com" -> "alloy.com".
+    Empty when there is none."""
+    lines = [line.strip() for line in (option or "").strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return ""
+    host = re.sub(r"^https?://", "", lines[1].lower()).split("/")[0]
+    return host[4:] if host.startswith("www.") else host
+
+
+def _domain_label(option: str) -> str:
+    """The first label of that host: "alloy.com" -> "alloy"."""
+    host = _domain_host(option)
+    return host.split(".")[0] if "." in host else ""
+
+
 def match_company(value: str, options: list[str]) -> str | None:
-    """The suggestion that names the same company as `value`, or None.
+    """The suggestion row that names the same company as `value`, or None.
 
     Exact after normalisation only. "Axle" must never pick "Axle Logistics":
     a past-company filter on the wrong company finds the wrong people, and
     nobody would notice from the saved search's name.
+
+    Loxo lists several records under one name - live on 2026-09-07 "Alloy"
+    offered alloycrew.com, alloy.it and alloy.com in that order. The drafted
+    list carries names only, so the tie-break is the domain: the row whose
+    domain *is* the company name wins, else Loxo's own first. The whole row
+    (name and domain) is returned so the click lands on that record and not on
+    the first row that happens to share the name.
     """
     wanted = company_key(value)
     if not wanted:
         return None
-    for option in options:
-        if company_key(option.split("\n")[0]) == wanted:
-            return option.split("\n")[0].strip()
-    return None
+    same_name = [
+        option for option in options
+        if company_key(option.split("\n")[0]) == wanted
+    ]
+    compact = wanted.replace(" ", "")
+    if not same_name:
+        # Loxo files some companies under a short name with the full name in
+        # the domain: "Boost Insurance" is "Boost / boostinsurance.com"
+        # (refused live 2026-09-07). The domain must BE the drafted name -
+        # "Axle / axlelogistics.com" still does not satisfy "Axle".
+        by_domain = [option for option in options if _domain_label(option) == compact]
+        return by_domain[0].strip() if by_domain else None
+    named = [option for option in same_name if _domain_label(option) == compact]
+    # alloy.it shares the label with alloy.com; the .com is the company.
+    dotcom = [option for option in named if _domain_host(option).endswith(".com")]
+    return (dotcom or named or same_name)[0].strip()
 
 
 async def _expand(page: "Page", label: str) -> bool:
@@ -383,6 +449,18 @@ async def _fill_experience(page: "Page", bands: list[str]) -> tuple[list[str], l
 
 
 async def _add_company(page: "Page", value: str) -> bool:
+    """One Past Company chip, the same round trip `_add_chip` proved live for
+    skills - focus, type, read the offers, take the match, verify the chip
+    landed - with the two differences the Company section forces:
+
+    - The box is **Past Company**, the second of the section's two inputs, so
+      focus goes through `_FOCUS_INPUT_AFTER` and the chip is verified against
+      `_SUBSECTION_TEXT`, never the whole section (a chip in Current Company
+      must not read as success).
+    - The match is **exact** (`match_company`), and a company Loxo does not
+      list is cleared, never committed by pressing Enter on free text - a
+      past-company filter on the wrong company finds the wrong people silently.
+    """
     label, sub = "Company", "Past Company"
     state = await page.evaluate(_FOCUS_INPUT_AFTER, [label, sub])
     if not state.startswith("ok:"):
@@ -392,9 +470,14 @@ async def _add_company(page: "Page", value: str) -> bool:
         await page.keyboard.press("Delete")
         await page.wait_for_timeout(300)
     await page.keyboard.type(value, delay=30)
-    await page.wait_for_timeout(2_200)
-
-    options = await page.evaluate(_SUGGESTIONS)
+    # The list is a network round trip (one debounced request for the whole
+    # word) and showed up at ~3s live; poll rather than trust one fixed pause.
+    options: list[str] = []
+    for _ in range(12):
+        await page.wait_for_timeout(500)
+        options = await page.evaluate(_COMPANY_OPTIONS)
+        if options:
+            break
     target = match_company(value, options)
     picked = target is not None and await _click_option(page, label, target)
     if not picked:
@@ -419,7 +502,7 @@ async def _add_company(page: "Page", value: str) -> bool:
         await page.keyboard.press("Delete")
         return False
     committed = await page.evaluate(_SUBSECTION_TEXT, [label, sub])
-    return company_key(target) in company_key(committed)
+    return company_key(target.split("\n")[0]) in company_key(committed)
 
 
 async def _fill_companies(page: "Page", companies: list[str]) -> tuple[list[str], list[str]]:

@@ -53,7 +53,8 @@ container was stopped mid-run and nothing wrote back, so the row sat on
 them Failed with a note that says what to check (`pipeline.recover_stuck_rows`;
 `python -m app.cli recover --live` by hand). The platforms' own notes - which
 search was built, what a taxonomy refused, a stage Claude inferred - are now
-written to the row's `Error` column on success too; before this a Loxo run
+written to the row's `Notes` column on success too — to `Error` behind a
+`Posted OK` prefix only when the database has no such column; before this a Loxo run
 that refused nineteen chips showed a recruiter nothing but `Posted`.
 
 **Amended 2026-08-31, later: one JD, and noon knows where the job is.**
@@ -428,3 +429,23 @@ merge ([tests/test_pipeline.py](../tests/test_pipeline.py)).
 5. `app/api.py` and Railway deployment, once noon runs live. Railway and n8n
    are already paid for; n8n can be the Notion-side trigger that calls
    `POST /webhook`, or the poller can run alone.
+
+## Retiring a posting (2026-09-08)
+
+The reverse of posting - stop a platform's sourcing for a role and delete it -
+is being built one platform at a time, each proven on a ZZ TEST record before
+the next. Sohaib's ask: a row leaving the Notion table should take its
+sequences and campaigns with it.
+
+| Platform | Stop | Delete | Status |
+|---|---|---|---|
+| noon | `role_autopilot` with `enabled: false` | `delete_role` | **proven live 2026-09-08** - `retire noon` |
+| Loxo | not mapped | not mapped | next |
+| Juicebox | not mapped | not mapped | after Loxo |
+| Wellfound | not mapped | not mapped | after Juicebox |
+
+The Notion trigger is not decided. Notion sends no event when a row is
+deleted, so the working proposal is a status value (a `Retire` on the post
+status column) that the poller picks up like `Ready to Post`, retires every
+platform the row's URLs name, and writes `Retired` back.
+

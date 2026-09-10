@@ -111,6 +111,12 @@ async def _poll_ready_rows(settings) -> None:
 
     if not settings.notion_configured or settings.poll_minutes <= 0:
         return
+    if settings.dry_run:
+        # A dry run never writes the row back, so every poll would find
+        # the same rows and open the same browsers again, for ever. The
+        # webhook still answers, which is enough to rehearse one row.
+        log.warning("ready-row poll disabled: DRY_RUN leaves rows Ready for ever")
+        return
     await asyncio.sleep(30)  # let the app come up before the first Notion call
     while True:
         try:

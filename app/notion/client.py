@@ -87,7 +87,10 @@ class NotionClient:
             await asyncio.sleep(wait_for)
             raise _Retryable("rate limited")
 
-        if response.status_code >= 500:
+        # 409 is Notion's own "a concurrent edit won; try again", and it is
+        # the last write of a row - after every platform has posted - that
+        # would otherwise die on it.
+        if response.status_code == 409 or response.status_code >= 500:
             raise _Retryable(f"server error {response.status_code}")
 
         if response.status_code >= 400:
@@ -282,19 +285,24 @@ class NotionClient:
             s.prop_posted_at: datetime.now(timezone.utc),
             s.prop_error: "",
         }
-        if detail:
-            if await self.resolve_property(s.prop_notes) is not None:
-                values[s.prop_notes] = detail[:1800]
-            else:
-                values[s.prop_error] = f"Posted OK. Notes: {detail}"[:1800]
+        # Written every time, empty when this run had nothing to say: a
+        # stale note from the previous run reads as this run's own.
+        if await self.resolve_property(s.prop_notes) is not None:
+            values[s.prop_notes] = (detail or "")[:1800]
+        elif detail:
+            values[s.prop_error] = f"Posted OK. Notes: {detail}"[:1800]
         await self.update_properties(page_id, values)
 
     async def mark_failed(self, page_id: str, error: str) -> None:
         s = self.settings
-        await self.update_properties(
-            page_id,
-            {s.prop_status: s.status_failed, s.prop_error: error[:1800]},
-        )
+        values: dict[str, Any] = {
+            s.prop_status: s.status_failed,
+            s.prop_error: error[:1800],
+        }
+        # The previous run's notes describe work this run did not do.
+        if await self.resolve_property(s.prop_notes) is not None:
+            values[s.prop_notes] = ""
+        await self.update_properties(page_id, values)
 
 
 def _loose(name: str) -> str:

@@ -1,0 +1,229 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mock Loxo Source panel</title>
+</head>
+<body>
+<!--
+  Loxo's Source filter panel, reduced to the shape the writer keys off and the
+  two behaviours it has to get right:
+
+  1. The panel is a FLAT SIBLING LIST in a narrow left column - a <button>
+     header per section (x < 360), that section's content as following
+     siblings until the next header. The writer bounds a section by the real
+     labels only; the "Include similar Job Titles" and "Include Subsidiaries"
+     controls are also buttons/inputs in the column and must NOT be read as
+     section boundaries.
+
+  2. The Company section holds TWO chip boxes - Current Company then Past
+     Company - each a name+domain autocomplete. The target list goes into PAST
+     Company, and a company the taxonomy does not list is refused rather than
+     committed as free text. "Axle Logistics" must never satisfy a draft of
+     "Axle".
+
+  The autocomplete renders its menu at BODY level (like a real popper), so the
+  writer's rule "the option to click is the one NOT inside the section" has
+  something to test.
+-->
+<style>
+  #panel { position: absolute; left: 0; top: 0; width: 300px; }
+  .section { display: block; width: 300px; text-align: left; }
+  .content { padding-left: 8px; }
+  .chipinput { width: 240px; }
+  .chips { min-height: 4px; }
+  .chip { display: inline-block; margin: 2px; padding: 1px 4px; background: #eee; }
+  #menu { position: absolute; left: 320px; top: 0; width: 260px; list-style: none;
+          margin: 0; padding: 0; border: 1px solid #ccc; }
+  #menu:empty { display: none; }
+  #cmenu { position: absolute; left: 320px; top: 0; width: 260px; border: 1px solid #ccc; }
+  #cmenu:empty { display: none; }
+  #cmenu button { display: block; width: 100%; text-align: left; padding: 2px 4px; }
+  #menu li { display: block; padding: 2px 4px; cursor: pointer; }
+  .cdom { color: #888; font-size: 11px; }
+</style>
+
+<div id="panel">
+  <button class="section" type="button" data-section="Title">Title</button>
+  <div class="content" data-for="Title">
+    <button type="button" class="subtoggle">Include similar Job Titles</button>
+    <div class="sublabel">Current Title</div>
+    <input class="chipinput" data-box="title-current" data-vocab="title" placeholder="Add title" autocomplete="off">
+    <ul class="chips" data-chips="title-current"></ul>
+    <div class="andor">OR</div>
+    <div class="sublabel">Past Title</div>
+  </div>
+
+  <button class="section" type="button" data-section="Skills">Skills</button>
+  <div class="content" data-for="Skills">
+    <input class="chipinput" data-box="skills" data-vocab="skill" placeholder="Add skill" autocomplete="off">
+    <ul class="chips" data-chips="skills"></ul>
+  </div>
+
+  <button class="section" type="button" data-section="Company">Company</button>
+  <div class="content" data-for="Company">
+    <div class="sublabel">Current Company</div>
+    <label class="subs"><input type="checkbox" checked>Include Subsidiaries</label>
+    <input class="chipinput" data-box="company-current" data-vocab="company" placeholder="Add company" autocomplete="off">
+    <ul class="chips" data-chips="company-current"></ul>
+    <div class="andor">OR</div>
+    <div class="sublabel">Past Company</div>
+    <label class="subs"><input type="checkbox" checked>Include Subsidiaries</label>
+    <input class="chipinput" data-box="company-past" data-vocab="company" placeholder="Add company" autocomplete="off">
+    <ul class="chips" data-chips="company-past"></ul>
+  </div>
+</div>
+
+<ul id="menu" role="listbox"></ul>
+<!-- Companies do NOT use the listbox. Loxo (seen live 2026-09-07) portals
+     role-less buttons to the body, class "...ListItem...", each wrapping a
+     CompanyNameFilterSelect__SuggestionContainer with the name and the domain
+     as two divs. A reader that only knows [role=option] sees nothing here. -->
+<div id="cmenu"></div>
+
+<script>
+  // Each vocabulary autocompletes case-insensitively. Companies carry a domain
+  // on a second line, the way Loxo's records show name + domain.
+  const VOCAB = {
+    title: [
+      { name: 'Platform Engineer' },
+      { name: 'Site Reliability Engineer' },
+      { name: 'Infrastructure Engineer' },
+    ],
+    skill: [
+      { name: 'Amazon Web Services (AWS)' },
+      { name: 'Terraform' },
+      { name: 'Kubernetes' },
+      { name: 'Docker' },
+      { name: 'Python' },
+    ],
+    company: [
+      { name: 'Stripe', domain: 'stripe.com' },
+      { name: 'Ramp', domain: 'ramp.com' },
+      { name: 'Brex', domain: 'brex.com' },
+      { name: 'Plaid', domain: 'plaid.com' },
+      { name: 'Mercury', domain: 'mercury.com' },
+      // A decoy: a draft of "Axle" must not settle for this.
+      { name: 'Axle Logistics', domain: 'axlelogistics.com' },
+    ],
+  };
+
+  const menu = document.getElementById('menu');
+  const cmenu = document.getElementById('cmenu');
+  let active = null;   // the input currently being typed into
+
+  function chipsFor(input) {
+    return document.querySelector('[data-chips="' + input.dataset.box + '"]');
+  }
+
+  function chipText(list) {
+    return [...list.querySelectorAll('.chip')].map((c) => c.dataset.name);
+  }
+
+  function commit(input, entry) {
+    const list = chipsFor(input);
+    if (chipText(list).some((n) => n.toLowerCase() === entry.name.toLowerCase())) {
+      // already a chip - the real box does not duplicate
+    } else {
+      const chip = document.createElement('li');
+      chip.className = 'chip';
+      chip.dataset.name = entry.name;
+      chip.textContent = entry.name;
+      list.appendChild(chip);
+    }
+    input.value = '';
+    render(input);
+  }
+
+  function renderCompany(input, entries) {
+    entries.forEach((entry, index) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.id = ':r5:-' + index;
+      row.className = 'MaybeButton__UnstyledButton-sc-mock ListItem-sc-mock';
+      const container = document.createElement('div');
+      container.className = 'CompanyNameFilterSelect__SuggestionContainer-sc-mock';
+      const name = document.createElement('div');
+      name.className = 'CompanyNameFilterSelect__SuggestionName-sc-mock';
+      name.textContent = entry.name;
+      container.appendChild(name);
+      const dom = document.createElement('div');
+      dom.className = 'TruncatedText-sc-mock';
+      dom.textContent = entry.domain;
+      container.appendChild(dom);
+      row.appendChild(container);
+      row.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        commit(input, entry);
+      });
+      cmenu.appendChild(row);
+    });
+  }
+
+  function render(input) {
+    menu.innerHTML = '';
+    cmenu.innerHTML = '';
+    active = input;
+    const typed = (input.value || '').trim().toLowerCase();
+    if (!typed) return;
+    const vocab = VOCAB[input.dataset.vocab] || [];
+    const matches = vocab
+      .filter((entry) => entry.name.toLowerCase().includes(typed))
+      .slice(0, 8);
+    if (input.dataset.vocab === 'company') {
+      renderCompany(input, matches);
+      return;
+    }
+    matches
+      .forEach((entry) => {
+        const option = document.createElement('li');
+        option.setAttribute('role', 'option');
+        const name = document.createElement('div');
+        name.className = 'cname';
+        name.textContent = entry.name;
+        option.appendChild(name);
+        if (entry.domain) {
+          const dom = document.createElement('div');
+          dom.className = 'cdom';
+          dom.textContent = entry.domain;
+          option.appendChild(dom);
+        }
+        // mousedown, not click: focus must not leave the input first, which is
+        // how a real autocomplete keeps the box active while an option is taken.
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commit(input, entry);
+        });
+        menu.appendChild(option);
+      });
+  }
+
+  document.querySelectorAll('.chipinput').forEach((input) => {
+    input.addEventListener('input', () => render(input));
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      // Only a real suggestion commits. Enter on no match leaves the text in
+      // the box - the writer clears it and reports the value refused.
+      const first = menu.querySelector('[role=option]') || cmenu.querySelector('button');
+      if (first && active === input) {
+        const name = (first.querySelector('.cname')
+          || first.querySelector('[class*=SuggestionName]')).textContent;
+        const vocab = VOCAB[input.dataset.vocab] || [];
+        const entry = vocab.find((e) => e.name === name);
+        if (entry) commit(input, entry);
+      }
+    });
+  });
+
+  // The section headers just toggle a data attribute; the content is always in
+  // the DOM (the writer reads it whether or not a section is visually open),
+  // which is enough to exercise the sibling-walking and boundary logic.
+  document.querySelectorAll('.section').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      btn.dataset.open = btn.dataset.open === 'true' ? 'false' : 'true';
+    });
+  });
+</script>
+</body>
+</html>

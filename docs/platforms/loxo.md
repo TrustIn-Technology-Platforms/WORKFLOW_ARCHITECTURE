@@ -58,6 +58,16 @@ Consequences:
   meant. It now saves on its own when Loxo's shell (the `Outreach` nav)
   appears in the window; Enter still works from a real terminal, and closing
   the window cancels.
+- **Re-captured 2026-09-07** with the password login, from an agent's shell.
+  The detector saw the shell and fired, then the verification tab reported
+  "not logged in" while printing `_session_id` and `logged_in` in the same
+  breath. The cause was in the verifier, not the session: an optional
+  `find()` caps its wait at 3s whatever `timeout_ms` says, and Loxo's shell
+  took 22s to paint in a fresh tab that day. A separate headed probe on the
+  same profile saw `Outreach` and wrote the marker and `storage_state` copy.
+  The verifier now waits the full 45s on the ready selector and says which of
+  its two checks failed. **The operator sees a white screen for 10-20s after
+  signing in; that is normal, not a stuck login.**
 - `scripts/probe_loxo_source_sections.py --headed` waits for a sign-in in its
   own window when the profile is logged out, then carries on. Closing that
   window ends the probe.
@@ -215,6 +225,23 @@ before typing. Pasting the document's braces verbatim would send them literally.
 > filter**, so the Seed-to-own-stage rule Juicebox applies has no home here -
 > the stage shapes the Past Company list instead. Company Size is the nearest
 > control, and is not written until someone decides it should be.
+>
+> **2026-09-04 — the Past Company writer now shares the skills primitive and is
+> tested against a mock of the two-box Company section**
+> ([tests/test_loxo_source_browser.py](../../tests/test_loxo_source_browser.py),
+> [mock-loxo-source.html](../../tests/fixtures/pages/mock-loxo-source.html)),
+> the session still being dead. `_add_company` is the same focus/type/read/
+> verify round trip `_add_chip` proved live for skills, with the two Company
+> differences held: it focuses the **second** box (Past Company, via
+> `_FOCUS_INPUT_AFTER`) and verifies against `_SUBSECTION_TEXT`, so a chip in
+> Current Company never reads as success; and it matches **exactly**, clearing
+> rather than committing a company Loxo does not list. The suggestion read
+> switched to `_COMPANY_OPTIONS`, which takes each offer at the row so the
+> name+domain shape a leaf-level read could miss is kept whole. The mock proves
+> the mechanics, not Loxo's live DOM: the `--live --headed` run is still what
+> confirms the real panel matches. What it does prove — companies land in Past
+> Company not Current, "Axle" refuses "Axle Logistics", skills are unaffected —
+> is the reasoning a live run cannot check by eye.
 
 `/agencies/<agency>/jobs/<job>/source` - a person reaches it via the job page
 -> **Add People** -> **Loxo Search**. The pipeline configures it right after
@@ -239,12 +266,41 @@ What three broken live runs taught, now encoded in the writer:
 
 ### Years of Experience and Company — read from the bundle (2026-09-02)
 
-> **Status** **WRITER BUILT, UNVERIFIED LIVE.** `.profiles/loxo` was logged out
-> before either section could be opened, so what follows was read out of Loxo's
-> own JavaScript (the `authenticated-*.js` bundle cached in the profile), not
-> off a screen. `python scripts/probe_loxo_source_sections.py --job <id>
-> --headed` opens both read-only and dumps what it finds; run it, then the
-> writer, and correct this section from what the screen shows.
+> **Status** **Past Company PROVEN LIVE 2026-09-07** on job 3658508: 27 of
+> 30 drafted companies landed as chips, the search saved, and the results
+> narrowed to candidates with those companies in their history. **Years of
+> Experience still UNPROVEN**: the same run reported the `6-10` band missed,
+> and its checklist has not been probed on a screen - it is still the shape
+> read out of Loxo's JavaScript bundle on 2026-09-02. Probe it with
+> `python scripts/probe_loxo_source_sections.py --job 3658508 --sections
+> "Years of Experience" --headed` before touching `_fill_experience`.
+
+**The Company suggestion list, as it really renders (2026-09-07).** The two
+`Add company` boxes are comboboxes (`aria-autocomplete=list`, React ids like
+`:r55:`) backed by `GET /global_directory/company_autocomplete.json?query=`,
+one debounced request per typed word, answered in about a second. The rows are
+portalled to the body as **role-less `<button id=":r53:-0">` elements** whose
+class contains `ListItem`, each wrapping a
+`CompanyNameFilterSelect__SuggestionContainer` with the name and the domain as
+two divs. Three traps, each of which cost a run:
+
+- **No `[role=option]`, no `<li>`, no listbox.** Every role-based reader saw
+  an empty list, so the writer refused all thirty companies. The reader now
+  keys on the `SuggestionContainer` class.
+- **`ListItem` is not unique to the dropdown.** The panel's own section headers
+  are `FilterLabel__ListItem` buttons; a reader that accepted them filled its
+  slots with "Title", "Location", "Timezone" and never reached a suggestion.
+- **Several records share one name.** "Alloy" offered alloycrew.com, alloy.it
+  and alloy.com, in that order; "Herald" offered four. `match_company` returns
+  the **whole row** and the click matches the whole text, so the record with
+  the domain that *is* the name wins (the `.com` among those), else Loxo's
+  first. "Boost Insurance" is filed as "Boost / boostinsurance.com", so a domain
+  that is the whole drafted name also matches; "Axle / axlelogistics.com"
+  still does not satisfy "Axle".
+
+A script `focus()` on the box does not open the list; the writer clicks it.
+The mock at `tests/fixtures/pages/mock-loxo-source.html` renders the company
+rows this way, so the browser tests exercise the real shape.
 
 **Years of Experience is not a number box.** The section holds one read-only
 input (placeholder *"i.e. more than 10 years"*) that opens a checklist on
