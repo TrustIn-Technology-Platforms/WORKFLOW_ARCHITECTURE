@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>noon - sourcing (Create New Role)</title>
+<!--
+  A reconstruction of the screen that killed a row on Railway, 2026-09-16 -
+  docs/platforms/noon.md#the-submit-that-is-not-the-modals. Three things have
+  to be honest or the test proves nothing:
+
+    1. The inbox behind the modal carries a greyed-out, cursor-not-allowed
+       Submit and is emitted FIRST. find() takes `.first` of each candidate, so
+       DOM order is what lets the bare text='Submit' reach the wrong control -
+       that is the whole regression.
+    2. The toast is painted OVER the modal's Submit and accepts pointer events,
+       so an unforced click is genuinely intercepted rather than merely looking
+       like it might be. tests/test_noon_role_modal.py asserts the interception.
+    3. The toast and the modal each carry their own [aria-label='Close'], which
+       is why the recipe's dismiss step has to be scoped to the toast.
+
+  ?clash=1 is the other live variant: when the typed role name already exists
+  the modal replaces Submit with "Create a new role anyway" and no Submit of
+  its own is left inside it.
+-->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .page { padding: 24px; }
+  /* noon's disabled control: still visible to Playwright, which is the trap. */
+  .cursor-not-allowed { cursor: not-allowed; opacity: .5; }
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; }
+  .modal { position: fixed; left: 50%; top: 120px; transform: translateX(-50%);
+           width: 520px; background: #fff; z-index: 50; padding: 20px;
+           border-radius: 8px; box-sizing: border-box; }
+  .modal input { width: 100%; padding: 10px; box-sizing: border-box; }
+  .modal-actions { margin-top: 24px; text-align: right; }
+  /* Fixed, above the modal, and deliberately over the modal's footer. */
+  .toast { position: fixed; left: 50%; transform: translateX(-50%);
+           top: 260px; width: 520px; height: 90px; background: #ffe4e4;
+           z-index: 100; padding: 12px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+  <!-- The inbox, behind the modal and ahead of it in source order. -->
+  <div class="page" id="inbox">
+    <h1>Inbox</h1>
+    <textarea placeholder="Write a reply"></textarea>
+    <button id="decoy" class="cursor-not-allowed" disabled>Submit</button>
+  </div>
+
+  <div class="backdrop"></div>
+
+  <div class="modal" id="role-modal" role="dialog">
+    <button aria-label="Close" id="modal-close">x</button>
+    <h2>Create New Role</h2>
+    <input id="role-name" placeholder="Search existing ATS roles or create a new one">
+    <div class="modal-actions" id="modal-actions">
+      <!-- The nested span matters: the recipe's ancestor-hop candidate lands on
+           it, and the click only works because it bubbles to the button. -->
+      <button id="real-submit"><span>Submit</span></button>
+    </div>
+  </div>
+
+  <div direction="up" class="toast" id="toast">
+    <strong>Chrome extension not detected</strong>
+    <button aria-label="Close" id="toast-close">x</button>
+  </div>
+
+<script>
+  // Capture phase, on window: records what was actually hit, including the
+  // toast swallowing a click meant for Submit.
+  window.__clicks = [];
+  window.__submitted = false;
+  window.addEventListener('click', function (e) {
+    var hit = (e.target.closest && e.target.closest('button')) || e.target;
+    window.__clicks.push(hit.id || hit.tagName);
+  }, true);
+
+  function wireSubmit(el) {
+    el.addEventListener('click', function () { window.__submitted = true; });
+  }
+
+  document.getElementById('modal-close').addEventListener('click', function () {
+    document.getElementById('role-modal').remove();
+  });
+  document.getElementById('toast-close').addEventListener('click', function () {
+    document.getElementById('toast').remove();
+  });
+
+  if (new URLSearchParams(location.search).get('clash')) {
+    var actions = document.getElementById('modal-actions');
+    actions.innerHTML = '<button id="real-submit">Create a new role anyway</button>';
+  }
+  wireSubmit(document.getElementById('real-submit'));
+</script>
+</body>
+</html>

@@ -74,6 +74,17 @@ login:
   url: https://example.com/login
   ready_selector: "nav [data-testid=user-menu]"   # proves the session is live
   session_file: example.storage_state.json
+  steps:                     # the sign-in the service replays when the check fails
+    - action: goto
+      url: https://example.com/login
+    - action: fill
+      selector: "#email"
+      value: "{{ username }}"
+    - action: fill
+      selector: "#password"
+      value: "{{ password }}"
+    - action: click
+      selector: "button[type=submit]"
 
 defaults:
   timeout_ms: 20000
@@ -116,6 +127,36 @@ steps:
     pattern: "https://example.com/jobs/(\\d+)"
     as: post_url              # becomes PostResult.post_url
 ```
+
+### The login block
+
+`url`, `ready_selector` and `logged_out_pattern` are the **session check**: the
+adapter opens `url` and waits, up to `LOGIN_CHECK_SECONDS`, for a ready
+selector to be visible or the URL to bounce to the logged-out pattern. List
+several ready selectors: a platform can route the check URL to a page missing
+the one you chose (Wellfound's "Hand-picked for you" interstitial, 2026-09-16),
+so include something on *every* logged-in page, such as the app's logo link.
+
+`steps` is the **sign-in**, in the same action vocabulary as the rest of the
+recipe, replayed by the service when the check fails and the platform has
+stored credentials ([08-sessions-and-auth](08-sessions-and-auth.md#the-sign-in-the-service-replays)).
+Login steps reach exactly four values and nothing from the document or row:
+
+| Expression | Value |
+|------------|-------|
+| `{{ username }}` | `<KEY>_LOGIN_USERNAME` |
+| `{{ password }}` | `<KEY>_LOGIN_PASSWORD` |
+| `{{ otp }}` | The six-digit authenticator code valid at the moment the step runs (empty when no seed is stored). The context is rebuilt before every step, so a code is never stale |
+| `{{ totp_secret }}` | The seed itself, for `microsoft_sso`, which mints a code when Microsoft asks for one |
+
+Rules, enforced at load: a login step cannot read `advert`, `email` or `row`;
+cannot set `submit: true`; and the steps are not counted as run steps. Use
+`dismiss` for screens that only sometimes appear (a cookie banner, a
+"Continue" between email and password) and `optional: true` on a `fill` whose
+field or value may be absent (a code box on a platform that only sometimes asks).
+
+Prove the steps once, headed, before the service relies on them:
+`python -m app.cli relogin <key> --headed --force`.
 
 ### Email-sequence recipes
 
@@ -194,6 +235,7 @@ Every action takes `selector` unless noted. Common optional keys:
 | `capture_text` | `selector` | Store element text under `as` |
 | `capture_attribute` | `selector` | Store an attribute (default `href`) under `as` |
 | `screenshot` | — | Write a screenshot to `ARTIFACT_DIR` |
+| `microsoft_sso` | `username`, `password`, `totp_secret` | **Login steps only.** A whole Microsoft (Entra) sign-in as one step: finds the Microsoft tab this context opened - a popup (noon) or the same tab redirected (Loxo) - and answers each screen as it appears: account picker, email, password, verification code (minted from the seed at that moment), "Stay signed in?" (Yes, box ticked). Returns when the tab is back on the platform or the popup has closed itself. An Authenticator push prompt is steered to the code method; with no seed, or on "More information required", it fails naming what the account needs. Budget is at least 120s regardless of `timeout_ms` |
 
 ### Selector fallbacks
 
@@ -273,6 +315,7 @@ document. `Advert.as_context()` and `EmailStep.as_context()` in
 | `{{ row.title }}`, `{{ row.url }}` | The Notion row |
 | `{{ row.property["Salary Band"] }}` | Any Notion column, via `NotionRow.property_text` |
 | `{{ base_url }}` and other `defaults` keys | The recipe's own `defaults` block |
+| `{{ username }}`, `{{ password }}`, `{{ otp }}`, `{{ totp_secret }}` | Inside `login.steps` only: the platform's stored credentials. See [the login block](#the-login-block) |
 
 Rules:
 

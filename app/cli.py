@@ -115,6 +115,119 @@ def login(
 
 
 @app.command()
+def keepalive(
+    platforms: Optional[list[str]] = typer.Argument(
+        None, help="Recipe keys to visit. Default: every enabled platform."
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    relogin: bool = typer.Option(
+        True, "--relogin/--no-relogin",
+        help="Sign in again with the stored credentials when a session has gone.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Visit every platform on its saved profile, sign in again where the
+    session has gone, and re-export the cookies.
+
+    The same round the deployed service runs every SESSION_KEEPALIVE_HOURS.
+    Exit code 1 when any platform is not logged in afterwards.
+    """
+    from app.platforms.keepalive import keepalive as run_keepalive
+
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+    settings.session_relogin = relogin
+
+    results = asyncio.run(run_keepalive(settings, platforms or None))
+    if not results:
+        _fail("No platforms to visit. Run: python -m app.cli platforms")
+        return
+
+    table = Table(title="Keepalive")
+    for column in ("Platform", "Session", "Signed in again", "Cookies", "Seconds", "Detail"):
+        table.add_column(column)
+    for r in results:
+        table.add_row(
+            r.label,
+            "[green]alive[/green]" if r.logged_in else "[red]NOT logged in[/red]",
+            "yes" if r.relogged_in else "-",
+            str(r.cookies),
+            f"{r.seconds:.0f}",
+            r.detail[:160],
+        )
+    console.print(table)
+    if not all(r.ok for r in results):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def relogin(
+    platform: str = typer.Argument(..., help="Recipe key, e.g. noon"),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Run the sign-in steps even when the session check passes.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Sign one platform in with its stored credentials, then prove it.
+
+    Run this headed once per platform after setting its <KEY>_LOGIN_*
+    variables: it is how the login steps in the recipe get checked against
+    the real screens before the service relies on them at 3am.
+    """
+    from app.platforms import load_recipes, resolve
+
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+    recipe = resolve(platform, load_recipes(settings))
+    if recipe is None:
+        _fail(f"No recipe named {platform!r}. Run: python -m app.cli platforms")
+        return
+    try:
+        outcome = asyncio.run(_relogin(recipe, settings, force))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+    console.print(f"\n[green]{outcome}[/green]")
+
+
+async def _relogin(recipe: Any, settings: Any, force: bool) -> str:
+    from app.platforms import BrowserRunner, SessionStore, get_adapter
+    from app.platforms.browser import save_failure
+    from app.platforms.relogin import login_with_credentials, why_not
+
+    hint = why_not(recipe, settings)
+    if hint:
+        raise PipelineError(hint)
+    SessionStore(settings).require_profile(recipe.key, recipe.label)
+    adapter = get_adapter(recipe.key, recipes={recipe.key: recipe}, settings=settings, dry_run=True)
+
+    async with BrowserRunner(settings) as runner:
+        async with runner.profile_context(
+            recipe.key, trace_name=f"{recipe.key}-relogin", channel=recipe.browser_channel
+        ) as (context, page):
+            try:
+                if force:
+                    await login_with_credentials(recipe, page, settings)
+                    await adapter._assert_logged_in(page)
+                    cookies = await adapter.record_session(page)
+                    return f"Signed in to {recipe.label} and saved the session ({cookies} cookies)."
+                if await adapter.ensure_logged_in(page):
+                    return f"{recipe.label} had expired; signed in again and saved the session."
+                cookies = await adapter.record_session(page)
+                return (
+                    f"{recipe.label} is already logged in ({cookies} cookies exported). "
+                    "Use --force to run the sign-in steps anyway."
+                )
+            except PipelineError:
+                await save_failure(context, page, f"{recipe.key}-relogin-failed", settings)
+                raise
+
+
+@app.command()
 def check() -> None:
     """Validate the configuration, the recipes, and Notion access."""
     from app.platforms import load_recipes
@@ -791,6 +904,7 @@ async def _juicebox_sourcing(
         is_search_url,
         set_up_sourcing,
         split_locations,
+        stage_for_filter,
         stage_plan,
         years_span,
     )
@@ -871,7 +985,10 @@ async def _juicebox_sourcing(
     stage = stated or (drafted.stage if drafted.stage and drafted.stage != "Unknown" else None)
     basis = "stated in the document" if stated else ("inferred by Claude" if stage else "unknown")
     console.print(f"[bold]stage[/bold]      {stage or '-'}  [dim]({basis})[/dim]")
-    plan = stage_plan(stage)
+    # Only a stated stage sets the filter (D-022); an inferred one draws the
+    # company list and nothing else.
+    selected = stage_for_filter(stage, stated=bool(stated))
+    plan = stage_plan(selected)
     console.print(f"[bold]stages[/bold]     {', '.join(plan) if plan else '[yellow]left as Juicebox set them[/yellow]'}")
     console.print(f"[bold]companies[/bold]  {', '.join(drafted.companies) or '[yellow]none drafted[/yellow]'}")
     if dry_run:
@@ -909,7 +1026,7 @@ async def _juicebox_sourcing(
                     min_years=targeting.min_years,
                     max_years=targeting.max_years,
                     companies=drafted.companies,
-                    stage=stage,
+                    stage=selected,
                 )
                 # The proof, kept: the reloaded filter editor as the run left it.
                 # Not full_page - that blanks this app's virtualised view.

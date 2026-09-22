@@ -207,3 +207,96 @@ def test_the_poller_stands_down_in_a_dry_run(monkeypatch):
     settings = Settings(notion_token="t", notion_database_id="d", dry_run=True)
     asyncio.run(asyncio.wait_for(api._poll_ready_rows(settings), timeout=5))
     assert called == [], "the poller queried Notion during a dry run"
+
+
+# -- the service keeping its own logins alive ----------------------------------------
+
+
+def test_health_says_which_platforms_can_sign_themselves_in(monkeypatch):
+    """Booleans only. The values are secrets; whether they exist is what an
+    operator needs to know when a row says 'no stored login'."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("NOON_LOGIN_USERNAME", "nicholas@trust-in.co.uk")
+    monkeypatch.setenv("NOON_LOGIN_PASSWORD", "hunter2")
+    get_settings.cache_clear()
+    try:
+        body = _health()
+    finally:
+        get_settings.cache_clear()
+
+    assert body["credentials"]["noon"] is True
+    assert body["credentials"]["wellfound"] is False
+    assert body["relogin_steps"]["noon"] is True
+    assert body["relogin_steps"]["wellfound"] is True
+    assert "hunter2" not in str(body)
+    assert body["keepalive"]["every_hours"] == 24
+    assert body["keepalive"]["relogin"] is True
+    assert set(body["keepalive"]) >= {"last_run", "running", "results"}
+
+
+def test_keepalive_endpoints_are_secret_gated(monkeypatch):
+    from app import api
+    from app.config import get_settings
+
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3")
+    get_settings.cache_clear()
+    started: list = []
+
+    async def fake_now(settings, keys):
+        started.append(keys)
+
+    monkeypatch.setattr(api, "_keepalive_now", fake_now)
+    try:
+        client = TestClient(api.create_app())
+        assert client.get("/admin/keepalive").status_code == 401
+        assert client.post("/admin/keepalive").status_code == 401
+
+        ok = client.get("/admin/keepalive", headers={"X-Webhook-Secret": "s3"})
+        assert ok.status_code == 200
+        assert ok.json()["results"] == []
+
+        accepted = client.post(
+            "/admin/keepalive?platform=noon,Loxo", headers={"X-Webhook-Secret": "s3"}
+        )
+        assert accepted.status_code == 202
+        assert accepted.json()["platforms"] == ["noon", "loxo"]
+        everything = client.post("/admin/keepalive", headers={"X-Webhook-Secret": "s3"})
+        assert everything.json()["platforms"] == "all"
+    finally:
+        get_settings.cache_clear()
+
+    assert started == [["noon", "loxo"], None]
+
+
+def test_keepalive_timer_stands_down_when_switched_off():
+    """SESSION_KEEPALIVE_HOURS=0 must return at once, not sleep for ever."""
+    import asyncio
+
+    from app import api
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, session_keepalive_hours=0)
+    asyncio.run(asyncio.wait_for(api._keepalive_sessions(settings), timeout=5))
+
+
+def test_a_by_hand_round_replaces_only_the_platforms_it_visited(monkeypatch):
+    import asyncio
+
+    from app import api
+    from app.config import Settings
+    from app.platforms.keepalive import KeepaliveResult
+
+    async def fake_keepalive(settings, keys=None, recipes=None):
+        return [KeepaliveResult(k, k, "t", ok=True, logged_in=True) for k in (keys or ["noon", "loxo"])]
+
+    monkeypatch.setattr("app.platforms.keepalive.keepalive", fake_keepalive)
+    monkeypatch.setattr(api, "_KEEPALIVE_STATE", {"last_run": None, "running": False, "results": []})
+    settings = Settings(_env_file=None)
+
+    asyncio.run(api._keepalive_round(settings))
+    assert [r["platform"] for r in api._KEEPALIVE_STATE["results"]] == ["noon", "loxo"]
+    asyncio.run(api._keepalive_round(settings, ["loxo"]))
+    assert sorted(r["platform"] for r in api._KEEPALIVE_STATE["results"]) == ["loxo", "noon"]
+    assert api._KEEPALIVE_STATE["last_run"]
+    assert api._KEEPALIVE_STATE["running"] is False

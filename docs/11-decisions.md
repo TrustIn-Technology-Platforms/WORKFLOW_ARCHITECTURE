@@ -529,3 +529,110 @@ not reported; it is the client's own word.
 **Revisit when** a client's stage is something the Notion row could carry as a
 column. That would replace step 1 outright and make step 2's inference the rare
 case rather than the common one.
+
+---
+
+## D-021 · The service holds the credentials and signs itself back in
+
+**Date** 2026-09-21 · **Status** Accepted · **Supersedes** the "never scripted, never stored" half of [D-010](#d-010--capture-browser-sessions-instead-of-scripting-logins); the captured profile remains the session.
+
+**Context.** Every platform ends a session on its own clock, and nothing but
+use extends one. Under D-010 the only login the system had was the one a
+person captured on a laptop, so keeping four platforms alive meant a Windows
+scheduled task on that laptop exercising each profile every two days and
+uploading the result to the Railway volume ([08-sessions-and-auth](08-sessions-and-auth.md)).
+That produced two copies of every session ageing apart; Loxo ends a session
+used from two machines, and did, on 2026-09-02 and again from 09-03 to 09-07.
+A session that died between rounds waited for a person to notice a failed row,
+sign in on the laptop and push. Sohaib's reading on 2026-09-21: the machine
+that does the work should keep and renew the logins, and the passwords can be
+stored if they are stored safely.
+
+**Decision.** Credentials live as service secrets - Railway variables,
+`<KEY>_LOGIN_USERNAME` / `_PASSWORD` / `_TOTP_SECRET`, read only through
+`Settings.credentials_for` - and each recipe carries its sign-in as ordinary
+steps under `login.steps`. The deployed service runs a keepalive round on a
+timer (`SESSION_KEEPALIVE_HOURS`), under the row lock: it opens every enabled
+platform's profile, runs the platform's own session check, replays the login
+steps when the check fails, and re-exports the session. A row whose check fails
+does the same before posting. The platform's session check stays the only
+judge of success. Secrets never reach a log, a row or an artifact: the
+credentials type masks itself and the sign-in scrubs its values from any error
+it reports. The Windows task is retired; the laptop's scripts remain for the
+one-time first upload of a profile the service cannot capture itself.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep D-010 and the laptop keepalive | Two copies of one session, and a dead login that needs a person and a laptop that is on |
+| Capture on the server through a remote screen, no credentials stored | One copy, but a session that dies still needs a person at a screen; the SSO round trip cannot be avoided, only automated |
+| Platform APIs with keys | Loxo's Open API covers jobs but not campaigns; Juicebox's needs the in-app token; noon's is undocumented; Wellfound has none. Kept where useful ([D-017](#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom)), not a replacement |
+| Scripted login inside each driver | Would put passwords in Python and a different flow per platform; steps in YAML keep [D-009](#d-009--platforms-are-yaml-recipes-not-python-classes) and let a changed screen be fixed without a deploy of logic |
+
+**Trade-off.** Passwords now exist in the deployment, so the accounts must be
+dedicated automation identities with rotatable passwords and a code-based
+second factor. A second factor the service cannot answer - Authenticator push
+approval, a CAPTCHA - still needs a person, and the sign-in says so rather
+than retrying. A platform that treats a datacentre sign-in as suspicious may
+demand more than the steps expect; the failure artifact shows what. And the
+four platforms' steps were written from their public sign-in pages on
+2026-09-21 and have not yet been proven live.
+
+**Revisit when** a platform offers a service account or an API that covers
+the outreach half, or when Microsoft's sign-in screens change enough that
+`microsoft_sso` fails on every tenant rather than one.
+
+---
+
+## D-022 · An inferred funding stage may draw the company list, not set the funding-stage filter
+
+**Date** 2026-09-22 · **Status** Accepted · **Amends the scope of** [D-020](#d-020--past-company-filters-follow-the-clients-funding-stage) · **Where** [app/platforms/juicebox_sourcing.py](../app/platforms/juicebox_sourcing.py) (`stage_for_filter`), [app/platforms/juicebox.py](../app/platforms/juicebox.py)
+
+**Context.** D-020 made the client's funding stage the spine of the company
+filter, and accepted that Claude infers one when the document states none, with
+the inference reported on the row. On 2026-09-03 the same stage was wired to a
+second Juicebox filter — `Company Funding Stages`, every stage from Seed up to
+the client's own — recorded in
+[12-sourcing-criteria](12-sourcing-criteria.md) and
+[platforms/juicebox](platforms/juicebox.md) but never as a decision of its own.
+
+On 2026-09-22 a real row showed what the second use costs. Axle Insurance's
+document named no round; Claude inferred **Series A**; the saved search came
+back with 28 Companies and 2 Company Funding Stages, and the row reported
+`Posted`. The two filters are not the same bet. Thirty company names are
+visible: a recruiter reads them, strikes out what is wrong, and the damage is
+inspectable. A funding-stage select is two words in a panel nobody re-opens,
+and it decides the pool. Worse, it is never empty to begin with — Juicebox's
+own AI had pre-selected `seed,series_a,series_b,series_c` — so our guess did
+not fill a blank filter, it *narrowed* the platform's wider one.
+
+**Decision.** A funding stage reaches `Company Funding Stages` only when
+`stage_from_text` read it off the document — the client's own word. An inferred
+stage still goes to `draft_companies` and still draws the Companies list
+(D-020 is unchanged there), and it is still reported on the row, now saying
+which filter rests on it, which one does not, and that writing
+`Stage: Series B` into the `Client JD` sets both. Callers pass the stage
+through `stage_for_filter(stage, stated=...)` rather than deciding for
+themselves, because `stage` crosses `configure_filters` as a bare string where
+an inferred "Series A" is indistinguishable from a stated one.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Leave it as it was and rely on the row note | The note was delivered and the run still shipped a narrowed search. It lands in `Notes` when that column exists, is truncated with every other platform's notes at 1800 characters, and sits under a green status — it is a record, not a brake |
+| Fail the row when the stage is inferred | A sourcing gap has never failed a row (the sequence has already saved), and the searches are usable without this one filter |
+| Stop inferring a stage at all — make the drafter answer `Unknown` | That is D-020's own decision, and it would shorten the company list, which Sohaib asked for and which reads well. The inference is useful where it is checkable |
+| Clear `Company Funding Stages` when the stage is a guess | Clearing is a change too, and a wrong one: Juicebox's pre-selection is its read of the JD and is wider than ours. Leaving it alone is the only genuinely neutral act |
+
+**Trade-off.** A search built from a document that never states the stage now
+carries whatever stages Juicebox's own AI chose, which is a guess as well —
+just not ours, and a wider one. Recruiters who want the stage filter set have
+to write the stage into the `Client JD`, which the row note now asks for by
+name. The two platforms also diverge on paper but not in effect: Loxo has no
+funding-stage filter, so its Past Company list is unaffected.
+
+**Revisit when** the Notion row carries the client's stage as a column — D-020
+already names this as its own revisit condition. A column is a stated stage,
+which makes this rule quiet: both filters would be set from fact.

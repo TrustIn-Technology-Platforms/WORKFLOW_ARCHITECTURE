@@ -1,0 +1,239 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mock Juicebox search - Criteria dialog</title>
+</head>
+<body>
+<!--
+  Juicebox's search page and its Criteria dialog, reduced to the shapes the
+  writer has to survive. The dialog was mapped from one dry run (docs/platforms/
+  juicebox.md), and the production failure of 2026-09-22 said only "Could not
+  add another criterion row" - so every plausible shape is a query switch here
+  and each one has to produce a DIFFERENT sentence.
+
+  What the page reproduces:
+
+  1. The Osano cookie banner is role=dialog and comes FIRST in the DOM, so
+     document.querySelector('[role=dialog]') returns the wrong thing.
+
+  2. The textareas are React-controlled. An input listener mirrors each value
+     into a model, and a re-render tick reverts any textarea whose value differs
+     from it - so a write that assigns `.value` without an input event is undone
+     150ms later, exactly as Juicebox undoes it.
+
+  3. Add Criterion only ever appends; Update is the only thing that saves.
+
+  Switches (query string):
+    rows=N      criterion rows already in the dialog          (default 5)
+    cap=N       the most rows the dialog will ever hold       (default 99)
+    label=      exact | plus | lower | icon | iconOnly |      (default exact)
+                renamed
+                the text of the Add button
+    portal=     none | root | body                            (default none)
+                where DialogActions is rendered: inside the paper, beside it in
+                the MuiDialog-root, or torn out to document.body
+    heading=    criteria | search | preset                    (default criteria)
+                what the dialog's innerText starts with
+    disabled=   none | blank | always                         (default none)
+                'blank' greys out Add while the last row is empty
+    mount=N     ms before the rows mount inside the dialog    (default 0)
+-->
+<style>
+  body { font: 13px system-ui, sans-serif; margin: 0; }
+  .osano-cm-dialog { border: 1px solid #ccc; padding: 6px; }
+  #search { padding: 12px; }
+  .MuiDialog-root { position: fixed; inset: 0; background: rgba(0,0,0,.3); }
+  .MuiDialog-container { display: flex; justify-content: center; padding-top: 30px; }
+  .MuiDialog-paper { background: #fff; width: 520px; padding: 12px; }
+  .MuiDialogTitle-root { font-size: 18px; margin: 0 0 8px; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .row textarea { flex: 1; height: 38px; }
+  .rank { color: #777; font-size: 11px; }
+  .actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
+  button[disabled], .Mui-disabled { opacity: .4; }
+</style>
+
+<div class="osano-cm-dialog" role="dialog">
+  We use cookies to improve your experience.
+  <button class="osano-cm-accept-all" type="button">Accept all</button>
+</div>
+
+<div id="search">
+  <h1>Senior Platform Engineer - search</h1>
+  <button id="filters" type="button">Filters (12)</button>
+  <!-- The real button breaks the count onto its own line, so the lookup has to
+       normalise whitespace before it compares. -->
+  <button id="open-criteria" type="button">Criteria
+    (<span id="count">0</span>)</button>
+  <!-- The shell check refuses to work on a page under 400 characters, because
+       Juicebox paints blank for 20-30s before it renders anything. -->
+  <div id="jd">
+    <p>What we're looking for: a platform engineer who has built and operated
+    scalable, reliable cloud infrastructure for several years, and who is happy
+    owning the systems they build. You will work on the deployment platform the
+    whole engineering organisation ships through, so the work is equal parts
+    Kubernetes, Terraform and talking to the teams who depend on it.</p>
+    <p>About the team: eleven engineers across London and Lisbon, shipping to
+    production several times a day, on call one week in six with a rota that is
+    actually respected. We are looking for someone who has done this at a company
+    of a similar size and wants to do it again with a clean slate.</p>
+  </div>
+</div>
+
+<div id="host"></div>
+
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const num = (k, d) => {
+    const v = parseInt(q.get(k) || '', 10);
+    return Number.isFinite(v) ? v : d;
+  };
+  const CFG = {
+    rows: num('rows', 5),
+    cap: num('cap', 99),
+    label: q.get('label') || 'exact',
+    portal: q.get('portal') || 'none',
+    heading: q.get('heading') || 'criteria',
+    disabled: q.get('disabled') || 'none',
+    mount: num('mount', 0),
+  };
+
+  // The React model. The DOM is a projection of it; anything written straight
+  // onto a textarea without an input event is reverted by the tick below.
+  const model = [];
+  for (let i = 0; i < CFG.rows; i++) model.push('Existing criterion ' + (i + 1));
+
+  window.__model = () => model.slice();
+  window.__saved = null;
+  window.__addClicks = 0;
+
+  document.getElementById('count').textContent = String(model.length);
+
+  const ADD_LABELS = {
+    exact: '<span>Add Criterion</span>',
+    plus: '<span>+ Add Criterion</span>',
+    lower: '<span>Add criterion</span>',
+    // A material-icons ligature puts the glyph's text in front of the label.
+    icon: '<span class="material-icons">add</span><span>Add Criterion</span>',
+    iconOnly: '<svg width="12" height="12" aria-hidden="true"><rect width="12" height="12"></rect></svg>',
+    // Juicebox renaming the control outright - the one case nothing can guess.
+    renamed: '<span>New rule</span>',
+  };
+
+  function addButtonHtml() {
+    const inner = ADD_LABELS[CFG.label] || ADD_LABELS.exact;
+    const aria = CFG.label === 'iconOnly' ? ' aria-label="Add Criterion"' : '';
+    return '<button type="button" id="add"' + aria + '>' + inner + '</button>';
+  }
+
+  function actionsHtml() {
+    return '<div class="actions">' + addButtonHtml() +
+      '<button type="button" id="cancel">Cancel</button>' +
+      '<button type="button" id="update">Update</button></div>';
+  }
+
+  function rowsHtml() {
+    return model.map((value, i) =>
+      '<div data-rfd-draggable-id="criterion-' + i + '" class="row">' +
+      '<span class="drag">::</span>' +
+      '<textarea id="criterion_' + i + '"></textarea>' +
+      '<button type="button" class="del" aria-label="Delete criterion">' +
+      '<svg width="10" height="10" aria-hidden="true"></svg></button>' +
+      '</div>').join('');
+  }
+
+  function titleText() {
+    return CFG.heading === 'search' ? 'Search Criteria' : 'Criteria';
+  }
+
+  function open() {
+    const host = document.getElementById('host');
+    // A preset bar above the title is enough to stop innerText starting with
+    // 'Criteria' - the dialog is still plainly the criteria dialog.
+    const presetBar = CFG.heading === 'preset'
+      ? '<div class="presets"><button type="button">Load preset</button>' +
+        '<button type="button">Save Preset</button></div>'
+      : '';
+    const inPaper = CFG.portal === 'none' ? actionsHtml() : '';
+    const inRoot = CFG.portal === 'root' ? actionsHtml() : '';
+    host.innerHTML =
+      '<div class="MuiDialog-root">' +
+        '<div class="MuiDialog-container">' +
+          '<div class="MuiPaper-root MuiDialog-paper" role="dialog">' +
+            presetBar +
+            '<h2 class="MuiDialogTitle-root">' + titleText() + '</h2>' +
+            '<div class="MuiDialogContent-root">' +
+              '<div class="rank">Most Important</div>' +
+              '<div id="rowhost"></div>' +
+              '<div class="rank">Least Important</div>' +
+            '</div>' +
+            inPaper +
+          '</div>' +
+        '</div>' +
+        inRoot +
+      '</div>';
+    if (CFG.portal === 'body') {
+      const stray = document.createElement('div');
+      stray.id = 'stray-actions';
+      stray.innerHTML = actionsHtml();
+      document.body.appendChild(stray);
+    }
+    setTimeout(render, CFG.mount);
+  }
+
+  function render() {
+    const rowHost = document.getElementById('rowhost');
+    if (!rowHost) return;
+    if (rowHost.childElementCount !== model.length) rowHost.innerHTML = rowsHtml();
+    document.querySelectorAll('textarea[id^=criterion_]').forEach((el) => {
+      const want = model[parseInt(el.id.slice('criterion_'.length), 10)] || '';
+      if (el.value !== want) el.value = want;   // the re-render React would do
+    });
+    const add = document.getElementById('add');
+    if (add) {
+      const blocked = CFG.disabled === 'always' ||
+        (CFG.disabled === 'blank' && model.length > 0 && !model[model.length - 1].trim());
+      add.disabled = blocked;
+      add.className = blocked ? 'Mui-disabled' : '';
+    }
+  }
+
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el && el.id && el.id.indexOf('criterion_') === 0) {
+      model[parseInt(el.id.slice('criterion_'.length), 10)] = el.value;
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest ? e.target.closest('button') : null;
+    if (!el) return;
+    if (el.id === 'open-criteria') return open();
+    if (el.id === 'add') {
+      window.__addClicks++;
+      if (el.disabled) return;          // a click on a disabled button is a no-op
+      if (model.length >= CFG.cap) return;   // the cap: silently nothing happens
+      model.push('');
+      render();
+      return;
+    }
+    if (el.id === 'update') {
+      window.__saved = model.slice();
+      document.getElementById('host').innerHTML = '';
+      const stray = document.getElementById('stray-actions');
+      if (stray) stray.remove();
+      document.getElementById('count').textContent = String(model.length);
+      return;
+    }
+    if (el.id === 'cancel') {
+      document.getElementById('host').innerHTML = '';
+    }
+  });
+
+  setInterval(render, 150);
+})();
+</script>
+</body>
+</html>

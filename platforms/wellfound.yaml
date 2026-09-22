@@ -30,12 +30,44 @@ login:
   url: https://wellfound.com/recruit/jobs-beta
   logged_out_pattern: "/login"
   # Only the recruiter shell renders these: the "+ Post Job" link on the Jobs
-  # page and the "Find Talent" item in the top nav.
+  # page, the "Find Talent" item in the top nav, and the logo link into the
+  # recruiter area. The logo is the one that matters: on 2026-09-16 Wellfound
+  # routed /recruit/jobs-beta to its "Hand-picked for you" interstitial, which
+  # has no Post Job link and hides the nav labels with CSS, so a live session
+  # sat there for 90s and was reported as expired (failure artifact
+  # 20260916-111732). The logo link is on every recruiter page.
   ready_selector:
+    - "a[aria-label='Wellfound'][href^='/recruit/']"
     - "a:has-text('Post Job')"
     - "a[href='/recruit/jobs/new']"
     - "a:has-text('Find Talent')"
   session_file: wellfound.storage_state.json
+  # The unattended sign-in (WELLFOUND_LOGIN_USERNAME / _PASSWORD). A plain
+  # Rails form, ids confirmed on the public /login on 2026-09-21. The account
+  # must have a password set - one that only ever used "Continue with Google"
+  # cannot sign in here. Wellfound has shown no 2FA on this account (the
+  # capture on 2026-08-28 took 47s with no prompt). UNPROVEN end to end: run
+  # `python -m app.cli relogin wellfound --headed --force` once.
+  steps:
+    - action: goto
+      url: https://wellfound.com/login
+      wait_until: domcontentloaded
+    - action: dismiss
+      selector:
+        - "button:has-text('Accept')"
+        - "text='Accept all'"
+    - action: fill
+      selector: "#user_email"
+      value: "{{ username }}"
+    - action: fill
+      selector: "#user_password"
+      value: "{{ password }}"
+    - action: click
+      selector: "input[name='commit']"
+    - action: wait_for_url
+      description: any recruiter page - the session check decides the rest
+      pattern: "wellfound\\.com/recruit"
+      timeout_ms: 60000
 
 defaults:
   base_url: https://wellfound.com

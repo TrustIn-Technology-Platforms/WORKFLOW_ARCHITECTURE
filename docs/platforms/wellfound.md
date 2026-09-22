@@ -280,3 +280,39 @@ Selection happens once, in `build_context`, so `{{ advert.body_html }}` means
 1. **One live post, with permission**: `python -m app.cli post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live`, then check the job under *Jobs* and the captured `post_url`. Unpublish it afterwards if it was a test.
 2. Add `Wellfound` as an option on the Notion `Platforms` column, and `Location` / `Salary` columns to the database, so rows can drive it.
 3. Decide the remote-post shape (hiring regions) and the role mapping once a non-SF, non-engineering advert turns up.
+
+## Unattended sign-in (2026-09-21)
+
+`platforms/wellfound.yaml` carries `login.steps`: `/login`, `#user_email`,
+`#user_password`, `input[name=commit]`, then a wait for a `/recruit` URL. The
+ids were read off the public `/login` on 2026-09-21 (`name=username` /
+`name=password` on the same inputs). Credentials `WELLFOUND_LOGIN_USERNAME` /
+`_PASSWORD` ([D-021](../11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in));
+the account must have a Wellfound password, not only "Continue with Google".
+No 2FA has been seen on this account. **Unproven end to end**:
+`python -m app.cli relogin wellfound --headed --force` once.
+
+**The session check was wrong on 2026-09-16.** Wellfound routed
+`/recruit/jobs-beta` to its "Hand-picked for you" page with a "Complete your
+company profile" dialog on top; that page has no Post Job link and hides the
+nav labels with CSS, so none of the three ready selectors was visible and a
+live session was reported as expired after 90 seconds (failure artifact
+`20260916-111732`). The recruiter logo link
+(`a[aria-label='Wellfound'][href^='/recruit/']`) is now the first ready
+selector; it is on every recruiter page. Completing the company profile on
+Wellfound would stop the dialog appearing.
+
+Both halves are held open by `tests/test_adapter.py`, which drives the real
+check against `tests/fixtures/pages/mock-wellfound-handpicked.html` and
+`mock-wellfound-signedout.html`: the three old selectors still read the
+interstitial as expired, the four shipped ones read it as live through the
+dialog, and the public sign-in page is still read as expired even with
+`logged_out_pattern` cleared — so loosening the logo selector to
+`a[aria-label='Wellfound']` or dropping the trailing slash from `/recruit/`
+fails the suite, both having been measured to call a signed-out page alive.
+One correction to the account above, measured while building the fixture: the
+hidden label defeats `a:has-text('Find Talent')` only when it is the whole of
+the anchor's content. `:has-text` matches text that is `display: none`, and
+Playwright judges visibility on the anchor's own box, so a nav item keeping a
+visible icon beside the hidden label would still have been found — on the live
+page the item had collapsed outright.

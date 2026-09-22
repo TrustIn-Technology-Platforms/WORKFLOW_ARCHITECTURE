@@ -5,8 +5,10 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.models import Credentials
 
 # The checkout root - the parent of the `app` package. A relative directory in
 # the settings belongs to the checkout, not to whichever folder the command was
@@ -104,6 +106,45 @@ class Settings(BaseSettings):
     artifact_dir: Path = Path("artifacts")
     platform_config_dir: Path = Path("platforms")
 
+    # --- sessions: the service keeps its own logins alive -------------------
+    # Sessions end server-side, on each platform's clock, and the only thing
+    # that extends one is using it. Until 2026-09-21 that was a Windows task
+    # on a laptop, which meant two copies of every session (the laptop's and
+    # the volume's) ageing apart, and a dead one needing a person. Now the
+    # deployed service exercises every profile itself, this often, under the
+    # same lock the rows run under. 0 turns it off.
+    session_keepalive_hours: float = 24
+    # When a session check fails and the platform has credentials below, type
+    # the login rather than fail the row. Off means the old behaviour: report
+    # and wait for a person.
+    session_relogin: bool = True
+    # How long the pre-run session check waits for the logged-in shell before
+    # calling the session dead. The Railway container renders these apps in
+    # 15-45s where a laptop takes 5-12s (2026-09-01), so this is long; tests
+    # shorten it.
+    login_check_seconds: float = 90
+
+    # --- platform credentials -----------------------------------------------
+    # One trio per platform, read only through `credentials_for`. They live as
+    # Railway variables (encrypted at rest, exposed to this service only) and
+    # in a local .env, never in a recipe or a commit. A blank username means
+    # "no automatic login for this platform" and the session check reports as
+    # it always did. The TOTP seed is the base32 secret shown when an
+    # authenticator app is registered on the account; leave it blank when the
+    # platform asks for no second factor.
+    noon_login_username: str = ""
+    noon_login_password: SecretStr = SecretStr("")
+    noon_login_totp_secret: SecretStr = SecretStr("")
+    loxo_login_username: str = ""
+    loxo_login_password: SecretStr = SecretStr("")
+    loxo_login_totp_secret: SecretStr = SecretStr("")
+    juicebox_login_username: str = ""
+    juicebox_login_password: SecretStr = SecretStr("")
+    juicebox_login_totp_secret: SecretStr = SecretStr("")
+    wellfound_login_username: str = ""
+    wellfound_login_password: SecretStr = SecretStr("")
+    wellfound_login_totp_secret: SecretStr = SecretStr("")
+
     # --- sourcing criteria --------------------------------------------------
     # Every platform here has two halves: the outreach a candidate receives, and
     # the criteria that decide who receives it. One switch governs the second
@@ -178,6 +219,33 @@ class Settings(BaseSettings):
     @property
     def notion_configured(self) -> bool:
         return bool(self.notion_token and self.notion_database_id)
+
+    def credentials_for(self, platform: str) -> Credentials | None:
+        """The stored login for a recipe key, or None when there is none.
+
+        Keyed by the recipe key so that a platform's three variables are
+        `<KEY>_LOGIN_USERNAME`, `<KEY>_LOGIN_PASSWORD` and
+        `<KEY>_LOGIN_TOTP_SECRET`. A platform without the fields (one added
+        to `platforms/` but not here) simply has no stored login; adding one
+        means adding its three fields above and their rows in
+        docs/04-configuration.md.
+        """
+        key = platform.strip().lower().replace("-", "_")
+        username = getattr(self, f"{key}_login_username", "") or ""
+        password = getattr(self, f"{key}_login_password", None)
+        totp = getattr(self, f"{key}_login_totp_secret", None)
+        if not username.strip() or password is None or not password.get_secret_value():
+            return None
+        return Credentials(
+            platform=key,
+            username=username.strip(),
+            password=password.get_secret_value(),
+            totp_secret=(totp.get_secret_value() if totp is not None else "").strip(),
+        )
+
+    def credentials_configured(self, platforms: list[str]) -> dict[str, bool]:
+        """Which platforms have a stored login - booleans only, for /health."""
+        return {key: self.credentials_for(key) is not None for key in platforms}
 
     def ensure_dirs(self) -> None:
         self.session_dir.mkdir(parents=True, exist_ok=True)

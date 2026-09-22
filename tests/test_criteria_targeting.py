@@ -144,6 +144,43 @@ def test_juicebox_criteria_are_skipped_without_a_search_url():
     assert any("Juicebox Search" in w for w in report.warnings)
 
 
+def test_an_unwritten_criteria_list_leads_the_row_instead_of_trailing_it(monkeypatch):
+    """The run on 2026-09-22 read "Posted OK. Notes: ... search criteria not
+    set: ..." for a search that ranks nobody. The sequence really had saved, so
+    the outcome is right and the sentence was not: it now leads, in the words a
+    recruiter needs to act on it."""
+    from app.platforms import browser, juicebox_criteria
+    from app.models import PlatformError
+
+    async def _explode(*args, **kwargs):
+        raise PlatformError("The Criteria dialog has no 'Add Criterion' button.")
+
+    async def _no_screenshot(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(juicebox_criteria, "set_criteria", _explode)
+    monkeypatch.setattr(browser, "save_failure", _no_screenshot)
+
+    adapter = _juicebox()
+    report = RunReport()
+    report.warnings.append("sourcing: project built")
+
+    asyncio.run(
+        adapter._set_criteria(
+            None,
+            ParsedDocument(source_name="A - B - C"),
+            None,
+            report,
+            built_search="https://app.juicebox.ai/project/1/search?search_id=2",
+        )
+    )
+
+    assert report.warnings[0].startswith("SEARCH CRITERIA NOT WRITTEN")
+    assert "ranks nobody" in report.warnings[0]
+    assert "search_id=2" in report.warnings[0], "name the search to open"
+    assert "sourcing: project built" in report.warnings
+
+
 def test_juicebox_rejects_a_column_that_is_not_a_url():
     adapter = _juicebox()
     report = RunReport()

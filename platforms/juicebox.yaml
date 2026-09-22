@@ -29,6 +29,50 @@ login:
   url: https://app.juicebox.ai/
   ready_selector: "text=Sequences"
   session_file: juicebox.storage_state.json
+  # The unattended sign-in (JUICEBOX_LOGIN_USERNAME / _PASSWORD). Email and
+  # password, no SSO (docs/platforms/juicebox.md). The form's markup has NOT
+  # been mapped: a bare headless visit on 2026-09-21 rendered only the cookie
+  # banner in 20s, so the selectors below are the generic shape of an
+  # email+password form and must be checked with
+  # `python -m app.cli relogin juicebox --headed --force` before being trusted.
+  steps:
+    - action: goto
+      url: https://app.juicebox.ai/
+      wait_until: commit
+    - action: wait
+      description: the app paints nothing for 15-30s
+      ms: 15000
+    - action: dismiss
+      selector:
+        - "button[aria-label='Close this consent banner']"
+        - "text='Accept'"
+    - action: fill
+      selector:
+        - "input[type='email']"
+        - "input[name='email']"
+        - "input[placeholder*='mail' i]"
+      value: "{{ username }}"
+      timeout_ms: 30000
+    - action: dismiss
+      description: some forms ask for the email first and the password on the next screen
+      selector:
+        - "button:has-text('Continue')"
+        - "button:has-text('Next')"
+    - action: fill
+      selector:
+        - "input[type='password']"
+        - "input[name='password']"
+      value: "{{ password }}"
+      timeout_ms: 30000
+    - action: click
+      selector:
+        - "button:has-text('Log in')"
+        - "button:has-text('Sign in')"
+        - "button:has-text('Continue')"
+        - "button[type='submit']"
+    - action: wait
+      description: the shell renders slowly; the session check that follows polls for it
+      ms: 10000
 
 defaults:
   base_url: https://app.juicebox.ai

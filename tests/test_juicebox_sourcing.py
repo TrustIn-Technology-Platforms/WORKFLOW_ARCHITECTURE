@@ -21,7 +21,9 @@ from app.platforms.juicebox_sourcing import (
     project_title,
     same_company,
     split_locations,
+    stage_for_filter,
     stage_key,
+    stage_plan,
     stages_up_to,
     years_span,
 )
@@ -339,3 +341,15 @@ def test_only_company_records_count_as_companies():
     assert not is_company_record("Insurance\nINDUSTRY")
     assert not is_company_record("Fintech\nCOMPANY KEYWORD")
 
+
+
+def test_only_a_stated_stage_may_set_the_funding_stage_filter():
+    """D-022. The same string, the same plan - only where it came from decides
+    whether the select is touched at all."""
+    assert stage_for_filter("Series A", stated=True) == "Series A"
+    assert stage_for_filter("Series A", stated=False) is None
+    assert stage_for_filter(None, stated=True) is None
+    assert stage_for_filter("", stated=False) is None
+    # What the Axle run wrote, and what it writes now.
+    assert stage_plan(stage_for_filter("Series A", stated=True)) == ["seed", "series_a"]
+    assert stage_plan(stage_for_filter("Series A", stated=False)) == []

@@ -28,6 +28,12 @@ CONTEXT_ROOTS = {
     "inmail", "connection_note", "row", "now",
 }
 
+# What a `login.steps` expression may reach. The values come from the
+# platform's stored credentials (docs/04-configuration.md), never from a
+# document or a row: `otp` is the current authenticator code, `totp_secret`
+# the seed for an action that needs to mint one itself later in the flow.
+LOGIN_ROOTS = {"username", "password", "otp", "totp_secret"}
+
 
 class RecipeError(PipelineError):
     pass
@@ -65,6 +71,11 @@ class LoginSpec:
     # the landing URL is a far more reliable session check than any selector,
     # because it does not depend on markup that changes.
     logged_out_pattern: str = ""
+    # The sign-in, as ordinary recipe steps, for the service to replay when the
+    # session check fails and the platform has stored credentials. Values come
+    # from `{{ username }}`, `{{ password }}`, `{{ otp }}`; a Microsoft SSO
+    # round trip is one `microsoft_sso` step. Empty means "a person signs in".
+    steps: list[Step] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -148,6 +159,7 @@ def load_recipe(path: Path) -> Recipe:
             ready_selector=login_data.get("ready_selector") or "",
             session_file=login_data.get("session_file"),
             logged_out_pattern=str(login_data.get("logged_out_pattern") or ""),
+            steps=_read_steps(path, login_data.get("steps"), "login"),
         ),
         defaults=dict(data.get("defaults") or {}),
         steps=_read_steps(path, data.get("steps"), "steps"),
@@ -250,6 +262,8 @@ def validate(recipe: Recipe) -> list[str]:
     if recipe.kind not in KINDS:
         problems.append(f"kind must be one of {', '.join(KINDS)} (got {recipe.kind!r})")
 
+    problems.extend(_validate_login(recipe))
+
     # A driver-backed recipe owns its flow in Python, so the step-shape rules
     # below (needs steps, needs per_email/fixed-slots, needs exactly one submit)
     # do not apply. Any steps it *does* list are still validated for typos.
@@ -302,6 +316,22 @@ def validate(recipe: Recipe) -> list[str]:
     return problems
 
 
+def _validate_login(recipe: Recipe) -> list[str]:
+    """The sign-in steps reach credentials and nothing else.
+
+    A document value in a login step would mean the login depends on which row
+    is running, and `submit: true` there would let a dry run stop inside a
+    sign-in, which is not where anyone wants it to stop.
+    """
+    problems: list[str] = []
+    known_roots = LOGIN_ROOTS | set(recipe.defaults)
+    for step in recipe.login.steps:
+        if step.submit:
+            problems.append(f"login[{step.index}]: a login step cannot set submit: true")
+        problems.extend(_validate_step(step, known_roots, recipe.kind))
+    return problems
+
+
 def _validate_step(step: Step, known_roots: set[str], kind: str) -> list[str]:
     where = f"{step.phase}[{step.index}] {step.action}"
     problems: list[str] = []
@@ -323,7 +353,7 @@ def _validate_step(step: Step, known_roots: set[str], kind: str) -> list[str]:
     for name, value in step.params.items():
         for problem in templating.validate(value, known_roots):
             problems.append(f"{where}: {name}: {problem}")
-        if kind != "email_sequence" or step.phase != "per_email":
+        if step.phase != "login" and (kind != "email_sequence" or step.phase != "per_email"):
             for expression in templating.expressions_in(value):
                 root = expression.split("|")[0].strip()
                 # `email.` is the per-email binding; `emails[...]` and

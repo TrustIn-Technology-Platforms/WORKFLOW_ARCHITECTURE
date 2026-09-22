@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mock Juicebox Company Funding Stages</title>
+</head>
+<body>
+<!--
+  Juicebox's `Company Funding Stages` control, reduced to the shape the stage
+  writer keys off (docs/platforms/juicebox.md#companies-and-funding-stages):
+
+  1. A MUI multi-select, not an autocomplete: a hidden `.MuiSelect-nativeInput`
+     holding the chosen keys comma-joined, a sibling `[role=combobox]` that
+     opens `ul[role=listbox]` of `li[role=option][data-value]` carrying
+     `aria-selected`.
+
+  2. The section holds TWO such selects - a scope select first - so the stages
+     one is the LAST. Reading the first would set the scope instead.
+
+  3. It arrives PRE-SELECTED by Juicebox's own AI. The value below,
+     `seed,series_a,series_b,series_c`, is the one read off the live Axle
+     search on 2026-09-03. That is what "left as Juicebox set it" means, and
+     it is why an unset filter is wider than a guessed one rather than empty.
+-->
+<style>
+  body { font-family: sans-serif; margin: 16px; width: 420px; }
+  .label { font-weight: 600; margin: 14px 0 4px; }
+  .MuiSelect-nativeInput { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .select { position: relative; border: 1px solid #ccc; padding: 6px; width: 380px; }
+  [role=combobox] { display: block; min-height: 20px; cursor: pointer; }
+  ul[role=listbox] { position: absolute; left: 430px; top: 20px; width: 220px;
+                     list-style: none; margin: 0; padding: 0; border: 1px solid #999;
+                     background: #fff; }
+  ul[role=listbox] li { display: block; padding: 4px 6px; cursor: pointer; }
+  ul[role=listbox] li[aria-selected="true"]::before { content: "\2713 "; }
+</style>
+
+<p class="label">Companies</p>
+<div class="select">
+  <input class="MuiSelect-nativeInput" value="cp" aria-hidden="true" tabindex="-1">
+  <div role="combobox" data-select="scope">Current + Past</div>
+</div>
+
+<p class="label">Company Funding Stages</p>
+
+<!-- The decoy: a second scope select inside the stages window. The writer
+     takes the LAST native input, so this one must never be the one marked. -->
+<div class="select">
+  <input class="MuiSelect-nativeInput" value="any" aria-hidden="true" tabindex="-1">
+  <div role="combobox" data-select="decoy">Any time</div>
+</div>
+
+<div class="select">
+  <input id="stages-native" class="MuiSelect-nativeInput"
+         value="seed,series_a,series_b,series_c" aria-hidden="true" tabindex="-1">
+  <div role="combobox" data-select="stages" id="stages-display">Seed, Series A, Series B, Series C</div>
+</div>
+
+<p class="label">Estimated Revenue</p>
+<div class="select">
+  <input class="MuiSelect-nativeInput" value="" aria-hidden="true" tabindex="-1">
+  <div role="combobox" data-select="revenue">Any</div>
+</div>
+
+<script>
+  // The menu Juicebox offers, in stage order, with the keys its select uses.
+  var OPTIONS = [
+    {key: 'pre_seed', label: 'Pre-Seed'},
+    {key: 'seed', label: 'Seed'},
+    {key: 'series_a', label: 'Series A'},
+    {key: 'series_b', label: 'Series B'},
+    {key: 'series_c', label: 'Series C'},
+    {key: 'series_d', label: 'Series D'},
+    {key: 'ipo', label: 'Public'}
+  ];
+
+  var native = document.getElementById('stages-native');
+  var display = document.getElementById('stages-display');
+  var listbox = null;
+
+  function chosen() {
+    return native.value ? native.value.split(',').filter(Boolean) : [];
+  }
+
+  function paint() {
+    var held = chosen();
+    display.textContent = OPTIONS.filter(function (o) { return held.indexOf(o.key) >= 0; })
+      .map(function (o) { return o.label; }).join(', ') || 'Any';
+  }
+
+  function close() {
+    if (listbox) { listbox.remove(); listbox = null; }
+  }
+
+  function toggle(key) {
+    var held = chosen();
+    var at = held.indexOf(key);
+    if (at >= 0) { held.splice(at, 1); } else { held.push(key); }
+    // The value keeps the menu's own order, the way the live select reads it.
+    native.value = OPTIONS.filter(function (o) { return held.indexOf(o.key) >= 0; })
+      .map(function (o) { return o.key; }).join(',');
+    paint();
+  }
+
+  function open() {
+    close();
+    var held = chosen();
+    listbox = document.createElement('ul');
+    listbox.setAttribute('role', 'listbox');
+    OPTIONS.forEach(function (option) {
+      var li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.setAttribute('data-value', option.key);
+      li.setAttribute('aria-selected', held.indexOf(option.key) >= 0 ? 'true' : 'false');
+      li.textContent = option.label;
+      li.addEventListener('click', function () {
+        toggle(option.key);
+        li.setAttribute('aria-selected',
+          chosen().indexOf(option.key) >= 0 ? 'true' : 'false');
+      });
+      listbox.appendChild(li);
+    });
+    // Rendered at body level, like a real popper, and after the "Estimated
+    // Revenue" stop so it is never inside the section window being read.
+    document.body.appendChild(listbox);
+  }
+
+  display.addEventListener('click', open);
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') { close(); }
+  });
+  paint();
+</script>
+</body>
+</html>

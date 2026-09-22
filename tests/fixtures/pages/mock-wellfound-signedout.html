@@ -1,0 +1,61 @@
+<!doctype html>
+<!--
+  Wellfound's public sign-in page - a session that really is dead.
+
+  The form ids are the ones the recipe's `login.steps` use, read off the live
+  /login on 2026-09-21. The two decoys in the header are the point of the
+  file: the public shell also carries a Wellfound-branded logo link, so a
+  ready_selector loosened to `a[aria-label='Wellfound']` (or to a bare
+  `/recruit` href) would call this page alive and the check would never fire
+  again. The shipped selector demands `href^='/recruit/'`, which neither has.
+
+  With `?bounce=1` the page rewrites its own address to
+  /login?after_sign_in=/recruit/jobs-beta, which is what Wellfound's redirect
+  leaves behind, so `logged_out_pattern` has something to match. Without the
+  flag the URL stays neutral and the ready_selector is the only judge.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Log In | Wellfound</title>
+  <style>
+    body { font: 15px system-ui, sans-serif; margin: 0; }
+    header { display: flex; align-items: center; gap: 24px; padding: 10px 20px;
+             border-bottom: 1px solid #e4e4e4; }
+    main { padding: 32px 20px; max-width: 380px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input[type=email], input[type=password] { width: 100%; padding: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <!-- Public logo: same aria-label, but it points at the marketing home. -->
+    <a aria-label="Wellfound" href="/" id="logo">
+      <svg width="28" height="17" viewBox="0 0 28 17" role="img" aria-hidden="true">
+        <rect width="28" height="17" fill="#1f1f1f"></rect>
+      </svg>
+    </a>
+    <nav>
+      <a href="/jobs">Jobs</a>
+      <a href="/recruit">For Recruiters</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Log in to Wellfound</h1>
+    <form id="new_user" action="/login" method="post">
+      <label for="user_email">Email</label>
+      <input id="user_email" name="user[email]" type="email" autocomplete="email">
+      <label for="user_password">Password</label>
+      <input id="user_password" name="user[password]" type="password">
+      <input name="commit" type="submit" value="Log in">
+    </form>
+  </main>
+
+  <script>
+    if (location.search.includes('bounce')) {
+      history.replaceState({}, '', '/login?after_sign_in=/recruit/jobs-beta');
+    }
+  </script>
+</body>
+</html>

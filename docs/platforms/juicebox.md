@@ -161,8 +161,18 @@ ahead of it. Both rest on the client's stage. `stage_from_text` reads it off the
 document when the JD or advert states one ("a Series B fintech");
 `draft_companies` — the [D-020](../11-decisions.md) drafter Loxo uses, asked
 for 20 here — infers it when they do not, and an inferred stage is said so on
-the row, because two filters that decide the pool then rest on a guess a
+the row, because a filter that decides the pool then rests on a guess a
 recruiter can check in a minute.
+
+**Amended 2026-09-22 ([D-022](../11-decisions.md#d-022--an-inferred-funding-stage-may-draw-the-company-list-not-set-the-funding-stage-filter)).** Only a stage the
+document *states* reaches **Company Funding Stages**. The Axle row that morning
+named no round, Claude inferred Series A, and the saved search came back cut to
+Seed + Series A — narrower than the `seed,series_a,series_b,series_c` Juicebox's
+own AI had chosen — under a row that said OK. An inferred stage now draws the
+Companies list and nothing else; the select is left alone, and the row says so
+and asks for `Stage: <round>` in the `Client JD`. The mock in
+`tests/fixtures/pages/mock-juicebox-stages.html` carries that pre-selection, so
+the rule is pinned offline (`tests/test_juicebox_sourcing_browser.py`).
 
 - **Companies** is an autocomplete whose *first* suggestion is always
   `Ask AI for "<name>"`, which contains the name and is never the answer. An
@@ -304,6 +314,50 @@ python -m app.cli search-criteria --search <url> --restore <backup.json>
 
 The existing criteria are written to `ARTIFACT_DIR/juicebox-criteria/` before
 anything is saved, and `--restore` puts them back.
+
+### The empty ranking of 2026-09-22
+
+A production run saved the search — 12 job titles, 14 skills, 28 companies,
+funding stages — and left the criteria list **empty**, reporting it as one
+clause on a row that otherwise read OK:
+
+> search criteria not set: Could not add another criterion row.
+
+That sentence could not be diagnosed, because it stood for every way the lookup
+could fail: the dialog not matching, the button renamed, decorated or greyed
+out, or its actions portalled out of the paper. Which one fired that day cannot
+now be recovered — the stage saved no screenshot.
+
+What changed, all of it proven against
+[a mock MUI dialog](../../tests/fixtures/pages/mock-juicebox-criteria.html) and
+**none of it against the live screen**:
+
+- The dialog is recognised by its `textarea[id^=criterion_]` rows first, then a
+  heading containing "criteri" — so `Search Criteria`, or a preset bar rendered
+  above the title, no longer ends the run with "The Criteria dialog did not
+  open".
+- A button is matched on normalised, case-insensitive text with a leading `+` or
+  icon ligature stripped, and on `aria-label` for an icon-only button. The search
+  widens from the paper to the `MuiDialog-root`, so actions portalled beside the
+  paper still count as this dialog's.
+- A refused click reports **which** condition failed, with the button labels the
+  dialog actually offers — that list is what to paste back here when Juicebox
+  renames something.
+- **Rows are filled before the next is added.** Juicebox greys `Add Criterion`
+  out while the last row is blank; adding all the rows first walked into that
+  and then blamed a cap. A click on a disabled button is a silent no-op, so the
+  old code was told it had succeeded.
+- The dialog is polled for, not waited on once, and the read no longer accepts a
+  half-mounted dialog as a search with no criteria.
+- The failure now leads the row's notes ("SEARCH CRITERIA NOT WRITTEN …") and
+  leaves a screenshot. The outcome stays `Posted` — the sequence did save, and
+  failing the row would invite a second post.
+
+Still unknown, and only a live screen can settle it: the real button's label,
+whether its `DialogActions` sit inside the paper, and whether `Add Criterion` is
+disabled on a blank row. Run
+`python -m app.cli search-criteria --search <url> --headed` and record what the
+dialog offers here.
 
 ## The sequence editor (2026-08-27)
 
@@ -470,3 +524,17 @@ shape as Loxo. Never read an empty page as failure before 30s.
 2. One read-only probe: open the app, dump controls, editors and network calls.
    Nothing clicked that creates or sends.
 3. Fill this brief in, then write the recipe.
+
+## Unattended sign-in (2026-09-21)
+
+`platforms/juicebox.yaml` carries `login.steps` for an email + password form
+(`JUICEBOX_LOGIN_USERNAME` / `_PASSWORD`;
+[D-021](../11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in)).
+**The form has not been seen.** A bare headless visit to `app.juicebox.ai` on
+2026-09-21 rendered only the cookie banner in 20 seconds, so the selectors are
+the generic shape - `input[type=email]`, an optional Continue, `input[type=password]`,
+a Log in / Sign in / submit button - with fallbacks listed. The first
+`python -m app.cli relogin juicebox --headed --force` will show the real
+screen; replace the guesses with what it shows and note the markup here
+(remembered-accounts screen included: the app keeps
+`juicebox.rememberedAccounts.v1` and may offer the account as a tile first).

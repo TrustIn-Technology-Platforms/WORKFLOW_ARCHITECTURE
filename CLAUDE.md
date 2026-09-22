@@ -26,6 +26,10 @@ named on the row, and writes the result back. See
   the row's `Error` column and read by a recruiter — say what went wrong and what
   to do about it. Stack traces go to the log.
 - **Adapters return `PostResult`; only the orchestrator writes to Notion.**
+- **Credentials reach code only through `get_settings().credentials_for(key)`.**
+  The `<KEY>_LOGIN_*` variables are service secrets. They never appear in a
+  recipe, a log line, a row, an artifact name or a test fixture; an error that
+  might quote one goes through `relogin.scrub` first.
 - **Never commit `.env`, `.sessions/` or `artifacts/`.** Session files hold live
   auth cookies.
 
@@ -62,6 +66,19 @@ posting once by hand. Format spec:
   as though the code exists is worse than nothing.
 
 ## Current priority
+
+**First: prove the unattended sign-in, one platform at a time (built
+2026-09-21, [D-021](docs/11-decisions.md)).** The service now keeps its own
+logins alive and signs in again with stored credentials, but the four recipes'
+`login.steps` were written from the public sign-in pages and have never met the
+live screens. For each platform: set its `<KEY>_LOGIN_*` variables in `.env`,
+run `python -m app.cli relogin <key> --headed --force`, fix what differs in
+`platforms/<key>.yaml`, record the screens in `docs/platforms/<key>.md`. Loxo
+only where the live profile is (one session on two machines dies). Then set the
+variables on Railway, watch the first `keepalive.results` in `/health` show
+every platform alive, and unregister the laptop's `TrustIn session keepalive`
+task. Until that is done the laptop task keeps running and the service falls
+back to the old "run login" message.
 
 The posting half runs in production. The sourcing half is now code-complete
 except for one surface, and what is left needs a person at a keyboard because

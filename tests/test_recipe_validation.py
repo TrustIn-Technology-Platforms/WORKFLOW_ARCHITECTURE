@@ -74,3 +74,87 @@ def test_one_bad_recipe_does_not_hide_the_others(tmp_path):
         load_recipes(_Settings())
 
     assert "bad.yaml" in str(caught.value)
+
+
+# -- login steps: the sign-in the service replays ------------------------------------
+
+LOGIN_STUB = """
+key: stub
+label: Stub
+kind: advert
+enabled: false
+
+login:
+  url: https://example.com/
+  ready_selector: "#user-menu"
+  steps:
+{steps}
+
+steps:
+  - action: goto
+    url: https://example.com/jobs/new
+"""
+
+
+def test_login_steps_reach_the_credentials_and_load(tmp_path):
+    steps = """
+    - action: goto
+      url: https://example.com/login
+    - action: fill
+      selector: "#email"
+      value: "{{ username }}"
+    - action: fill
+      selector: "#password"
+      value: "{{ password }}"
+    - action: fill
+      selector: "#code"
+      value: "{{ otp }}"
+      optional: true
+    - action: microsoft_sso
+      username: "{{ username }}"
+      password: "{{ password }}"
+      totp_secret: "{{ totp_secret }}"
+"""
+    recipe = load_recipe(_write(tmp_path, "stub.yaml", LOGIN_STUB.format(steps=steps)))
+    assert [s.action for s in recipe.login.steps] == ["goto", "fill", "fill", "fill", "microsoft_sso"]
+    assert all(s.phase == "login" for s in recipe.login.steps)
+    # Login steps are not run steps: the Steps column and submit rules ignore them.
+    assert [s.phase for s in recipe.all_steps] == ["steps"]
+
+
+def test_login_steps_cannot_read_the_document(tmp_path):
+    """A sign-in that depends on which row is running is not a sign-in."""
+    steps = """
+    - action: fill
+      selector: "#email"
+      value: "{{ advert.title }}"
+"""
+    with pytest.raises(PipelineError) as caught:
+        load_recipe(_write(tmp_path, "stub.yaml", LOGIN_STUB.format(steps=steps)))
+    message = str(caught.value)
+    assert "login[1] fill" in message
+    assert "unknown root 'advert'" in message
+    assert "username" in message  # the known roots are listed
+
+
+def test_login_steps_cannot_carry_the_submit_marker(tmp_path):
+    steps = """
+    - action: click
+      selector: "#login"
+      submit: true
+"""
+    with pytest.raises(PipelineError) as caught:
+        load_recipe(_write(tmp_path, "stub.yaml", LOGIN_STUB.format(steps=steps)))
+    assert "login[1]: a login step cannot set submit: true" in str(caught.value)
+
+
+def test_every_shipped_recipe_carries_login_steps():
+    """The service can only sign in where the recipe says how. All four
+    platforms have a flow written down, proven or not."""
+    from pathlib import Path as _P
+
+    class _Settings:
+        platform_config_dir = _P(__file__).parent.parent / "platforms"
+
+    recipes = load_recipes(_Settings())
+    assert {k for k, r in recipes.items() if r.login.steps} >= {"noon", "loxo", "juicebox", "wellfound"}

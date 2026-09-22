@@ -48,6 +48,11 @@ Service → **Variables**:
 | `DRY_RUN` | `false` | `true` to rehearse without posting |
 | `LOG_JSON` | `true` | structured logs for Railway |
 | `HEADLESS` | `true` | already defaulted in the image |
+| `NOON_LOGIN_USERNAME` / `NOON_LOGIN_PASSWORD` / `NOON_LOGIN_TOTP_SECRET` | the automation's Microsoft account | lets the service sign noon in again by itself; the seed is the authenticator app's base32 secret |
+| `LOXO_LOGIN_*` | same account | Loxo signs in through "Continue with Microsoft" |
+| `JUICEBOX_LOGIN_USERNAME` / `_PASSWORD` | the Juicebox login | email + password, no SSO |
+| `WELLFOUND_LOGIN_USERNAME` / `_PASSWORD` | the recruiter account | needs a password set on Wellfound, not Google-only |
+| `SESSION_KEEPALIVE_HOURS` | `24` | how often the service visits every platform and renews its session; `0` off |
 
 `PORT` is injected by Railway — do not set it. Do **not** set `SESSION_DIR` /
 `BROWSER_PROFILE_DIR` / `ARTIFACT_DIR`; the image already points them at `/data`.
@@ -77,9 +82,17 @@ upload stays small) and POSTs them to the service's secret-gated
 `/admin/import-sessions` endpoint, which unpacks them onto `/data`. Re-running
 it replaces what's there, which is how you refresh an expired login.
 
-The profiles are the live sessions; they expire (roughly every couple of weeks,
-sooner if a platform invalidates them), so this step recurs. `GET /health` and
-a failed run's `Error` column both surface an expired session quickly.
+The profiles are the live sessions. **This upload is a one-time step per
+platform** (since 2026-09-21): with the `<KEY>_LOGIN_*` variables set, the
+service visits every platform every `SESSION_KEEPALIVE_HOURS`, and signs in
+again by itself when a session has ended - on the timer or at the start of a
+row. `GET /health` shows the last round under `keepalive`; `POST
+/admin/keepalive?platform=<key>` (same secret header as the webhook) runs one
+now. Do **not** keep re-uploading from a laptop afterwards: a push replaces the
+server's live profile with the laptop's copy, and one Loxo session used from
+two machines dies. Remove the laptop's scheduled task
+(`Unregister-ScheduledTask -TaskName "TrustIn session keepalive" -Confirm:$false`)
+once the first round shows every platform alive.
 
 ## 5. Verify
 

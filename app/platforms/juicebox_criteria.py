@@ -25,10 +25,15 @@ Mechanics that matter:
   plus an `input` event is what React's onChange listens to — the same trick the
   sequence driver needs for the sequence name.
 - `Add Criterion` grows the list; `Update` commits it. Nothing is saved until
-  Update, so a dry run can open the dialog and read without risk.
+  Update, so a dry run can open the dialog and read without risk. Each row is
+  filled before the next is added, because Juicebox greys `Add Criterion` out
+  while the last row is blank — and a click on a disabled button reports success.
 - The page carries an Osano cookie dialog that is also `role=dialog` and comes
-  first in the DOM, so the criteria dialog is found by its heading, never by
-  role alone.
+  first in the DOM, so the criteria dialog is found by its rows and its heading,
+  never by role alone.
+- Every lookup that can fail says *which* condition failed. On 2026-09-22 a run
+  saved a search and left its ranking empty behind one sentence — "Could not add
+  another criterion row" — that fitted four unrelated faults equally well.
 """
 
 from __future__ import annotations
@@ -55,10 +60,53 @@ APP = "https://app.juicebox.ai"
 # and keeps the ranking meaningful.
 MAX_CRITERIA = 10
 
-# The dialog is identified by its heading: Osano's cookie banner is also
-# role=dialog and sits earlier in the DOM.
-DIALOG = """() => [...document.querySelectorAll('[class*=MuiDialog-paper],[role=dialog]')]
-  .find(el => (el.innerText || '').trim().startsWith('Criteria')) || null"""
+ADD_LABEL = "Add Criterion"
+SAVE_LABEL = "Update"
+
+# Juicebox paints late enough that a fixed wait reads a half-mounted dialog as
+# an empty one (2026-09-22: "0 criteria before", then the first Add failed).
+DIALOG_WAIT_MS = 12_000
+DIALOG_POLL_MS = 1_000
+# A new row appears as soon as React re-renders; the wait is for the re-render,
+# not the network.
+ROW_WAIT_MS = 5_000
+ROW_POLL_MS = 250
+
+# Shared by every lookup below, so the module does not contradict itself about
+# how the dialog is recognised - which it did until 2026-09-22, when the button
+# lookup demanded an exact innerText the heading lookup already normalised.
+JS_HELPERS = """
+  const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const panes = () => [...document.querySelectorAll('[class*=MuiDialog-paper],[role=dialog]')];
+  const titleOf = (el) => {
+    const h = el.querySelector('[class*=MuiDialogTitle],h1,h2,h3,h4,h5,h6');
+    return norm(h ? h.innerText : norm(el.innerText).slice(0, 60));
+  };
+  // The rows are the one signal that cannot be renamed. A heading is checked
+  // second because a search with no criteria yet has no rows, and Osano's
+  // cookie banner - also role=dialog, also earlier in the DOM - has neither.
+  const isCriteria = (el) => !!el.querySelector('textarea[id^=criterion_]')
+    || /criteri/i.test(titleOf(el))
+    || norm(el.innerText).toLowerCase().startsWith('criteri');
+  const criteriaDialog = () => panes().find(isCriteria) || null;
+"""
+
+DIALOG_INFO = "() => {" + JS_HELPERS + """
+  const hit = criteriaDialog();
+  const labelled = (el) => norm(el.innerText)
+    || norm(el.getAttribute('aria-label') || el.getAttribute('title') || '');
+  return {
+    found: !!hit,
+    title: hit ? titleOf(hit) : '',
+    rows: hit ? hit.querySelectorAll('textarea[id^=criterion_]').length : 0,
+    // Buttons say the dialog has finished mounting, which matters for a search
+    // whose criteria list is legitimately empty.
+    ready: hit ? [...(hit.closest('[class*=MuiDialog-root]') || hit)
+      .querySelectorAll('button,[role=button]')]
+      .some(el => /update|criterion/i.test(labelled(el))) : false,
+    titles: panes().map(titleOf).filter(Boolean).slice(0, 6),
+  };
+}"""
 
 READ = """() => {
   const rows = [...document.querySelectorAll('textarea[id^=criterion_]')]
@@ -79,15 +127,58 @@ WRITE = """([id, text]) => {
   return true;
 }"""
 
-CLICK_IN_DIALOG = """(label) => {
-  const dialog = [...document.querySelectorAll('[class*=MuiDialog-paper],[role=dialog]')]
-    .find(el => (el.innerText || '').trim().startsWith('Criteria'));
-  if (!dialog) return false;
-  const button = [...dialog.querySelectorAll('button,[role=button]')]
-    .find(el => (el.innerText || '').trim() === label);
-  if (!button) return false;
-  button.click();
-  return true;
+# Returns WHY it failed, never a bare false. The recruiter reads that reason on
+# the row, and "Could not add another criterion row" stood for four unrelated
+# faults - a closed dialog, a renamed button, a greyed-out one, and buttons
+# portalled out of the paper - which is why 2026-09-22 could not be diagnosed.
+CLICK_IN_DIALOG = "(label) => {" + JS_HELPERS + """
+  const want = label.toLowerCase();
+  // A leading '+' or icon glyph is decoration; MUI puts a material-icons
+  // ligature inside the button, so its innerText reads 'addAdd Criterion'.
+  const strip = (s) => s.toLowerCase().replace(/^[^a-z0-9]+/, '').trim();
+  const labelled = (el) => norm(el.innerText)
+    || norm(el.getAttribute('aria-label') || el.getAttribute('title') || '');
+  const score = (el) => {
+    const t = strip(norm(el.innerText));
+    const a = strip(norm(el.getAttribute('aria-label') || el.getAttribute('title') || ''));
+    if (t === want || a === want) return 3;
+    if (t.endsWith(want) || a.endsWith(want)) return 2;
+    if (t.startsWith(want) || a.startsWith(want)) return 1;
+    return 0;
+  };
+  const off = (el) => el.disabled === true
+    || el.getAttribute('aria-disabled') === 'true'
+    || /Mui-disabled/.test(el.className || '');
+  const pick = (scope) => [...scope.querySelectorAll('button,[role=button]')]
+    .map(el => ({el: el, s: score(el), dis: off(el)}))
+    .filter(c => c.s > 0)
+    .sort((a, b) => b.s - a.s);
+
+  const dialog = criteriaDialog();
+  if (!dialog) {
+    return {ok: false, reason: 'no-dialog', label: label,
+            titles: panes().map(titleOf).filter(Boolean).slice(0, 6)};
+  }
+  // MUI renders DialogActions inside the paper, but a portal can put them
+  // beside it in the dialog root: both are still this dialog's own buttons.
+  const root = dialog.closest('[class*=MuiDialog-root]') || dialog;
+  // De-duplicated: one 'Delete criterion' per row would fill the sentence the
+  // recruiter reads with the same word eight times.
+  const buttons = [...new Set([...root.querySelectorAll('button,[role=button]')]
+    .map(labelled).filter(Boolean))].slice(0, 12);
+  const found = pick(root);
+  if (!found.length) {
+    const outside = pick(document.body).length > 0;
+    return {ok: false, reason: outside ? 'outside-dialog' : 'no-button',
+            label: label, buttons: buttons, title: titleOf(dialog)};
+  }
+  const live = found.find(c => !c.dis);
+  if (!live) {
+    return {ok: false, reason: 'disabled', label: label, buttons: buttons,
+            found: labelled(found[0].el), title: titleOf(dialog)};
+  }
+  live.el.click();
+  return {ok: true, reason: 'clicked', label: label, found: labelled(live.el)};
 }"""
 
 OPEN_CRITERIA = """() => {
@@ -121,14 +212,24 @@ class SearchCriteriaReport:
     before: list[str] = field(default_factory=list)
     after: list[str] = field(default_factory=list)
     saved: bool = False
+    dry_run: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
-        return (
-            f"{len(self.before)} criteria before, {len(self.after)} after; "
-            f"{'saved' if self.saved else 'not saved'}"
-        )
+        # "0 criteria before, 8 after; not saved" reads like progress. It is the
+        # sentence a recruiter saw on 2026-09-22 for a search that ranks nobody.
+        if self.dry_run:
+            return (
+                f"dry run: {len(self.before)} criteria on the search, "
+                f"{len(self.after)} drafted; nothing written"
+            )
+        if not self.saved:
+            return (
+                f"NOT SAVED - the search still ranks by its {len(self.before)} "
+                f"old criteria, not the {len(self.after)} drafted for this role"
+            )
+        return f"{len(self.before)} criteria before, {len(self.after)} after; saved"
 
 
 def rank_criteria(draft, *, limit: int = MAX_CRITERIA) -> list[str]:
@@ -175,15 +276,71 @@ async def _wait_for_shell(page: "Page", *, attempts: int = 14) -> bool:
     return False
 
 
+def _quoted(items: object, empty: str = "none") -> str:
+    values = [str(item).strip() for item in (items or []) if str(item).strip()]  # type: ignore[union-attr]
+    return ", ".join(f"'{value}'" for value in values) or empty
+
+
+def _click_failure(result: dict) -> str:
+    """Turn a refused click into a sentence the recruiter can act on.
+
+    Four faults used to share one message. Each names what was found, because
+    the criteria stage saves no screenshot the reader could check instead.
+    """
+    label = str(result.get("label") or ADD_LABEL)
+    reason = str(result.get("reason") or "")
+    if reason == "no-dialog":
+        return (
+            f"The Criteria dialog closed before '{label}' could be clicked, so "
+            "the criteria were never written and the search is unchanged. "
+            f"Dialogs open on the page: {_quoted(result.get('titles'))}. Set the "
+            "criteria on the search by hand."
+        )
+    if reason == "disabled":
+        return (
+            f"Juicebox's '{result.get('found') or label}' button is greyed out, so "
+            "the criteria list could not be grown - Juicebox does that while a "
+            "criterion row is still blank. Open the search, fill or delete any "
+            "blank criterion, then set the criteria."
+        )
+    if reason == "outside-dialog":
+        return (
+            f"A button labelled '{label}' exists on the page but not inside the "
+            "Criteria dialog, so clicking it could have hit the wrong control. "
+            f"The dialog itself offers: {_quoted(result.get('buttons'))}. Set the "
+            "criteria by hand and pass those button names to the developer."
+        )
+    return (
+        f"The Criteria dialog has no '{label}' button. It offers: "
+        f"{_quoted(result.get('buttons'))}. Juicebox has renamed or moved it - "
+        "set the criteria by hand and pass those names to the developer."
+    )
+
+
 async def _open_dialog(page: "Page") -> list[str]:
     if not await page.evaluate(OPEN_CRITERIA):
         raise PlatformError(
             "The search's Criteria button was not found. Juicebox may have "
             "changed the search page, or the search did not finish loading."
         )
-    await page.wait_for_timeout(5_000)
-    if not await page.evaluate(DIALOG):
-        raise PlatformError("The Criteria dialog did not open.")
+    # Poll rather than wait once: a dialog read before its rows mount looks like
+    # a search with no criteria, and the backup then saves an empty list.
+    # The rows are what the wait is for, so an empty list costs the whole budget
+    # rather than being believed the moment the dialog frame appears.
+    info: dict = {}
+    waited = 0
+    while waited < DIALOG_WAIT_MS:
+        await page.wait_for_timeout(DIALOG_POLL_MS)
+        waited += DIALOG_POLL_MS
+        info = await page.evaluate(DIALOG_INFO)
+        if info.get("found") and info.get("rows"):
+            break
+    if not info.get("found"):
+        raise PlatformError(
+            "The Criteria dialog did not open: no dialog on the page holds the "
+            f"criteria list. Dialogs found: {_quoted(info.get('titles'))}. Open "
+            "the search and check Juicebox has not changed the dialog."
+        )
     rows = await page.evaluate(READ)
     return [row["value"] for row in rows]
 
@@ -220,23 +377,57 @@ async def read_criteria(page: "Page", search_url: str) -> list[str]:
     return await _open_dialog(page)
 
 
-async def _write_list(page: "Page", ranked: list[str]) -> list[str]:
-    """Fill the dialog's rows with `ranked`, growing the list if it is short."""
-    rows = await page.evaluate(READ)
-    for _ in range(max(0, len(ranked) - len(rows))):
-        if not await page.evaluate(CLICK_IN_DIALOG, "Add Criterion"):
-            raise PlatformError("Could not add another criterion row.")
-        await page.wait_for_timeout(900)
+async def _add_row(page: "Page", have: int, wanted: int) -> list[dict]:
+    """Click Add Criterion and wait for the row it promises to exist."""
+    result = await page.evaluate(CLICK_IN_DIALOG, ADD_LABEL)
+    if not result.get("ok"):
+        raise PlatformError(_click_failure(result))
+    waited = 0
+    while waited < ROW_WAIT_MS:
+        await page.wait_for_timeout(ROW_POLL_MS)
+        waited += ROW_POLL_MS
+        rows = await page.evaluate(READ)
+        if len(rows) > have:
+            return rows
+    # The button was there, enabled, and clicked - and nothing appeared. That is
+    # a cap, and it is the only reading left once the click itself is accounted
+    # for; before 2026-09-22 a missing button reported this same sentence.
+    raise PlatformError(
+        f"Juicebox stopped at {have} criterion rows and {wanted} were drafted: "
+        f"clicking '{ADD_LABEL}' added nothing, so the search caps the list at "
+        f"{have}. Nothing was saved - open the search and either add the "
+        "remaining rows by hand or keep the top ones."
+    )
 
-    rows = await page.evaluate(READ)
-    if len(rows) < len(ranked):
+
+async def _write_list(page: "Page", ranked: list[str]) -> list[str]:
+    """Fill the dialog's rows with `ranked`, growing the list as it goes.
+
+    A row is filled before the next is added, not after all of them: Juicebox
+    greys Add Criterion out while the last row is blank, and a click that adds
+    nothing then points at the row it stopped on rather than at a total that
+    came up short much later.
+    """
+    info = await page.evaluate(DIALOG_INFO)
+    if not info.get("found"):
+        # The drafting call between reading and writing takes tens of seconds
+        # with the page idle, which is long enough for the dialog to go.
         raise PlatformError(
-            f"Juicebox offers {len(rows)} criterion rows but {len(ranked)} were "
-            "drafted; it may cap the list."
+            "The Criteria dialog is no longer open, so nothing was written and "
+            "the search still has the criteria it started with. Set them on the "
+            "search by hand."
         )
-    for row, text in zip(rows, ranked):
+    rows = await page.evaluate(READ)
+    for index, text in enumerate(ranked):
+        if index >= len(rows):
+            rows = await _add_row(page, len(rows), len(ranked))
+        row = rows[index]
         if not await page.evaluate(WRITE, [row["id"], text]):
-            raise PlatformError(f"Could not write into {row['id']}.")
+            raise PlatformError(
+                f"Criterion {index + 1} could not be typed into the dialog: its "
+                f"row ({row['id']}) disappeared mid-write. Nothing was saved - "
+                "re-open the search and set the criteria there."
+            )
         await page.wait_for_timeout(250)
     return rows
 
@@ -254,8 +445,9 @@ async def restore_criteria(page: "Page", search_url: str, backup_path: str) -> l
 
     await read_criteria(page, search_url)  # opens the dialog
     await _write_list(page, criteria)
-    if not await page.evaluate(CLICK_IN_DIALOG, "Update"):
-        raise PlatformError("The Criteria dialog's Update button was not found.")
+    saved = await page.evaluate(CLICK_IN_DIALOG, SAVE_LABEL)
+    if not saved.get("ok"):
+        raise PlatformError(_click_failure(saved))
     await page.wait_for_timeout(8_000)
     log.info("juicebox criteria restored", extra={"count": len(criteria)})
     return criteria
@@ -272,7 +464,7 @@ async def set_criteria(
 ) -> SearchCriteriaReport:
     """Rebuild a search's criteria from the advert and save them."""
     settings = settings or get_settings()
-    report = SearchCriteriaReport(search_url=search_url)
+    report = SearchCriteriaReport(search_url=search_url, dry_run=dry_run)
 
     if not configured(settings):
         raise PlatformError(
@@ -330,8 +522,9 @@ async def set_criteria(
             "were - the drafted list was shorter"
         )
 
-    if not await page.evaluate(CLICK_IN_DIALOG, "Update"):
-        raise PlatformError("The Criteria dialog's Update button was not found.")
+    saved = await page.evaluate(CLICK_IN_DIALOG, SAVE_LABEL)
+    if not saved.get("ok"):
+        raise PlatformError(_click_failure(saved))
     await page.wait_for_timeout(8_000)
     report.saved = True
 

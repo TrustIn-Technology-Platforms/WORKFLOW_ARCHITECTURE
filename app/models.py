@@ -189,6 +189,35 @@ class ParsedDocument:
 
 
 @dataclass(slots=True)
+class Credentials:
+    """A platform login the service may type for itself.
+
+    Held as a Railway secret and read through `Settings.credentials_for`; never
+    written to a recipe, a log line, a row or an artifact. `repr` masks the
+    secrets so an accidental `%r` in a log cannot leak them.
+    """
+
+    platform: str
+    username: str
+    password: str
+    # Base32 seed of a TOTP authenticator registered on the account. Empty when
+    # the platform enforces no second factor - or enforces one this cannot
+    # answer, in which case the login says so.
+    totp_secret: str = ""
+
+    def __repr__(self) -> str:
+        return (
+            f"Credentials(platform={self.platform!r}, username={self.username!r}, "
+            f"password='***', totp_secret={'***' if self.totp_secret else ''!r})"
+        )
+
+    @property
+    def secrets(self) -> list[str]:
+        """Every value that must never appear in text a person reads."""
+        return [s for s in (self.password, self.totp_secret) if s]
+
+
+@dataclass(slots=True)
 class PostResult:
     platform: str
     outcome: Outcome

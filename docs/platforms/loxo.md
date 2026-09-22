@@ -599,3 +599,21 @@ Two things the run settled that the docs did not know:
    `python -m app.cli loxo-source --job 3658508 --doc <file> --location "New
    York" --live --headed`. Correct the bundle-derived section above from what
    the screen shows, and push the fresh session to Railway afterwards.
+
+## Unattended sign-in (2026-09-21)
+
+`platforms/loxo.yaml` carries `login.steps`: `/login`, the **Continue with
+Microsoft** button (the account is nicholas@, an Entra identity - the same
+route the 2026-08-27 capture "with 2FA" took), one `microsoft_sso` step, then
+a wait for an app URL. Loxo redirects the same tab rather than opening a popup.
+Credentials `LOXO_LOGIN_USERNAME` / `_PASSWORD` / `_TOTP_SECRET`
+([D-021](../11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in)).
+
+**Unproven against the live screens**, and the proving run has a rule of its
+own here: one Loxo session used from two machines dies
+([the session that died](#the-session-that-died-2026-09-02)), so run
+`relogin loxo --headed --force` only where the live profile is - or accept
+that the laptop's run replaces the server's session and push once afterwards.
+If Loxo's own 2FA (not Microsoft's) turns out to be an emailed code, the
+steps cannot answer it and will say so; switch the account to an authenticator
+app.

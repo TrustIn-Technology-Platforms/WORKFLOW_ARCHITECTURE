@@ -102,6 +102,74 @@ writes fire: `create_project`, `create_role`, `template_update` (a default
 campaign: InMail now → Email +2d → Email +4d, placeholder copy) and
 `update_role`. The URL becomes `/portal/sourcing?role=<uuid>`.
 
+### The Submit that is not the modal's (fixed 2026-09-22, unproven live)
+
+On Railway, 2026-09-16, this step killed a row. The typed name already existed,
+so the modal offered `Create a new role anyway` and no `Submit` — but the
+recipe's first candidate was `text='Submit'`, which matched a greyed-out
+`cursor-not-allowed` Submit on the inbox page *behind* the modal. The red
+`Chrome extension not detected` toast (`div[direction=up]`, `#ffe4e4`) sat over
+it and ate the clicks; Playwright retried 51 times and timed out at 25 s.
+
+Three things changed in `platforms/noon.yaml`:
+
+- **A dismiss step for the toast**, scoped to the toast itself. It must stay
+  scoped — a bare `[aria-label='Close']` would close the Create New Role modal.
+- **The Submit candidates reordered narrowest-first**, led by `Create a new role
+  anyway` and then the Submit inside the nearest ancestor of the name field that
+  contains one. That last one resolves correctly against every modal shape noon
+  could plausibly be built from; the bare `text='Submit'` is now the last resort
+  rather than the first guess.
+- **`force: true`** — then removed again, see below.
+
+### `force` was the wrong answer (2026-09-22)
+
+`force: true` went on that click on the theory that the toast might have no
+close control and force would push through it. It does not. `force` skips
+Playwright's interception *check*, not the dispatch: the event is still
+delivered at the target's centre point, so whatever is painted there receives
+it. Measured against the mock — `window.__clicks == ['toast']`,
+`window.__submitted` false, **no exception raised**.
+
+That is worse than not forcing. The click silently misses, `engine.py` sets
+`report.submitted = True` because the handler returned, and the run dies 40 s
+later at the `wait_for` on `Review & Contact` — so the message the recruiter
+reads on the row names the wrong step and the row claims a role was created.
+Without force the dismiss step does the real work, and if it ever misses, the
+failure lands on the Submit step and says
+`<div … direction="up"> intercepts pointer events` — the Railway symptom,
+at the place it happened.
+
+`force` is gone from that one step. The campaign-editor steps further down keep
+theirs; those are hover-opacity targets, not overlays.
+
+### What holds this now
+
+`tests/test_noon_role_modal.py` drives the real `find` / `action_click` /
+`action_dismiss` against `tests/fixtures/pages/mock-noon-role-modal.html`, a
+reconstruction of the 2026-09-16 screen. It loads the step out of
+`platforms/noon.yaml` rather than copying the selectors, so reordering the
+ladder fails the suite. It asserts, side by side, that the bare `text='Submit'`
+still reaches the greyed-out decoy and that the ladder as written reaches the
+modal's own control — in both the fresh-name and the name-clash variants — that
+the toast genuinely intercepts an unforced click, that force does not beat it,
+and that the scoped dismiss leaves the modal standing where an unscoped one
+destroys it.
+
+**The markup is a reconstruction, not the screen.** Three things only a live
+headed run can settle, and they belong with the noon posting run already queued:
+
+1. whether the real toast's first descendant `button` is its close control —
+   the dismiss step takes `.first`, and `action_dismiss` swallows a wrong click
+   silently;
+2. whether the real toast carries `direction="up"` at all, and whether the real
+   modal's Submit sits inside a wrapper that also contains the name field, which
+   is what the ancestor-hop candidate needs;
+3. the real DOM order of the decoy versus the modal.
+
+If it still dead-ends here, capture the modal's DOM before changing anything
+else.
+
 ## The live run, 2026-08-27
 
 Done headless with the saved profile on a throwaway role, `ZZ TEST - delete me`
@@ -250,7 +318,8 @@ Every call below is one the portal makes itself, in this order:
 
 | Step | Call | Payload | Returns |
 |------|------|---------|---------|
-| 1 | `generate_params` | `{token, jd, role, role_name}` (+`dont_save` to rehearse) | `{must_haves, nice_to_haves, titles, location, yoe, company_specs, client_name_in_jd, requires_visa_sponsorship}` — and saves the search parameters onto the role |
+| 1 | `generate_params` | `{token, jd, role, role_name}` (+`dont_save` to rehearse) | `{must_haves, nice_to_haves, titles, location, yoe, company_specs, client_name_in_jd, requires_visa_sponsorship}` — extraction only; it caches the JD but does **not** save the location (corrected 2026-09-22) |
+| 3 | `update_role` | `{token, role, name, preferences}` with `preferences.location` set, the rest of the block carried through | — (the location write; read back through `refetch_roles`) |
 | 2 | `set_candidate_source` | `{token, role, source}` | — |
 | 5 | `setup_clarifying_questions` | `{token, role, must_haves}` | — (warms the questions up) |
 | 5 | `gpt_stream` | `{newdemo: true, msg, prompt: null, role, company, source, v2: true}` | the criteria, one `*` bullet each |
@@ -280,9 +349,11 @@ travels untouched.
 
 `preferences.jd` is empty on all 125 roles because nothing writes it. The text
 goes in through `generate_params`, and noon keeps it as the role's cached job
-description (`cached_job_description`, `get_role_jd`); what it extracts lands on
-`preferences.location`, `preferences.type`, `preferences.experience` and
-`preferences.companySpecs`.
+description (`cached_job_description`, `get_role_jd`). What it extracts was
+believed to land on `preferences.location`, `preferences.type`,
+`preferences.experience` and `preferences.companySpecs` — **not the location**,
+as a live role proved on 2026-09-22; `save_location` writes that one. The other
+three have not been re-checked and should not be trusted either until they are.
 
 ### The search filters, and the preamble that sets them (2026-08-31)
 
@@ -330,22 +401,44 @@ Two changes, neither of which needs an endpoint we have not seen:
    starred. "Will accept £35-45k" is not something a profile can satisfy, so
    it would narrow the search to nobody while looking like diligence.
 
-**It is checked, not assumed.** `generate_params` returning a location is not
-the same as the location being saved, so `_check_preferences` reads
-`preferences` back off the role immediately afterwards — `generate_params` saves
-on its way through, so the role fetched next already reflects it. Three
-warnings can reach the Notion row:
+**The preamble alone did not do it (corrected 2026-09-22).** `generate_params`
+*extracts* the location; it does not save it. That it did was inferred from the
+name of its `dont_save` flag and was wrong — a live row on 2026-09-22 had noon
+quote the location back as "New York, Atlanta, Georgia, United States" while the
+role read back with `preferences.location` still `[]`, and the run started the
+search anyway and reported Posted. Every candidate on it came from the wrong
+pool. What `generate_params` saves is the cached job description.
+
+**So the location is written explicitly.** `save_location` sends the same
+`update_role {token, role, name, preferences}` the Create New Role modal's own
+Submit sends, recorded whole in `artifacts/live1/20-after-submit.json` — which
+is also where `preferences.location: []` at role creation comes from. The
+existing `preferences` block is amended and sent back whole, so keys this code
+does not know about travel untouched. This is the wizard's step 3, "Confirm the
+search criteria" — the one screen of the seven whose call was never mapped.
+
+**It is checked, not assumed.** The role is read back through `refetch_roles`,
+not `all_roles`: the latter answers from a cache and would serve the copy from
+before the write, which cannot tell a failed save from a slow one.
 
 | Warning | Means |
 |---------|-------|
 | `noon extracted no location from this job description` | nothing stated one — fill the row's `Location` column |
-| `noon read the location as X but did not save it` | extraction worked, the save did not — set it in the Control Panel |
+| `noon would not keep the location (X) … has NOT been started` | the write did not stick; the role is saved and idle — set the location in the Control Panel and press Start |
 | `noon extracted no job titles` | the role is matching on criteria alone |
 
-**Still unobserved:** the call that writes `preferences` directly. One probe of
-the role's Control Panel — network tab recording, change the location by hand —
-would give it, and then the preamble becomes a belt-and-braces measure rather
-than the mechanism.
+**An unrestricted search is not started.** If the location will not stick, the
+last `role_autopilot` goes out with `initialization: true` — the documented
+save-without-starting path — and the role sits idle rather than sourcing the
+world. Raising `PlatformError` would be quieter, not louder: `noon.py` catches
+one from the wizard into a warning and the row still reads Posted.
+
+**Still unproven:** no artifact in this repo holds a *populated*
+`preferences.location`, so whether noon accepts the plain strings
+`generate_params` returns or wants values resolved through its own location
+picker is a guess from the empty case. One Control Panel probe with the network
+tab recording settles it; until then the guard above is what makes a wrong guess
+safe.
 
 ## The API underneath
 
@@ -514,3 +607,22 @@ python -m app.cli post noon --doc ./advert.docx --live                          
 
 Note that a dry run still creates the role (that `Submit` is not the final
 one). Use a throwaway document title for dry runs and delete the role after.
+
+## Unattended sign-in (2026-09-21)
+
+The service can now sign noon in by itself when the session check bounces to
+`/log-in` ([D-021](../11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in)).
+The route is the **Sign in with Microsoft** button on `/log-in` - the account
+is an Entra identity and the "Last used" badge sits on that button
+(`artifacts/noon-loginpage.png`), so noon's own email box is not the path.
+Firebase opens Microsoft in a popup; the `microsoft_sso` step finds that tab,
+answers email, password, a verification code when the tenant asks for one, and
+"Stay signed in?", and returns when the popup closes itself. Steps in
+`platforms/noon.yaml` under `login.steps`; credentials `NOON_LOGIN_USERNAME` /
+`_PASSWORD` / `_TOTP_SECRET`.
+
+**Unproven against the live screens.** Written from the public `/log-in` and
+Microsoft's standard ids. To prove it once, on the machine whose profile is
+live: `python -m app.cli relogin noon --headed --force`. If the tenant's only
+second factor is Authenticator push approval the sign-in stops and says so;
+register a verification-code method on the account and store its seed.

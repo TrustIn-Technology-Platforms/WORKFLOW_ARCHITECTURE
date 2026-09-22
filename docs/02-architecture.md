@@ -46,7 +46,10 @@ Two rules keep this honest:
 | `app/sessions/store.py` | NOT STARTED | Saved `storage_state` per platform, freshness checks | `SessionStore` |
 | `app/platforms/browser.py` | NOT STARTED | Playwright lifecycle, context options, failure artifacts | `BrowserRunner` |
 | `app/platforms/recipe.py` | NOT STARTED | Load and validate a YAML recipe | `Recipe`, `load_recipes()` |
-| `app/platforms/engine.py` | NOT STARTED | Execute recipe steps against a page | `RecipeEngine.run()` |
+| `app/platforms/engine.py` | NOT STARTED | Execute recipe steps against a page | `RecipeEngine.run()`, `RecipeEngine.run_steps()` |
+| [app/platforms/relogin.py](../app/platforms/relogin.py) | BUILT 2026-09-21 | Replay a recipe's `login.steps` with the stored credentials; scrub secrets from what it reports | `login_with_credentials()`, `can_relogin()`, `why_not()`, `scrub()` |
+| [app/platforms/keepalive.py](../app/platforms/keepalive.py) | BUILT 2026-09-21 | Visit every platform, sign in again where needed, re-export the session; the round the service runs on a timer | `keepalive()`, `keepalive_platform()`, `KeepaliveResult` |
+| [app/utils/totp.py](../app/utils/totp.py) | BUILT 2026-09-21 | RFC 6238 codes for a login's second factor, standard library only | `totp_now()`, `seconds_left()` |
 | `app/platforms/registry.py` | NOT STARTED | Resolve a platform name on a row to an adapter | `get_adapter()` |
 | `app/pipeline.py` | NOT STARTED | Row, fetch, parse, post, write back | `process_row()`, `run_once()` |
 | `app/api.py` | NOT STARTED | FastAPI: webhook, manual trigger, health | `create_app()` |

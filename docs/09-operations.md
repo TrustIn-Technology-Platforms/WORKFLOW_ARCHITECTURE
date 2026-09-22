@@ -161,10 +161,29 @@ gated by the same `WEBHOOK_SECRET`; path traversal out of the artifact dir is a
 means the deployed image predates the endpoint — redeploy first.
 
 **Sessions expire** - noon weekly, Juicebox sooner - and idle sessions expire
-fastest, so the refresh is automated: the Windows scheduled task
-**`TrustIn session keepalive`** (`scripts/register_keepalive.ps1`) exercises
-every profile and re-uploads the exports every 2 days. Running the trigger from
-a workstation uses the local profiles directly and needs no upload at all:
+fastest. Since 2026-09-21 **the service keeps them alive itself**: a keepalive
+round every `SESSION_KEEPALIVE_HOURS` (24) visits every enabled platform on
+the volume's profile, signs in again with the stored `<KEY>_LOGIN_*`
+credentials when a session has ended, and re-exports the cookies. A row whose
+session check fails does the same before posting. So the upload above is a
+**one-time** step per platform, and the Windows task that used to refresh and
+re-upload every two days must be removed once the server is doing it - a push
+from the laptop overwrites the server's live profile
+([08-sessions-and-auth](08-sessions-and-auth.md#keeping-sessions-alive--from-the-server-2026-09-21)).
+
+```bash
+# What the server did last round - alive / signed in again / not logged in
+curl -s -H "X-Webhook-Secret: $WEBHOOK_SECRET" https://<app>.up.railway.app/admin/keepalive
+# Run a round now, for one platform or all, without spending a row
+curl -s -X POST -H "X-Webhook-Secret: $WEBHOOK_SECRET" "https://<app>.up.railway.app/admin/keepalive?platform=noon"
+
+# The same round locally, against the local profiles
+python -m app.cli keepalive                      # every enabled platform
+python -m app.cli relogin noon --headed --force  # prove one platform's sign-in steps
+```
+
+Running the trigger from a workstation uses the local profiles directly and
+needs no upload at all:
 
 ```bash
 python -m app.cli run --page <notion page url>   # one row
@@ -217,7 +236,11 @@ so keep row concurrency low on a small instance.
 | Notion 404 on a database that exists | Integration not connected | Share the database with the integration |
 | `Could not download the document` | Link not shared with anyone-with-the-link, or expired | Re-share and re-run the row |
 | `Could not open the .docx file` | The link points at a PDF or a Google-native doc that did not export | Confirm the source is a real `.docx` |
-| Every platform fails at once | Session expired, or a volume is not mounted | Re-capture logins; check `SESSION_DIR` |
+| Every platform fails at once | Sessions expired with no stored credentials, or a volume is not mounted | Set the `<KEY>_LOGIN_*` variables so the service signs in itself; check `SESSION_DIR`; read `keepalive.results` in `/health` |
+| `<Platform> is not logged in ... No stored login: set <KEY>_LOGIN_USERNAME and <KEY>_LOGIN_PASSWORD` | The session ended and the service had nothing to sign in with | Add the three variables on Railway (see [04-configuration](04-configuration.md#platform-credentials)), then `POST /admin/keepalive?platform=<key>` and read the result |
+| `the session had expired and the automatic sign-in failed - ... failed at login step N` | The recipe's `login.steps` no longer match the platform's sign-in screens, or the password is wrong | Pull the `<key>-failed` / `<key>-keepalive-failed` artifact, fix the step in `platforms/<key>.yaml`, prove it with `python -m app.cli relogin <key> --headed --force` |
+| `Microsoft wants the sign-in approved in the Authenticator app` | The Microsoft account's only second factor is push approval, which a service cannot answer | Register an authenticator app (verification code) on the account and set `<KEY>_LOGIN_TOTP_SECRET`; or have the tenant exempt the automation account |
+| `Wellfound is not logged in` while the saved screenshot plainly shows the recruiter area | The session check found none of its `ready_selector`s: Wellfound routed the check URL to its "Hand-picked for you" interstitial, which hides the nav labels (2026-09-16) | Fixed 2026-09-21: the recruiter logo link is a ready selector. If it recurs, add whatever is on the new page to `ready_selector` in `platforms/wellfound.yaml` |
 | `has no browser profile in <dir>` | The message names the directory it looked in. Under the checkout, the login was never captured. Under `/data`, the profile was never uploaded to the volume | Locally: `python -m app.cli login <key>`. On the server: capture on a workstation and copy it up — see [Getting the logins onto the server](#getting-the-logins-onto-the-server) |
 | One platform fails at the same step every time | The UI changed | Update the selector in `platforms/<key>.yaml` |
 | A `Posted` row's `Error` column reads `Posted OK. Notes: ...` | Not an error. A successful run writes the platforms' notes - the search it built, what a taxonomy refused, a stage Claude inferred - and without a `Notes` column they have nowhere else to go | Add a rich-text column called `Notes` (`PROP_NOTES`); `Error` then stays empty on success |
@@ -234,6 +257,9 @@ buried in a message string.
 Worth alerting on:
 
 - Any `AuthenticationRequired`, since it blocks every row for that platform.
+  With credentials stored it now means the automatic sign-in failed too, so
+  the message names what the account needs.
+- A `keepalive round finished` line whose `failed` list is not empty.
 - More than one `Failed` row in a poll cycle, which usually means a platform
   changed rather than a document being wrong.
 - Zero rows processed over a period when rows are known to be waiting.

@@ -136,13 +136,48 @@ supported state: the gaps stay empty and the run says which ones did.
 once at startup. Both are git-ignored; session files contain live auth cookies
 and must never be committed.
 
+## Sessions: the service keeps its own logins alive
+
+Since 2026-09-21 the deployed service exercises every saved login itself and,
+when one has ended, signs in again with credentials held as service secrets
+([D-021](11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in),
+[08-sessions-and-auth](08-sessions-and-auth.md)). Three settings govern it:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `SESSION_KEEPALIVE_HOURS` | `24` | How often the service visits every enabled platform on its saved profile, re-exports the cookies and, where needed, signs in again. Runs under the row lock, so never while a row is posting. `0` turns the timer off; `POST /admin/keepalive` still works. |
+| `SESSION_RELOGIN` | `true` | When a run's session check fails and the platform has credentials below, replay the recipe's `login.steps` and carry on. `false` restores the old behaviour: fail the row with the re-login message. |
+| `LOGIN_CHECK_SECONDS` | `90` | How long the pre-run session check waits for the logged-in shell before calling the session dead. The Railway container renders these apps in 15-45s; tests set it to a few seconds. |
+
+### Platform credentials
+
+One trio per platform, keyed by the recipe key. On Railway they are service
+variables (encrypted at rest, exposed to this service only); locally they go
+in `.env`. **Never in a recipe, a row, a log line or a commit** - `Credentials`
+masks itself in `repr`, the sign-in scrubs the values from any error it
+reports, and `/health` only ever says `true`/`false` per platform.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `NOON_LOGIN_USERNAME` | *(empty)* | The Microsoft (Entra) account noon is signed in with. Blank means "no automatic sign-in for noon". |
+| `NOON_LOGIN_PASSWORD` | *(empty)* | Its password. |
+| `NOON_LOGIN_TOTP_SECRET` | *(empty)* | Base32 seed of an authenticator app registered on that Microsoft account, for the "verification code" second factor. Blank when the tenant asks for none. Push approval in the Authenticator app cannot be answered by a service; the sign-in says so and steers to the code method when a seed exists. |
+| `LOXO_LOGIN_USERNAME` / `_PASSWORD` / `_TOTP_SECRET` | *(empty)* | Same three for Loxo, which signs in through "Continue with Microsoft" on the same account. |
+| `JUICEBOX_LOGIN_USERNAME` / `_PASSWORD` / `_TOTP_SECRET` | *(empty)* | Juicebox is email + password, no SSO. The seed is unused unless Juicebox turns 2FA on. |
+| `WELLFOUND_LOGIN_USERNAME` / `_PASSWORD` / `_TOTP_SECRET` | *(empty)* | The recruiter account's email and password. An account that only ever used "Continue with Google" needs a password set on Wellfound first. |
+
+A platform is able to sign itself in only when **both** its credentials are
+set **and** its recipe carries `login.steps`
+([07-platform-recipes](07-platform-recipes.md#the-login-block)). `/health`
+reports both as `credentials` and `relogin_steps`. Adding a platform means
+adding its three fields to `Settings` and three rows here.
+
 ## Service
 
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `WEBHOOK_SECRET` | *(empty)* | Shared secret for the inbound webhook. Requests are rejected when it is set and does not match. |
-| `SERVICE_URL` | *(empty)* | The deployed service's public URL (`https://<app>.up.railway.app`). Read by `scripts/push_sessions.py` and the keep-alive to upload fresh sessions to the volume; unset means refreshes stay local. |
-| `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read only by `scripts/push_sessions.py`, so re-uploading expired logins needs nothing pasted on the command line. |
+| `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read by `scripts/push_sessions.py` and `scripts/pull_artifacts.py`, so the first upload of a captured login and a download of a failure trace need nothing pasted on the command line. |
 | `PORT` | `8000` | Railway injects this. |
 | `POLL_LIMIT` | `10` | Maximum rows claimed per poll. Also caps the Notion query page size. |
 | `DRY_RUN` | `false` | Walk every step up to the final submit, then stop. Nothing is published and nothing is written back as posted. |

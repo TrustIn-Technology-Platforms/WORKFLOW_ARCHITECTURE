@@ -34,6 +34,34 @@ login:
   url: https://www.noon.ai/portal
   logged_out_pattern: "/log-in"
   session_file: noon.storage_state.json
+  # The unattended sign-in, replayed by the service when the check above fails
+  # and NOON_LOGIN_USERNAME / _PASSWORD are set. The account is a Microsoft
+  # (Entra) identity - the "Last used" badge on /log-in sits on "Sign in with
+  # Microsoft" - so the email box on noon's own form is not the route. noon
+  # opens Microsoft in a popup; `microsoft_sso` finds whichever tab that is.
+  # UNPROVEN against the live screens as of 2026-09-21: run
+  # `python -m app.cli relogin noon --headed --force` once and fix what differs.
+  steps:
+    - action: goto
+      url: https://www.noon.ai/log-in
+      wait_until: domcontentloaded
+    - action: wait
+      ms: 3000
+    - action: dismiss
+      selector:
+        - "text='Accept all'"
+        - "text='Dismiss'"
+    - action: click
+      selector: "text='Sign in with Microsoft'"
+    - action: microsoft_sso
+      username: "{{ username }}"
+      password: "{{ password }}"
+      totp_secret: "{{ totp_secret }}"
+      timeout_ms: 180000
+    - action: wait_for_url
+      description: back on the portal, signed in
+      pattern: "noon\\.ai/portal"
+      timeout_ms: 90000
 
 defaults:
   base_url: https://www.noon.ai
@@ -70,6 +98,21 @@ steps:
     selector: "[placeholder^='Search existing ATS roles']"
     value: "{{ role_name }}"
 
+  - action: dismiss
+    description: >-
+      the "Chrome extension not detected" toast. It sits over the bottom of the
+      modal and swallows pointer events - Playwright retried the Submit below 51
+      times against it before timing out (Railway, 2026-09-16). Every noon page
+      carries it, and this step is the only thing that gets it out of the way:
+      the click below cannot force its way through an overlay (see there).
+
+      Scoped to the toast on purpose. A bare [aria-label='Close'] closes the
+      Create New Role modal instead - it carries one too, earlier in the DOM,
+      and action_dismiss swallows whatever it hits.
+    selector:
+      - "[direction=up] button"
+      - "div:has-text('Chrome extension not detected') >> nth=-1 >> button"
+
   - action: click
     description: >-
       creates the role. Nothing before this point changes anything, so dry-run
@@ -77,9 +120,39 @@ steps:
       replaces Submit with "Create a new role anyway" (seen 2026-08-28 after a
       failed run left a half-configured role) - accept either, or a re-post
       after any failure dead-ends here.
+
+      find() stops at the first visible match, so the order is the fix: a bare
+      text='Submit' matched a greyed-out cursor-not-allowed Submit on the inbox
+      page *behind* the modal, and the run died clicking at it (Railway,
+      2026-09-16). The ladder, narrowest first:
+
+      1. "Create a new role anyway" - only ever rendered inside this modal.
+      2. the Submit inside the nearest ancestor of the name field that contains
+         one. That is the modal whatever it is built from; checked against a
+         role=dialog modal, a plain div, a div-with-role=button Submit and a
+         nested-span Submit (the span is inside the right button, so the click
+         lands). It only degrades if the modal has no wrapper at all.
+      3. a role=dialog-scoped Submit, if noon uses the role.
+      4. any enabled Submit - excludes the greyed-out one by state and class.
+      5. the old bare text. Kept as a safety net, not because it is right.
     selector:
-      - "text='Submit'"
       - "text='Create a new role anyway'"
+      - "[placeholder^='Search existing ATS roles'] >> xpath=ancestor::*[.//*[normalize-space()='Submit']][1] >> text='Submit'"
+      - "[role=dialog] >> text='Submit'"
+      - "css=button:enabled:not(.cursor-not-allowed):has-text('Submit')"
+      - "text='Submit'"
+    # find() splits the step's budget across the candidates - five of them, so ~8s each.
+    timeout_ms: 40000
+    # No `force` here, deliberately. It was added on the theory that it would
+    # get through the toast; measured against a reconstruction of the
+    # 2026-09-16 screen, it does not. force skips the interception *check*, not
+    # the dispatch - the event still lands at the target's centre point, so the
+    # toast receives the click, nothing raises, and the engine marks the row
+    # submitted for a role that was never created. The run then dies 40s later
+    # at the wait_for below, blaming the wrong step. Without force the dismiss
+    # above does the real work and a failure says
+    # "<div direction=up> intercepts pointer events" here, where it happened.
+    # tests/test_noon_role_modal.py holds both halves of that measurement.
     submit: true
 
   - action: wait_for

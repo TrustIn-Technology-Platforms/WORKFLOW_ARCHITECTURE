@@ -129,6 +129,81 @@ async def _poll_ready_rows(settings) -> None:
         await asyncio.sleep(max(60, settings.poll_minutes * 60))
 
 
+# The last keepalive round, for /health and GET /admin/keepalive. Plain dicts:
+# this is read by people and by the CLI, never by the pipeline.
+_KEEPALIVE_STATE: dict = {"last_run": None, "running": False, "results": []}
+
+
+async def _keepalive_round(settings, keys: list[str] | None = None) -> list[dict]:
+    """One visit to every platform, under the row lock, results kept for /health.
+
+    The lock is the whole point: a keepalive that opened Loxo while a row was
+    posting to Loxo would be the two-browsers-one-account failure the lock
+    exists to prevent.
+    """
+    from datetime import datetime, timezone
+
+    from app.platforms.keepalive import keepalive
+
+    settings.ensure_dirs()
+    async with _row_lock():
+        _KEEPALIVE_STATE["running"] = True
+        try:
+            results = [r.as_dict() for r in await keepalive(settings, keys)]
+        finally:
+            _KEEPALIVE_STATE["running"] = False
+    _KEEPALIVE_STATE["last_run"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if keys:
+        # A by-hand run of one platform updates that platform's entry only.
+        kept = [r for r in _KEEPALIVE_STATE["results"] if r["platform"] not in keys]
+        _KEEPALIVE_STATE["results"] = kept + results
+    else:
+        _KEEPALIVE_STATE["results"] = results
+    log.info(
+        "keepalive round finished",
+        extra={
+            "platforms": [r["platform"] for r in results],
+            "alive": [r["platform"] for r in results if r["ok"]],
+            "relogged_in": [r["platform"] for r in results if r["relogged_in"]],
+            "failed": [r["platform"] for r in results if not r["ok"]],
+        },
+    )
+    return results
+
+
+async def _keepalive_sessions(settings) -> None:
+    """Keep the logins alive from here, on a timer.
+
+    Every platform ends an idle session on its own clock and nothing but use
+    extends one, so the service that uses them is the one that exercises
+    them - and signs in again, with the stored credentials, when one has
+    gone. This replaced the laptop's Windows task on 2026-09-21: the laptop's
+    copy and the volume's aged apart, Loxo killed whichever was used second,
+    and a dead login waited for a person. See docs/08-sessions-and-auth.md.
+    """
+    import asyncio
+
+    hours = float(settings.session_keepalive_hours or 0)
+    if hours <= 0:
+        log.info("session keepalive disabled (SESSION_KEEPALIVE_HOURS=0)")
+        return
+    await asyncio.sleep(120)  # let the app come up and any pending row start first
+    while True:
+        try:
+            await _keepalive_round(settings)
+        except Exception:  # noqa: BLE001 - the timer must never take the service down
+            log.exception("keepalive round failed")
+        await asyncio.sleep(max(600, hours * 3600))
+
+
+async def _keepalive_now(settings, keys: list[str] | None) -> None:
+    """Background worker for POST /admin/keepalive."""
+    try:
+        await _keepalive_round(settings, keys)
+    except Exception:  # noqa: BLE001 - a background task must not crash the worker
+        log.exception("keepalive by hand failed", extra={"platforms": keys})
+
+
 async def _sweep_stuck_rows(settings) -> None:
     """Release rows a dead process left on `Posting`, now and on a timer.
 
@@ -167,6 +242,7 @@ def create_app() -> FastAPI:
         tasks = [
             asyncio.create_task(_sweep_stuck_rows(settings)),
             asyncio.create_task(_poll_ready_rows(settings)),
+            asyncio.create_task(_keepalive_sessions(settings)),
         ]
         try:
             yield
@@ -239,8 +315,17 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.5",  # bumped with artifact endpoints + state ages
+            "version": "1.6",  # bumped with the server-side keepalive + re-login
             "notion_configured": settings.notion_configured,
+            # Which platforms can sign themselves in: stored credentials AND
+            # login steps in the recipe. Booleans only - never the values.
+            "credentials": settings.credentials_configured(sorted(recipes)),
+            "relogin_steps": {k: bool(r.login.steps) for k, r in sorted(recipes.items())},
+            "keepalive": {
+                "every_hours": settings.session_keepalive_hours,
+                "relogin": settings.session_relogin,
+                **_KEEPALIVE_STATE,
+            },
             "webhook_secret_set": bool(settings.webhook_secret),
             # False here silently costs Wellfound its Skills tags and the
             # criteria drafts their gap-filling - .env never reaches the image,
@@ -349,6 +434,34 @@ def create_app() -> FastAPI:
             x_webhook_secret, settings.webhook_secret
         ):
             raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+
+    @app.get("/admin/keepalive")
+    async def keepalive_state(
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """The last keepalive round: which logins are alive, which were
+        signed in again, which need a person. Same data as /health carries,
+        without the rest of it."""
+        _require_secret(x_webhook_secret)
+        return {"status": "ok", **_KEEPALIVE_STATE}
+
+    @app.post("/admin/keepalive", status_code=202)
+    async def keepalive_now(
+        background: BackgroundTasks,
+        x_webhook_secret: str | None = Header(default=None),
+        platform: str | None = None,
+    ) -> dict:
+        """Run a keepalive round now, in the background, for one platform or
+        all of them. This is how a re-login is tried without spending a row:
+        `POST /admin/keepalive?platform=noon`, then read GET /admin/keepalive.
+        """
+        _require_secret(x_webhook_secret)
+        keys = [p.strip().lower() for p in (platform or "").split(",") if p.strip()] or None
+        if _KEEPALIVE_STATE["running"]:
+            raise HTTPException(409, "A keepalive round is already running.")
+        background.add_task(_keepalive_now, settings, keys)
+        log.info("keepalive requested", extra={"platforms": keys or "all"})
+        return {"status": "accepted", "platforms": keys or "all"}
 
     @app.get("/admin/artifacts")
     async def list_artifacts(

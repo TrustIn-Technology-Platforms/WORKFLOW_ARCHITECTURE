@@ -18,6 +18,7 @@ from app.platforms.noon_sourcing import (
     SKIP,
     NoonSession,
     as_lines,
+    as_list,
     format_feedback,
     parse_criteria,
     run_wizard,
@@ -38,6 +39,21 @@ def test_as_lines_reads_both_shapes_noon_uses():
     assert as_lines(["a", "b"]) == ["a", "b"]
     assert as_lines("") == []
     assert as_lines(None) == []
+
+
+def test_as_list_keeps_the_shape_preferences_stores():
+    """`as_text` flattens for reading; this keeps the list noon writes back.
+
+    A multi-part location stays split - joined into one string it would ask
+    noon to find a single place called "New York, Atlanta, Georgia".
+    """
+    assert as_list(["New York", "Atlanta, Georgia, United States"]) == [
+        "New York", "Atlanta, Georgia, United States",
+    ]
+    assert as_list("Manchester, UK") == ["Manchester, UK"]
+    assert as_list("") == []
+    assert as_list(None) == []
+    assert as_list([]) == []
 
 
 def test_every_nice_to_have_becomes_a_must_have():
@@ -134,7 +150,7 @@ class FakeSession(NoonSession):
                 "id": "role-1",
                 "name": "Halluminate",
                 "autopilot": {"emailCampaign": {"id": "c1"}},
-                # The filters `generate_params` saved on its way through.
+                # The role as it reads back after the location was written.
                 "preferences": {
                     "location": ["Manchester, UK"],
                     "titles": ["Platform Engineer", "Site Reliability Engineer"],
@@ -147,6 +163,10 @@ class FakeSession(NoonSession):
             },
             **responses,
         }
+        # noon answers both routes with the role; `refetch_roles` is simply the
+        # one not served from a cache. A test that turns on the difference
+        # between them sets them apart explicitly.
+        self.responses.setdefault("refetch_roles", self.responses["all_roles"])
         # NoonSession is a slots dataclass; only the fields it declares exist.
         super().__init__(page=None, token="tok", company="co")
 
@@ -177,6 +197,8 @@ def test_the_wizard_makes_the_portal_s_calls_in_the_portal_s_order():
     assert session.paths() == [
         "generate_params",
         "all_roles",
+        "update_role",          # the location, which nothing else writes
+        "refetch_roles",        # read back uncached, to see whether it stuck
         "set_candidate_source",
         "setup_clarifying_questions",
         "gpt_stream",
@@ -336,19 +358,164 @@ def test_a_role_that_would_be_searched_globally_says_so():
     assert "no location" in report.summary
 
 
-def test_a_location_read_but_not_saved_is_reported_as_not_saved():
-    """Extracting it and saving it are two different things, and only the second
-    one narrows the search.
+def test_a_role_that_already_has_a_location_is_not_called_global():
+    """The warning is decided after the role is read, not after the extraction.
+
+    Deciding it early made a run contradict itself: the warnings said the role
+    would be searched globally while the summary of the same run named the
+    location it was restricted to.
     """
     session = FakeSession(
-        all_roles=[{"id": "role-1", "preferences": {"titles": ["Platform Engineer"]}}]
+        generate_params={
+            "must_haves": "Kubernetes",
+            "nice_to_haves": "",
+            "titles": ["Platform Engineer"],
+            "location": "",
+        },
+    )
+    report = _run(session)
+
+    assert report.location == "Manchester, UK"
+    assert "location Manchester, UK" in report.summary
+    assert not any("searched globally" in w for w in report.warnings)
+
+
+def test_the_location_is_written_onto_the_role():
+    """The write the wizard's own calls never made.
+
+    `generate_params` extracts the location and was long assumed to save it;
+    it does not, so every role kept the empty `location` its creation modal
+    wrote (artifacts/live1/20-after-submit.json) and searched globally. The
+    payload is that recorded one: `update_role {token, role, name, preferences}`.
+    """
+    session = FakeSession()
+    _run(session, targeting="Location: Manchester, UK")
+
+    written = session.payload("update_role")
+    assert set(written) == {"token", "role", "name", "preferences"}
+    assert written["role"] == "role-1"
+    assert written["name"] == "Halluminate"
+    # A list, as every recorded role stores it - not the flattened string the
+    # report shows, and not a bare string noon would read as one place.
+    assert written["preferences"]["location"] == ["Manchester, UK"]
+
+
+def test_the_location_write_leaves_the_rest_of_the_role_alone():
+    """`preferences` is sent back whole, so a partial block cannot blank the
+    keys this code has never heard of. The block here is the live-recorded one.
+    """
+    recorded = {
+        "jd": "", "type": [], "experience": [0, 20], "industry": [],
+        "location": [], "location_distance": 0, "competitors": [],
+        "companyBlacklist": [], "skills": [], "notes": "",
+        "startupExp": False, "managementExp": "No preference",
+        "recruiters": ["someone@example.com"], "titles": ["Platform Engineer"],
+    }
+    session = FakeSession(
+        all_roles=[{"id": "role-1", "name": "Halluminate", "preferences": dict(recorded)}],
+        refetch_roles=[{
+            "id": "role-1", "name": "Halluminate",
+            "preferences": {**recorded, "location": ["Manchester, UK"]},
+        }],
+    )
+    _run(session, targeting="Location: Manchester, UK")
+
+    sent = session.payload("update_role")["preferences"]
+    assert sent["location"] == ["Manchester, UK"]
+    for key, value in recorded.items():
+        if key != "location":
+            assert sent[key] == value, f"{key} was not carried through"
+
+
+def test_the_read_back_does_not_trust_noon_s_cache():
+    """`all_roles` answers from a cache, so it serves the copy from before the
+    write - which made a save that worked look like one that failed. The stale
+    copy and the fresh one disagree here on purpose: the fresh one must win.
+    """
+    session = FakeSession(
+        all_roles=[{"id": "role-1", "preferences": {"location": [], "titles": ["X"]}}],
+        refetch_roles=[{
+            "id": "role-1",
+            "preferences": {"location": ["Manchester, UK"], "titles": ["X"]},
+        }],
     )
     report = _run(session, targeting="Location: Manchester, UK")
 
-    assert any("did not save it" in w for w in report.warnings)
+    assert "refetch_roles" in session.paths()
+    assert report.location == "Manchester, UK"
+    # Reading the cache instead would report the location lost and hold the
+    # search back on a role that is in fact correctly set up.
+    assert not any("has NOT been started" in w for w in report.warnings)
+    assert report.started_sourcing is True
+
+
+def test_a_location_that_will_not_stick_stops_the_search():
+    """The 2026-09-22 row: noon quoted the location back, the role kept `[]`,
+    and the run started the search anyway and reported Posted. Every candidate
+    it found came from the wrong pool.
+
+    The role is saved and left idle instead - visible, and one click from
+    right. Raising would be quieter: `noon.py` catches a PlatformError from
+    here into a warning and the row still reads Posted.
+    """
+    session = FakeSession(
+        generate_params={
+            "must_haves": "Kubernetes",
+            "nice_to_haves": "",
+            "titles": ["Platform Engineer"],
+            "location": ["New York", "Atlanta, Georgia, United States"],
+        },
+        all_roles=[{"id": "role-1", "preferences": {"location": [], "titles": ["X"]}}],
+    )
+    report = _run(session, targeting="Location: New York")
+
+    # It tried.
+    assert session.payload("update_role")["preferences"]["location"] == [
+        "New York", "Atlanta, Georgia, United States",
+    ]
+    # It did not pretend it worked.
+    assert report.started_sourcing is False
+    assert session.payloads("role_autopilot")[-1]["initialization"] is True
+    assert "not started" in report.summary
+
+    loud = [w for w in report.warnings if "has NOT been started" in w]
+    assert len(loud) == 1
+    assert "New York" in loud[0]
+    assert "Control Panel" in loud[0]
+    # Not the old line, which read as a footnote on a successful run.
+    assert not any("did not save it" in w for w in report.warnings)
+
+
+def test_a_location_that_sticks_lets_the_search_start():
+    """The other side of the same guard: the ordinary run must be unaffected."""
+    session = FakeSession()
+    report = _run(session, targeting="Location: Manchester, UK")
+
+    assert report.started_sourcing is True
+    assert session.payloads("role_autopilot")[-1]["initialization"] is False
+    assert not any("has NOT been started" in w for w in report.warnings)
 
 
 def test_no_titles_on_the_role_is_worth_a_warning():
+    """Judged on the role, not on the extraction - the role is what searches."""
+    session = FakeSession(
+        generate_params={
+            "must_haves": "Kubernetes",
+            "nice_to_haves": "",
+            "titles": [],
+            "location": "Manchester, UK",
+        },
+        all_roles=[{"id": "role-1", "preferences": {"location": ["Manchester, UK"]}}],
+    )
+    report = _run(session)
+    assert any("no job titles" in w for w in report.warnings)
+
+
+def test_titles_already_on_the_role_are_not_called_missing():
+    """This document yielded none, but the role carries them from an earlier
+    run - so it is not matching on criteria alone, and saying it is would send
+    a recruiter to the Control Panel to fix something that is already right.
+    """
     session = FakeSession(
         generate_params={
             "must_haves": "Kubernetes",
@@ -358,7 +525,8 @@ def test_no_titles_on_the_role_is_worth_a_warning():
         }
     )
     report = _run(session)
-    assert any("no job titles" in w for w in report.warnings)
+    assert not any("no job titles" in w for w in report.warnings)
+    assert report.titles == ["Platform Engineer", "Site Reliability Engineer"]
 
 
 def test_a_dry_run_still_reports_the_filters_it_would_have_set():

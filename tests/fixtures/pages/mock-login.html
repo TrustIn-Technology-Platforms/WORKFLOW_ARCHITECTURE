@@ -1,0 +1,100 @@
+<!doctype html>
+<!--
+  Stands in for a platform whose session can expire.
+
+  Logged out (no `mock.session` in localStorage) it shows a plain email and
+  password form. Logged in it shows the shell a recipe's `ready_selector`
+  would look for. The `#sso` button opens the mock Microsoft page in a popup,
+  the way Firebase-style apps (noon) do, and takes the popup's word for it.
+
+  Credentials: marcus@trust-in.test / correct horse battery
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock platform</title>
+  <style>
+    body { font: 15px system-ui, sans-serif; margin: 24px; max-width: 520px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input { width: 100%; padding: 8px; }
+    button { margin-top: 12px; padding: 8px 14px; }
+    .error { color: #b00020; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <section id="login-form" class="hidden">
+    <h1>Log in</h1>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="email">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <button id="login" type="button">Log in</button>
+    <button id="sso" type="button">Sign in with Microsoft</button>
+    <p id="login-error" class="error hidden">Wrong email or password.</p>
+  </section>
+
+  <section id="shell" class="hidden">
+    <nav id="user-menu">Signed in as <span id="who"></span></nav>
+    <h1>Sequences</h1>
+    <button id="logout" type="button">Log out</button>
+  </section>
+
+  <script>
+    const USER = 'marcus@trust-in.test';
+    const PASS = 'correct horse battery';
+
+    function render() {
+      const session = localStorage.getItem('mock.session');
+      document.getElementById('login-form').classList.toggle('hidden', !!session);
+      document.getElementById('shell').classList.toggle('hidden', !session);
+      if (session) document.getElementById('who').textContent = session;
+    }
+
+    document.getElementById('login').addEventListener('click', () => {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if (email === USER && password === PASS) {
+        localStorage.setItem('mock.session', email);
+        document.cookie = 'mock_sid=abc123; path=/';
+        render();
+      } else {
+        document.getElementById('login-error').classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('logout').addEventListener('click', () => {
+      localStorage.removeItem('mock.session');
+      render();
+    });
+
+    // A Firebase-style popup sign-in: the popup does the Microsoft dance and
+    // reports back with postMessage before closing itself.
+    document.getElementById('sso').addEventListener('click', () => {
+      const ret = location.origin + location.pathname;
+      const params = new URLSearchParams(location.search);
+      const flavour = params.get('ms') ? `&${params.get('ms')}=1` : '';
+      window.open(
+        `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?popup=1&return=${encodeURIComponent(ret)}${flavour}`,
+        'ms-popup', 'width=500,height=600'
+      );
+    });
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'ms-done') {
+        localStorage.setItem('mock.session', event.data.user);
+        localStorage.setItem('mock.ms', JSON.stringify(event.data));
+        document.cookie = 'mock_sid=sso456; path=/';
+        render();
+      }
+    });
+
+    // A redirect-style return lands here with the result in the hash.
+    if (location.hash.startsWith('#ms=')) {
+      const data = JSON.parse(decodeURIComponent(location.hash.slice(4)));
+      localStorage.setItem('mock.session', data.user);
+      localStorage.setItem('mock.ms', JSON.stringify(data));
+    }
+    render();
+  </script>
+</body>
+</html>

@@ -132,7 +132,7 @@ class RecipeAdapter:
         try:
             async with opener as (context, page):
                 try:
-                    await self._assert_logged_in(page)
+                    await self.ensure_logged_in(page)
                     report = await self._drive(page, document, row)
                 except (PlatformError, AuthenticationRequired) as exc:
                     artifacts = await save_failure(
@@ -208,6 +208,57 @@ class RecipeAdapter:
         engine = RecipeEngine(self.recipe, page, self.settings, dry_run=self.dry_run)
         return await engine.run(document, row)
 
+    async def ensure_logged_in(self, page: "Page") -> bool:
+        """Check the session and, when it has gone, sign in again.
+
+        Returns True when a sign-in happened. Every platform's own check
+        (`_assert_logged_in`, overridden by the drivers) stays the judge: the
+        replayed sign-in proves nothing until that check passes afterwards. A
+        session that came back is exported at once, so the volume's copy is
+        the live one and `/health` shows its age.
+        """
+        from app.platforms.relogin import can_relogin, login_with_credentials, why_not
+
+        try:
+            await self._assert_logged_in(page)
+            return False
+        except AuthenticationRequired as expired:
+            if not self.settings.session_relogin or not can_relogin(self.recipe, self.settings):
+                hint = why_not(self.recipe, self.settings)
+                if hint:
+                    expired.args = (f"{expired.args[0]} {hint}",)
+                raise
+            log.warning(
+                "session expired - signing in again",
+                extra={"platform": self.recipe.key, "error": str(expired)[:160]},
+            )
+
+        await login_with_credentials(self.recipe, page, self.settings)
+        try:
+            await self._assert_logged_in(page)
+        except AuthenticationRequired as exc:
+            raise AuthenticationRequired(
+                f"{self.recipe.label}: the automatic sign-in ran but the app still "
+                f"shows the session as logged out ({str(exc)[:160]}). The login "
+                "steps probably finished on a screen the recipe does not expect - "
+                "see the saved screenshot."
+            ) from exc
+        await self.record_session(page)
+        log.info("signed in again", extra={"platform": self.recipe.key})
+        return True
+
+    async def record_session(self, page: "Page") -> int:
+        """Export the live session next to the profile and mark it verified.
+
+        The export is what a Linux container can actually read (the profile's
+        own cookie store is OS-keyed) and what `/health` reports the age of.
+        Returns the number of cookies written.
+        """
+        state = await page.context.storage_state()
+        self.sessions.save_state(self.recipe.key, state, self.recipe.session_file)
+        self.sessions.mark_profile_verified(self.recipe.key)
+        return len(state.get("cookies") or [])
+
     async def _assert_logged_in(self, page: "Page") -> None:
         """Check the session before any real work.
 
@@ -253,7 +304,9 @@ class RecipeAdapter:
         # shell ends it as fine at once, and only the deadline - long enough
         # that a live session cannot plausibly still be rendering - reads as
         # expired.
-        deadline = asyncio.get_event_loop().time() + LOGIN_CHECK_SECONDS
+        deadline = asyncio.get_event_loop().time() + float(
+            self.settings.login_check_seconds or LOGIN_CHECK_SECONDS
+        )
         bounced = 0
         while True:
             # Two consecutive sightings, because polling sees more than a

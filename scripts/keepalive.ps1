@@ -1,5 +1,13 @@
 # Keep the platform logins alive by exercising them on a schedule.
 #
+# RETIRED 2026-09-21 in favour of the server doing this itself (D-021,
+# docs/08-sessions-and-auth.md): the deployed service visits every platform
+# every SESSION_KEEPALIVE_HOURS and signs in again with stored credentials.
+# Once its first round shows every platform alive, remove the scheduled task
+# (command below) - a push from here overwrites the server's live profile, and
+# one Loxo session used from two machines dies. Kept for the one job left: the
+# first upload of a profile the service cannot capture itself.
+#
 # Sessions expire server-side - noon's dies after about a week idle - and no
 # local setting can lengthen them. What does work is using them: a visited
 # session gets its cookies rotated and extended. This runs the refresh

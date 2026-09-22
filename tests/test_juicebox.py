@@ -118,3 +118,104 @@ def test_unknown_driver_is_a_clear_error(tmp_path):
     with pytest.raises(PipelineError) as caught:
         get_adapter("weird", recipes={recipe.key: recipe})
     assert "nope" in str(caught.value)
+
+
+# -- the funding stage the filters rest on -----------------------------------
+
+
+AXLE_JD_NO_STAGE = """
+Axle Insurance is hiring a Platform Engineer in New York. We run our
+infrastructure on AWS and Kubernetes and are scaling the team this year.
+Five years of experience with Terraform expected.
+"""
+
+AXLE_JD_STATED = AXLE_JD_NO_STAGE + "\nWe are a Series A insurtech.\n"
+
+
+def _sourcing_run(monkeypatch, jd: str, *, dry_run: bool) -> tuple[list[str], dict]:
+    """Drive the real `_set_up_sourcing` with the drafters and the page writer
+    stubbed, and return the row's warnings plus the kwargs the writer got."""
+    import asyncio
+
+    from app.config import get_settings
+    from app.platforms import load_recipes, resolve
+    from app.platforms.engine import RunReport
+    from app.platforms.juicebox_sourcing import SourcingReport
+    from app.platforms.targeting_ai import CompanyTargeting, SearchTargeting
+
+    async def fake_targeting(*args, **kwargs):
+        return SearchTargeting(similar_titles=["Platform Engineer"], skills=["AWS"],
+                               min_years=5, candidate_location="New York")
+
+    async def fake_companies(*args, **kwargs):
+        # What the 2026-09-22 run got back: a stage nobody wrote down.
+        return CompanyTargeting(stage="Series A", stage_basis="inferred",
+                                companies=["Ramp", "Newfront"])
+
+    written: dict = {}
+
+    async def fake_set_up(page, **kwargs):
+        written.update(kwargs)
+        return SourcingReport(search_url="https://app.juicebox.ai/project/p/search?search_id=S1",
+                              saved=True)
+
+    monkeypatch.setattr("app.platforms.targeting_ai.draft_targeting", fake_targeting)
+    monkeypatch.setattr("app.platforms.targeting_ai.draft_companies", fake_companies)
+    monkeypatch.setattr("app.platforms.juicebox_sourcing.set_up_sourcing", fake_set_up)
+
+    settings = get_settings()
+    adapter = JuiceboxAdapter(
+        resolve("juicebox", load_recipes(settings)), settings=settings, dry_run=dry_run
+    )
+    document = ParsedDocument(
+        advert=Advert(title="Platform Engineer", body_text="Join us.", body_html="<p>Join us.</p>"),
+        emails=[],
+        source_name="Axle Insurance - Platform Engineer",
+        client_jd=jd,
+    )
+    report = RunReport()
+    asyncio.run(adapter._set_up_sourcing(None, document, None, report))
+    return report.warnings, written
+
+
+def test_an_inferred_stage_never_reaches_the_funding_stage_filter(monkeypatch):
+    """The 2026-09-22 Axle run: the document named no round, Claude inferred
+    Series A, and the saved search came back with two Company Funding Stages
+    chosen off that guess - under a row that said OK. The guess may still draw
+    the Companies list (D-020); it may not set the select (D-022)."""
+    warnings, written = _sourcing_run(monkeypatch, AXLE_JD_NO_STAGE, dry_run=False)
+
+    assert written["stage"] is None
+    # The company list is still built from the inference - that half is decided.
+    assert written["companies"] == ["Ramp", "Newfront"]
+
+    note = next(w for w in warnings if "funding" in w)
+    assert "inferred Series A" in note
+    # The recruiter is told which filter rests on the guess, which one does
+    # not, and what to write in the document to have it set.
+    assert "Companies" in note
+    assert "left as Juicebox set it" in note
+    assert "Client JD" in note
+
+
+def test_a_stated_stage_does_set_the_funding_stage_filter(monkeypatch):
+    """The other half. A stage the client wrote is not a guess, so it sets the
+    select - and is not reported on the row at all."""
+    warnings, written = _sourcing_run(monkeypatch, AXLE_JD_STATED, dry_run=False)
+
+    assert written["stage"] == "Series A"
+    assert not [w for w in warnings if "funding" in w]
+
+
+def test_the_dry_run_says_which_stages_it_would_set(monkeypatch):
+    """The dry run is what a supervised session reads before the live one, so
+    it has to name the same two outcomes."""
+    inferred, _ = _sourcing_run(monkeypatch, AXLE_JD_NO_STAGE, dry_run=True)
+    line = next(w for w in inferred if w.startswith("dry run"))
+    assert "stages left as Juicebox set them" in line
+    # The companies are still drafted at the inferred stage.
+    assert "2 company(ies) at Series A" in line
+
+    stated, _ = _sourcing_run(monkeypatch, AXLE_JD_STATED, dry_run=True)
+    line = next(w for w in stated if w.startswith("dry run"))
+    assert "stages seed/series_a" in line

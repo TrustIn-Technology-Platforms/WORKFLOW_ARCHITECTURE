@@ -241,6 +241,7 @@ class JuiceboxAdapter(RecipeAdapter):
         from app.platforms.browser import save_failure
         from app.platforms.juicebox_sourcing import (
             set_up_sourcing,
+            stage_for_filter,
             stage_plan,
             years_span,
         )
@@ -296,8 +297,9 @@ class JuiceboxAdapter(RecipeAdapter):
         # Same-stage companies, and the stages themselves - every stage from
         # Seed up to the client's own (Sohaib's rule, 2026-09-02; D-020 for the
         # companies). The stage is read off the document when it states one and
-        # inferred by Claude when it does not, and an inferred stage is said so
-        # on the row: two of the filters that decide the pool rest on it.
+        # inferred by Claude when it does not. An inferred stage draws the
+        # Companies list and is said so on the row; it does not set Company
+        # Funding Stages (D-022), which stays as Juicebox's own AI left it.
         company = (document.source_name or "").split(" - ")[0].strip()
         stated = stage_from_text(document.job_description, advert.body_text)
         drafted = await draft_companies(
@@ -312,11 +314,15 @@ class JuiceboxAdapter(RecipeAdapter):
         stage = stated or (
             drafted.stage if drafted.stage and drafted.stage != "Unknown" else None
         )
+        selected = stage_for_filter(stage, stated=bool(stated))
         if stage and not stated:
             report.warnings.append(
                 f"the document does not state {company or 'the client'}'s funding "
-                f"stage; Claude inferred {stage}, and the Companies and Company "
-                "Funding Stages filters rest on it - check them"
+                f"stage; Claude inferred {stage} and drew the Companies filter "
+                "from it - check the search's Companies list. Company Funding "
+                "Stages was left as Juicebox set it, not narrowed to a guess; "
+                f"write the stage into the Client JD (\"Stage: {stage}\") to "
+                "have that filter set too"
             )
         elif not stage:
             report.warnings.append(
@@ -338,7 +344,8 @@ class JuiceboxAdapter(RecipeAdapter):
                 + (f", location {location}" if location else "")
                 + (f", {span}" if (span := years_span(targeting.min_years, targeting.max_years)) else "")
                 + f", {len(drafted.companies)} company(ies) at {stage or 'an unknown stage'}"
-                + (f", stages {'/'.join(stage_plan(stage))}" if stage_plan(stage) else "")
+                + (f", stages {'/'.join(stage_plan(selected))}" if stage_plan(selected)
+                   else ", stages left as Juicebox set them")
             )
             return
 
@@ -354,7 +361,7 @@ class JuiceboxAdapter(RecipeAdapter):
                 min_years=targeting.min_years,
                 max_years=targeting.max_years,
                 companies=drafted.companies,
-                stage=stage,
+                stage=selected,
             )
         except Exception as exc:  # noqa: BLE001 - a sourcing failure is a warning,
             # never a lost run whose sequence already saved.
@@ -396,6 +403,7 @@ class JuiceboxAdapter(RecipeAdapter):
         neither exists is the stage skipped and said so: writing criteria onto
         a guessed search would quietly re-score another client's candidates.
         """
+        from app.platforms.browser import save_failure
         from app.platforms.juicebox_criteria import set_criteria
 
         search = None
@@ -431,7 +439,25 @@ class JuiceboxAdapter(RecipeAdapter):
             )
         except PlatformError as exc:
             log.warning("juicebox criteria not set", extra={"error": str(exc)[:200]})
-            report.warnings.append(f"search criteria not set: {exc}")
+            shot: list[str] = []
+            try:
+                shot = await save_failure(
+                    page.context, page, "juicebox-criteria-failed", self.settings
+                )
+            except Exception:  # noqa: BLE001 - the screenshot is evidence, not
+                # the job: a browser already in trouble must not turn a contained
+                # warning into a failed row.
+                log.debug("juicebox criteria screenshot failed", exc_info=True)
+            # First in the list: the adapter joins these into one `detail`, and
+            # on 2026-09-22 this arrived as a clause inside "Posted OK. Notes:"
+            # for a search that ranked nobody. The run itself stays a success -
+            # the sequence saved, and failing the row would invite a re-post.
+            report.warnings.insert(
+                0,
+                "SEARCH CRITERIA NOT WRITTEN - this search still ranks nobody by "
+                f"the role's requirements. {exc} Search: {search}"
+                + (f" (screenshot: {shot[0]})" if shot else ""),
+            )
             return
 
         report.warnings.extend(result.warnings)

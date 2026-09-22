@@ -50,7 +50,7 @@ decide the pool.
 | noon must-haves (nice-to-haves promoted) | yes | 2026-08-31 | role `ZZ TEST - Senior Recruitment Consultant` |
 | noon non-negotiables, all starred and ranked | yes | 2026-08-31 | deliberately tighter than noon's "3 or fewer" advice |
 | noon clarifying answers, strictest option | yes | 2026-08-31 | unclear ones left on noon's `SKIP` |
-| noon location / titles / seniority | **yes** | not yet | **gap 1 — closed in code**, one live run away from proven |
+| noon location / titles / seniority | **yes** | not yet | **gap 1 — reopened 2026-09-22** (the preamble alone never saved the location); explicit `update_role` write + guard built, one live run away from proven |
 | Loxo Skill DNA, nice-to-haves promoted | yes | 2026-08-31 | job 3640874, read back through `jobDetail` |
 | Loxo empty buckets drafted from the advert | yes | 2026-08-31 | `criteria_ai.py`, Claude Opus 5 |
 | Loxo Source titles / skills | yes | 2026-09-02 | job 3658508, saved search reloaded chip-for-chip; again from Railway on the Axle row |
@@ -61,7 +61,7 @@ decide the pool.
 | One JD for all three platforms | yes | — | **gap 4 — closed**; `Client JD` section, [D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch) |
 | Wellfound Skills | **yes** | never run | **gap 3 — closed**; `app/platforms/skills.py`, column then Claude |
 | **Juicebox titles / location / skills / years** | **yes** | 2026-09-02 | project + JD search + filter editor, `juicebox_sourcing.py`; the JD's candidate location (the row's `Location` fills the gap, since 2026-09-07), Claude-drafted titles, skills and years |
-| **Juicebox companies / funding stages** | **yes** | 2026-09-03 | ~20 same-stage companies (`draft_companies`, exact-name matched); stages Seed up to the client's own; an inferred stage is warned on the row |
+| **Juicebox companies / funding stages** | **yes** | 2026-09-03 | ~20 same-stage companies (`draft_companies`, exact-name matched); stages Seed up to the client's own, **from a stated stage only** since 2026-09-22 ([D-022](11-decisions.md#d-022--an-inferred-funding-stage-may-draw-the-company-list-not-set-the-funding-stage-filter)); an inferred stage draws the companies and is warned on the row |
 
 ## The gaps
 
@@ -97,22 +97,32 @@ Recent); **Companies** takes company names only - industry and keyword
 options are refused, and Juicebox's own Company Industries chips are cleared.
 Details in [platforms/juicebox](platforms/juicebox.md#title-scope-the-candidates-location-and-company-names-only-2026-09-07).
 
-### 1. noon has no location — **closed in code 2026-08-31**
+### 1. noon has no location — **reopened and closed again 2026-09-22**
 
-`generate_params` returns a `location` and noon saves it onto
-`preferences.location`. It came out empty on every role, because the advert text
-does not state a location plainly — the location is a Notion column, not advert
-prose — and nothing checked that it had been set. noon therefore searched
-globally and the criteria did the geography badly, if at all.
+> **The 2026-08-31 fix was half of one.** It assumed `generate_params` saves the
+> location it extracts. It does not. A live row on 2026-09-22 had noon quote the
+> location back as "New York, Atlanta, Georgia, United States" while the role
+> read back with `preferences.location` still `[]` — and the run started the
+> search anyway and wrote "Posted". Every candidate on that role came from the
+> wrong pool. The preamble below is still necessary (noon has to read a location
+> before anything can save one) but it was never sufficient. See **What was
+> missing**.
 
-**What was built.** Both halves, without needing the unobserved write endpoint:
+`generate_params` returns a `location`. It came out empty on every role, because
+the advert text does not state a location plainly — the location is a Notion
+column, not advert prose — and nothing checked that it had been set. noon
+therefore searched globally and the criteria did the geography badly, if at all.
+
+**What was built (2026-08-31).** Both halves, as understood at the time:
 
 1. **A source of truth.** The row's `Location` column is already merged onto
    `advert.location` by `enrich_advert`. noon now gets the same value.
-2. **A write path that already exists.** `generate_params` is the call that
-   writes the role's `preferences`, and it writes what it can read out of the
-   text it is given. So `targeting_preamble()` puts the facts above the job
-   description, in the form the wizard's own placeholders use:
+2. **A write path believed to already exist.** `generate_params` was taken to be
+   the call that writes the role's `preferences`, writing what it can read out
+   of the text it is given — *this turned out to be false for the location*. So
+   `targeting_preamble()` puts the facts above the job description, in the form
+   the wizard's own placeholders use (still needed: noon must read a location
+   before anything can save one):
 
    ```
    Job title: Senior Recruitment Consultant
@@ -133,18 +143,39 @@ globally and the criteria did the geography badly, if at all.
    criterion here is starred as a non-negotiable — narrowing the search to
    nobody while looking like diligence.
 3. **A check, because extraction and persistence are different things.**
-   `run_wizard` reports what noon extracted (`report.location`,
-   `report.titles`), and `_check_preferences` reads `preferences` back off the
-   role afterwards. Three distinct warnings reach the Notion row: no location in
-   the text, a location noon read but did not save, and no titles at all. A dry
-   run reports the same, so a missing location is findable before anything is
-   written.
+   `run_wizard` reports what noon extracted, and `_check_preferences` reads
+   `preferences` back off the role afterwards.
 
-**Still to do.** One live `source --live --headed` run to confirm noon extracts
-the preamble as intended, and the direct `preferences` write is still unobserved
-— worth one probe of the Control Panel (open it with the network tab recording
-and change the location by hand) so a future version can set it outright rather
-than by stating it in prose.
+**What was missing (built 2026-09-22).** Three things, in order of consequence:
+
+1. **The write nothing was making.** `save_location` sends `update_role
+   {token, role, name, preferences}` — the write the Create New Role modal's own
+   Submit makes, recorded whole in `artifacts/live1/20-after-submit.json`, which
+   is also where each role's `location: []` comes from. The existing
+   `preferences` block is amended and returned whole so unknown keys survive.
+   This is the wizard's step 3, "Confirm the search criteria": the only one of
+   the seven steps whose call had never been mapped.
+2. **A read-back that does not consult a cache.** `_check_preferences` was
+   reading the role from `all_roles`, which the rest of this repo already
+   documents as cached — it serves the copy from before the write, so it could
+   not tell a failed save from a slow one. The read-back now goes through
+   `refetch_roles` first.
+3. **A louder outcome than a note.** The old warning let the run continue and
+   report success, which is how an unrestricted search reached a row reading
+   "Posted". If the location will not stick, the final `role_autopilot` now goes
+   out with `initialization: true` — the save-without-starting path — and the
+   role sits idle with a warning saying so. Raising `PlatformError` would be
+   quieter, not louder: `noon.py` catches one into a warning and the row still
+   reads Posted, having already started the search.
+
+**Still to do.** The element shape of a *populated* `preferences.location` has
+never been recorded — every noon artifact here shows `[]` — so whether
+`update_role` accepts the plain strings `generate_params` returns or wants
+values resolved through noon's own location picker is a guess from the empty
+case. One Control Panel probe with the network tab recording settles it, and one
+`source --live --headed` run on a throwaway role proves the write sticks. The
+guard in (3) is what makes a wrong guess safe in the meantime: the failure is a
+role that did not start, not a shortlist from the wrong continent.
 
 ### 2. Loxo's Longlist Agent has no titles and no skills
 
@@ -285,7 +316,12 @@ because the nearest name is a different company ("Unit" is not United
 Nations) - and **Company Funding Stages** takes every stage from Seed up to
 the client's own: a Series C client selects Seed, Series A, Series B and
 Series C. The stage comes from the document when it states one and from
-Claude's inference when it does not, said so on the row. `--search <url>`
+Claude's inference when it does not, said so on the row.
+**Amended 2026-09-22 ([D-022](11-decisions.md#d-022--an-inferred-funding-stage-may-draw-the-company-list-not-set-the-funding-stage-filter)):**
+only a *stated* stage sets `Company Funding Stages`. An inferred one still
+draws the Companies list - thirty names a recruiter can check - but the select
+is left as Juicebox's own AI set it, which on the Axle run of that morning was
+wider than the guess that had replaced it. `--search <url>`
 sets the filters on a search that already exists. The same morning the
 drafted lists grew on both platforms - 15 titles, 20 skills, 30 companies,
 the `SOURCING_MAX_*` settings - with the drafter told to fill the counts the

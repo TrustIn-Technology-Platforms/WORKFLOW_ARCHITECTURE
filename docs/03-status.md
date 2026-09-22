@@ -3,7 +3,7 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-09-02 (Juicebox sourcing)
+> **Last reviewed** 2026-09-21 (server-side keepalive and re-login)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
@@ -19,6 +19,18 @@ Railway volume (`/data`); cookies are injected from locally-exported
 storage_state because Chrome's cookie store is OS-encrypted. What remains is
 hygiene: deleting test roles/campaigns from the platforms, and the recurring
 local session refresh when a platform logs the bot out.
+
+**Amended 2026-09-21: the service keeps its own logins alive and signs itself
+back in.** Credentials are Railway secrets, each recipe carries its sign-in as
+`login.steps`, and the deployed service runs a keepalive round every 24 hours
+under the row lock - visit, check, sign in again where needed, re-export. A row
+whose session check fails does the same before posting. This replaces the
+laptop's Windows task and the two-copies problem it caused ([D-021](11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in)).
+The mechanism is proven against mocks; the four platforms' sign-in steps are
+written from their public pages and each needs one headed proving run. The
+same change fixed the Wellfound session check that had reported a live session
+as expired on 2026-09-16 (the "Hand-picked" interstitial hid every ready
+selector).
 
 **Amended 2026-09-02: Juicebox sourcing runs end to end, and the empty Axle
 project is explained.** The Juicebox half now does what a recruiter does after
@@ -70,10 +82,13 @@ The advert was the wrong text for a second reason: it is marketing copy, and it
 never states the location, because the location is a Notion column. So
 `preferences.location` was empty on every noon role and the agent searched
 globally. noon is now handed the location, employment type and skills
-off the row as a preamble above the JD — `generate_params` is the call that
-writes `preferences`, and it writes what it can read — and the filters are read
-back off the role afterwards, with a warning on the Notion row when they are
-still empty.
+off the row as a preamble above the JD, so it has something to extract.
+**Corrected 2026-09-22:** `generate_params` extracts the location but does not
+save it — the preamble alone left `preferences.location` empty on a live role,
+which searched the world and still reported Posted. `save_location` now writes
+it explicitly with `update_role`, the role is re-read through `refetch_roles`
+rather than the cached `all_roles`, and a location that will not stick leaves
+the role saved but **not started** instead of sourcing globally.
 
 What is left of the sourcing half is not code. Two sessions at a keyboard, both
 needing a person because both platforms sign in through SSO: one supervised
@@ -152,7 +167,7 @@ write endpoints have been observed.
 | 3 | Read `.docx` into blocks | **BUILT** | [docx_reader.py](../app/documents/docx_reader.py) |
 | 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document. **`Client JD` added 2026-08-31** — the client's spec as the document's last section, on `client_jd`, with `job_description` falling back to the advert ([D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)) |
 | 5 | Post to platforms | **BUILT — noon + Juicebox LIVE** | [platforms/](../app/platforms/) — `post noon --live` saved a five-step campaign on 2026-08-27 ([noon.yaml](../platforms/noon.yaml) `enabled: true`). `post juicebox --live` created and saved a three-email sequence the same day via a Python `driver` ([juicebox.py](../app/platforms/juicebox.py), [juicebox.yaml](../platforms/juicebox.yaml) `enabled: true`) — see [platforms/juicebox](platforms/juicebox.md) |
-| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. **Amended 2026-08-31:** the wizard now reads the document's `Client JD` rather than its advert, a `targeting_preamble` states the location/type/skills off the row above it so `generate_params` sets `preferences.location`, and `_check_preferences` reads the filters back off the role and warns when they are empty. See [platforms/noon](platforms/noon.md#the-search-filters-and-the-preamble-that-sets-them-2026-08-31), [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) and [12-sourcing-criteria](12-sourcing-criteria.md) |
+| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. **Amended 2026-08-31:** the wizard now reads the document's `Client JD` rather than its advert, a `targeting_preamble` states the location/type/skills off the row above it, and `_check_preferences` reads the filters back off the role and warns when they are empty. **Amended 2026-09-22:** the preamble alone never saved the location — `generate_params` extracts but does not persist it, so a live role searched globally and reported Posted. `save_location` now writes `preferences.location` explicitly through `update_role` (the payload the Create New Role modal sends, recorded in `artifacts/live1/20-after-submit.json`), the read-back goes through `refetch_roles` instead of the cached `all_roles`, and a location that will not stick holds the search back (`initialization: true`) rather than starting an unrestricted one. The element shape of a populated `preferences.location` is still unrecorded, so the write wants one live run. See [platforms/noon](platforms/noon.md#the-search-filters-and-the-preamble-that-sets-them-2026-08-31), [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) and [12-sourcing-criteria](12-sourcing-criteria.md) |
 | 5c | Loxo candidate criteria | **BUILT, PROVEN LIVE 2026-08-31** | [loxo_criteria.py](../app/platforms/loxo_criteria.py) parses Loxo's Skill DNA out of a job description (Dealbreaker / Baseline / Nice-to-have / Traits to avoid), promotes every nice-to-have into Dealbreaker, and renders it back with the advert prose intact; [criteria_ai.py](../app/platforms/criteria_ai.py) drafts whichever buckets came back empty from the advert via `claude-opus-5`; [loxo_sourcing.py](../app/platforms/loxo_sourcing.py) writes the result into the job's description (backup first, both Save buttons, read back through `jobDetail` GraphQL). Attaches to the `Loxo Job` column, else an exact hiring-company match, else skips. Ran from Railway on the Axle row 2026-09-02. See [platforms/loxo](platforms/loxo.md#candidate-criteria--the-skill-dna-2026-08-31) |
 | 5d | Juicebox search criteria | **DRY RUN PROVEN, LIVE WRITE UNTESTED** | [juicebox_criteria.py](../app/platforms/juicebox_criteria.py) — reads a search's ranked criteria, drafts a tighter list from its own job description, writes it back through the Criteria dialog. Dry run verified live 2026-08-31 (5 criteria read, 10 drafted); the `--live` write was stopped by a permission gate, not a failure. Backup + `--restore` in place. **Amended 2026-09-03:** runs on the search the sourcing step just built when the row names none, so the live write now happens on the next row. See [platforms/juicebox](platforms/juicebox.md#search-criteria-2026-08-31) |
 | 5e | Loxo Source filters — titles, skills, years, past companies | **TITLES + SKILLS PROVEN LIVE 2026-09-02; YEARS + COMPANIES BUILT, UNRUN** | [loxo_source.py](../app/platforms/loxo_source.py) writes the Source screen (`/jobs/<id>/source`) and saves a team-shared search; titles and skills proven on job 3658508 and again from Railway on the Axle row 2026-09-02. Years of Experience (five bands) and Past Company (exact company match, list from the client's funding stage — [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage)) added 2026-09-02 from Loxo's bundle because the session had died; unit-tested, **one `loxo-source --live --headed` run away**. Drafting in [targeting_ai.py](../app/platforms/targeting_ai.py). The Longlist Agent's own panel (`agentJobLinkIds`) is still unopened; [scripts/probe_loxo_longlist.py](../scripts/probe_loxo_longlist.py) maps it. See [platforms/loxo](platforms/loxo.md#the-source-screen---similar-titles-and-skills-2026-09-02) |
@@ -160,6 +175,7 @@ write endpoints have been observed.
 | 6 | Write back to Notion | **BUILT** | [client.py](../app/notion/client.py) |
 | — | Orchestration | **BUILT** | [pipeline.py](../app/pipeline.py) |
 | — | Sessions / login capture | **BUILT and verified live** | [store.py](../app/sessions/store.py), `capture_login` — the saved noon profile opened `/portal` logged in, headless, on 2026-08-26 |
+| — | Sessions kept alive and re-created by the service | **BUILT 2026-09-21, LOGIN STEPS UNPROVEN LIVE** | [keepalive.py](../app/platforms/keepalive.py), [relogin.py](../app/platforms/relogin.py), `RecipeAdapter.ensure_logged_in`, the `microsoft_sso` action, `login.steps` in all four recipes, `<KEY>_LOGIN_*` secrets, `SESSION_KEEPALIVE_HOURS`, `POST /admin/keepalive`, `python -m app.cli keepalive` / `relogin` — [D-021](11-decisions.md#d-021--the-service-holds-the-credentials-and-signs-itself-back-in). Proven against a mock platform and a mock Microsoft sign-in served at the real host ([tests/test_relogin.py](../tests/test_relogin.py): password form, redirect and popup SSO, code and push second factors, wrong password, secrets scrubbed). **Each platform's steps still need one `relogin <key> --headed --force` run**; the Windows keepalive task is to be unregistered once the server's first round shows every platform alive |
 | — | Tests | **PARTIAL** | 284 passing (2026-09-03); parser (incl. real documents and the `Client JD` section), the sourcing wizard's policy and call order, criteria targeting, templating filters, engine and recorder, the Juicebox sourcing flow's pure parts, and a sweep of every `extra=` for reserved LogRecord keys. Notion and fetcher are not |
 
 ## Verified working

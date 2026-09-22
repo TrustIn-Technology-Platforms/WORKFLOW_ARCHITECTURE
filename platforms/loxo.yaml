@@ -23,6 +23,32 @@ login:
   ready_selector: "text=Outreach"
   logged_out_pattern: "/login"
   session_file: loxo.storage_state.json
+  # The unattended sign-in (LOXO_LOGIN_USERNAME / _PASSWORD / _TOTP_SECRET).
+  # The account signs in through Microsoft (nicholas@, Entra), so the route is
+  # the "Continue with Microsoft" button on /login, not the Email box. Loxo
+  # redirects the same tab to Microsoft and back. The app then paints nothing
+  # for 10-20s, hence the long wait for the agency URL.
+  # UNPROVEN against the live screens as of 2026-09-21: run
+  # `python -m app.cli relogin loxo --headed --force` once and fix what differs.
+  # Remember one Loxo session used from two machines dies - run it where the
+  # profile lives, and never from the laptop while the server holds a copy.
+  steps:
+    - action: goto
+      url: https://app.loxo.co/login
+      wait_until: domcontentloaded
+    - action: wait
+      ms: 5000
+    - action: click
+      selector: "button:has-text('Continue with Microsoft')"
+    - action: microsoft_sso
+      username: "{{ username }}"
+      password: "{{ password }}"
+      totp_secret: "{{ totp_secret }}"
+      timeout_ms: 180000
+    - action: wait_for_url
+      description: the app, not /login
+      pattern: "app\\.loxo\\.co/(agencies|dashboard|people|jobs)"
+      timeout_ms: 120000
 
 defaults:
   base_url: https://app.loxo.co

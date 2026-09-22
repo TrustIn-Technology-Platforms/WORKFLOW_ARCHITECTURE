@@ -1,5 +1,10 @@
 """Export fresh, decrypted cookies from the local browser profiles.
 
+Since 2026-09-21 the deployed service keeps its own sessions alive and signs
+in again with stored credentials (app/platforms/keepalive.py, D-021), so this
+is no longer a scheduled job: run it once before the *first* upload of a
+profile, and `python -m app.cli keepalive` for the same round locally.
+
 Chrome encrypts a profile's cookie store with an OS-bound key, so the raw
 profile is only fully usable on the machine that wrote it. Playwright, however,
 reads cookies through the running browser - decrypted - and exports them in a

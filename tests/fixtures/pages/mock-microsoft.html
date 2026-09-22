@@ -1,0 +1,129 @@
+<!doctype html>
+<!--
+  Stands in for login.microsoftonline.com.
+
+  Served by a Playwright route in the tests so the URL really is a Microsoft
+  host. The element ids and names are the real ones - loginfmt, passwd, otc,
+  idSIButton9, KmsiCheckboxField and so on - which is what makes this a test of
+  `microsoft_sso` rather than of the mock.
+
+  Query flags:  push=1  -> after the password, show the Authenticator "approve"
+                          screen first (the `push` -> `methods` -> `code` path)
+                nocode=1 -> no second factor at all
+  ?return=<url> is where a redirect-style sign-in ends up (the result in the
+  hash); with ?popup=1 the result goes to window.opener by postMessage and the
+  popup closes itself.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sign in to your account</title>
+  <style>
+    body { font: 15px system-ui, sans-serif; margin: 40px; max-width: 440px; }
+    .screen { display: none; }
+    .screen.on { display: block; }
+    input { width: 100%; padding: 8px; margin: 8px 0; }
+    .error { color: #e81123; }
+  </style>
+</head>
+<body>
+  <div id="screen-email" class="screen on">
+    <h1>Sign in</h1>
+    <input type="email" name="loginfmt" placeholder="Email, phone, or Skype">
+    <div id="usernameError" class="error" style="display:none">We couldn't find an account with that username.</div>
+    <input type="submit" id="idSIButton9" value="Next">
+  </div>
+
+  <div id="screen-password" class="screen">
+    <h1>Enter password</h1>
+    <input type="password" name="passwd" placeholder="Password">
+    <div id="passwordError" class="error" style="display:none">Your account or password is incorrect.</div>
+    <input type="submit" id="idSIButton9" value="Sign in">
+  </div>
+
+  <div id="screen-push" class="screen">
+    <h1>Approve sign in request</h1>
+    <div id="idDiv_SAOTCAS_Description">Open your Authenticator app, and enter the number shown to sign in.</div>
+    <div id="idRichContext_DisplaySign">42</div>
+    <a id="signInAnotherWay" href="#">I can't use my Microsoft Authenticator app right now</a>
+  </div>
+
+  <div id="screen-methods" class="screen">
+    <h1>Verify your identity</h1>
+    <div id="idDiv_SAOTCS_Proofs">
+      <div data-value="PhoneAppNotification" role="button">Approve a request on my Microsoft Authenticator app</div>
+      <div data-value="PhoneAppOTP" role="button">Use a verification code</div>
+    </div>
+  </div>
+
+  <div id="screen-code" class="screen">
+    <h1>Enter code</h1>
+    <input type="tel" name="otc" placeholder="Code">
+    <input type="checkbox" id="idChkBx_SAOTCC_TD"> <label for="idChkBx_SAOTCC_TD">Don't ask again for 30 days</label>
+    <div id="idTD_Error" class="error" style="display:none">You didn't enter the expected verification code.</div>
+    <input type="submit" id="idSubmit_SAOTCC_Continue" value="Verify">
+  </div>
+
+  <div id="screen-kmsi" class="screen">
+    <h1>Stay signed in?</h1>
+    <input type="checkbox" id="KmsiCheckboxField"> <label for="KmsiCheckboxField">Don't show this again</label>
+    <input type="button" id="idBtn_Back" value="No">
+    <input type="submit" id="idSIButton9" value="Yes">
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const USER = 'marcus@trust-in.test';
+    const PASS = 'correct horse battery';
+    const result = { user: '', password_ok: false, code: '', kmsi: false, path: [] };
+
+    function show(name) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === 'screen-' + name));
+      result.path.push(name);
+    }
+    function finish() {
+      const ret = params.get('return') || '/';
+      if (params.get('popup') && window.opener) {
+        window.opener.postMessage({ type: 'ms-done', ...result }, '*');
+        window.close();
+      } else {
+        location.href = ret + '#ms=' + encodeURIComponent(JSON.stringify(result));
+      }
+    }
+    function afterPassword() {
+      if (params.get('nocode')) return show('kmsi');
+      if (params.get('push')) return show('push');
+      show('code');
+    }
+
+    document.querySelector('#screen-email #idSIButton9').addEventListener('click', () => {
+      const typed = document.querySelector('input[name=loginfmt]').value.trim();
+      if (typed !== USER) { document.getElementById('usernameError').style.display = 'block'; return; }
+      result.user = typed;
+      setTimeout(() => show('password'), 400);   // Microsoft is never instant
+    });
+    document.querySelector('#screen-password #idSIButton9').addEventListener('click', () => {
+      const typed = document.querySelector('input[name=passwd]').value;
+      if (typed !== PASS) { document.getElementById('passwordError').style.display = 'block'; return; }
+      result.password_ok = true;
+      setTimeout(afterPassword, 400);
+    });
+    document.getElementById('signInAnotherWay').addEventListener('click', (e) => {
+      e.preventDefault(); setTimeout(() => show('methods'), 300);
+    });
+    document.querySelector('[data-value="PhoneAppOTP"]').addEventListener('click', () => {
+      setTimeout(() => show('code'), 300);
+    });
+    document.getElementById('idSubmit_SAOTCC_Continue').addEventListener('click', () => {
+      const typed = document.querySelector('input[name=otc]').value.trim();
+      if (!/^\d{6}$/.test(typed)) { document.getElementById('idTD_Error').style.display = 'block'; return; }
+      result.code = typed;
+      setTimeout(() => show('kmsi'), 400);
+    });
+    document.querySelector('#screen-kmsi #idSIButton9').addEventListener('click', () => {
+      result.kmsi = document.getElementById('KmsiCheckboxField').checked;
+      setTimeout(finish, 300);
+    });
+  </script>
+</body>
+</html>

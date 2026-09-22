@@ -8,7 +8,9 @@ platform.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -725,6 +727,203 @@ async def action_screenshot(run: StepRun) -> None:
 
 
 # ----------------------------------------------------------------------
+# sign-in: Microsoft SSO
+# ----------------------------------------------------------------------
+
+# Entra ID and personal Microsoft accounts both sign in here. The element ids
+# below have been stable for years and are the same on every tenant, which is
+# what makes one action serve noon and Loxo alike.
+_MS_HOSTS = re.compile(
+    r"^https://(login\.microsoftonline\.com|login\.live\.com|login\.microsoft\.com|"
+    r"[a-z0-9-]+\.b2clogin\.com|login\.windows\.net)/",
+    re.I,
+)
+
+# Which screen the Microsoft page is showing, judged from what is visible. One
+# probe, one round trip, and the result is a plain word the loop below acts on.
+_MS_SCREEN_JS = """() => {
+  const shown = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const vis = (sel) => [...document.querySelectorAll(sel)].some(shown);
+  const text = (document.body && document.body.innerText) || '';
+  // Visible errors only: Microsoft keeps every screen's error box in the DOM
+  // and shows one at a time, so a hidden "password incorrect" is not news.
+  const err = [...document.querySelectorAll(
+      '#usernameError, #passwordError, #idTD_Error, #errorText, .alert-error, [role=alert]')]
+    .filter(shown)
+    .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ').slice(0, 240);
+  let kind = 'unknown';
+  if (vis('#idSubmit_ProofUp_Redirect') || /More information required/i.test(text)) kind = 'proofup';
+  else if (vis('input[name=otc]')) kind = 'code';
+  else if (vis('#idDiv_SAOTCAS_Description') || vis('#idRichContext_DisplaySign') ||
+           /Approve sign[- ]in request|Open your Authenticator app/i.test(text)) kind = 'push';
+  else if (vis('#idDiv_SAOTCS_Proofs') || vis('[data-value="PhoneAppOTP"]')) kind = 'methods';
+  else if (vis('input[name=passwd]')) kind = 'password';
+  else if (vis('input[name=loginfmt]')) kind = 'email';
+  else if (vis('#KmsiCheckboxField') || /Stay signed in\\?/i.test(text)) kind = 'kmsi';
+  else if (vis('#tilesHolder') || vis('#otherTile')) kind = 'picker';
+  return {kind, error: err, title: document.title};
+}"""
+
+
+async def _microsoft_page(run: StepRun, wait_ms: int) -> "Page":
+    """The tab showing Microsoft's sign-in.
+
+    Firebase-style apps (noon) open it as a popup; classic OAuth (Loxo) redirects
+    the same tab. Either way it is some page in this context whose URL is a
+    Microsoft login host, so look at all of them rather than assume.
+    """
+    waited = 0
+    while waited <= wait_ms:
+        for candidate in list(run.page.context.pages):
+            if not candidate.is_closed() and _MS_HOSTS.match(candidate.url or ""):
+                return candidate
+        await run.page.wait_for_timeout(500)
+        waited += 500
+    raise PlatformError(
+        "the Microsoft sign-in page did not open - the platform's own "
+        "'Sign in with Microsoft' button was clicked, but no tab landed on "
+        "login.microsoftonline.com"
+    )
+
+
+async def _ms_click(page: "Page", selector: str, timeout_ms: int = 5_000) -> bool:
+    """Click the first *visible* match. Microsoft reuses `#idSIButton9` for
+    Next, Sign in and Yes, and a page can hold an earlier screen's button
+    hidden; clicking the first in DOM order would wait on that one for ever."""
+    try:
+        await page.locator(f"{selector} >> visible=true").first.click(timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
+async def action_microsoft_sso(run: StepRun) -> None:
+    """Complete a Microsoft sign-in with the stored credentials.
+
+    Drives whatever sequence of screens Microsoft puts up - account picker,
+    email, password, a second factor, "Stay signed in?" - until the page is
+    back on the platform or the popup has closed itself. Every screen it cannot
+    answer ends with a message saying what the account needs, because the
+    alternative is a 25-second timeout that says nothing.
+    """
+    from app.utils.totp import seconds_left, totp_now
+
+    username = run.text("username").strip()
+    password = run.text("password")
+    totp_secret = run.text("totp_secret").strip()
+    if not username or not password:
+        raise PlatformError(
+            "microsoft_sso has no username or password - set the platform's "
+            "<KEY>_LOGIN_USERNAME and <KEY>_LOGIN_PASSWORD"
+        )
+
+    # A whole sign-in, not one click: several screens, each a round trip to
+    # Microsoft, so the ordinary per-action budget is far too short.
+    total_ms = max(int(run.timeout_ms or 0), 120_000)
+    page = await _microsoft_page(run, wait_ms=30_000)
+
+    deadline = time.monotonic() + total_ms / 1000
+    typed: set[str] = set()
+    last_kind = "unknown"
+    while time.monotonic() < deadline:
+        if page.is_closed():
+            return  # the popup closed itself: the app has its token
+        if not _MS_HOSTS.match(page.url or ""):
+            return  # redirected back to the platform
+        try:
+            screen = await page.evaluate(_MS_SCREEN_JS)
+        except Exception:
+            # Mid-navigation, or the popup closing under us: look again.
+            await asyncio.sleep(0.7)
+            continue
+        kind = str(screen.get("kind") or "unknown")
+        error = str(screen.get("error") or "")
+        if kind != last_kind:
+            log.info("microsoft sign-in screen", extra={"screen": kind})
+            last_kind = kind
+
+        if kind == "picker":
+            if not await _ms_click(page, f"#tilesHolder >> text={username}"):
+                await _ms_click(page, "#otherTile, #otherTileText")
+        elif kind == "email":
+            if "email" in typed and error:
+                raise PlatformError(f"Microsoft rejected the username: {error}")
+            await page.locator("input[name=loginfmt] >> visible=true").first.fill(username)
+            typed.add("email")
+            await _ms_click(page, "#idSIButton9, input[type=submit]")
+        elif kind == "password":
+            if "password" in typed and error:
+                raise PlatformError(
+                    f"Microsoft rejected the password: {error}. Update the "
+                    "platform's <KEY>_LOGIN_PASSWORD."
+                )
+            await page.locator("input[name=passwd] >> visible=true").first.fill(password)
+            typed.add("password")
+            await _ms_click(page, "#idSIButton9, input[type=submit]")
+        elif kind == "code":
+            if not totp_secret:
+                raise PlatformError(
+                    "Microsoft asked for a verification code and no authenticator "
+                    "seed is stored. Register an authenticator app on the account "
+                    "and set the platform's <KEY>_LOGIN_TOTP_SECRET to its seed."
+                )
+            if "code" in typed and error:
+                raise PlatformError(
+                    f"Microsoft rejected the verification code: {error}. Check "
+                    "the stored TOTP seed and the server clock."
+                )
+            if seconds_left() < 4:
+                await page.wait_for_timeout(4_500)  # never type a dying code
+            await page.locator("input[name=otc] >> visible=true").first.fill(totp_now(totp_secret))
+            typed.add("code")
+            await _ms_click(page, "#idChkBx_SAOTCC_TD", timeout_ms=1_000)  # "don't ask again"
+            await _ms_click(page, "#idSubmit_SAOTCC_Continue, #idSIButton9, input[type=submit]")
+        elif kind == "push":
+            # Authenticator approval or number matching: nobody is holding the
+            # phone. Ask for the code method instead, if a seed exists.
+            if not totp_secret:
+                raise PlatformError(
+                    "Microsoft wants the sign-in approved in the Authenticator "
+                    "app, which nobody is holding. Register a verification-code "
+                    "method on the account and set <KEY>_LOGIN_TOTP_SECRET, or "
+                    "have the tenant exempt this account from push approval."
+                )
+            if not await _ms_click(page, "#signInAnotherWay, a:has-text('sign in another way')"):
+                await page.wait_for_timeout(1_500)
+        elif kind == "methods":
+            # The method tiles carry data-value; the text fallback is scoped to
+            # a button-like element, never a plain div, because `:has-text`
+            # also matches every ancestor and the first of those is the page.
+            if not await _ms_click(
+                page, "[data-value='PhoneAppOTP'], [role=button]:has-text('verification code')"
+            ):
+                raise PlatformError(
+                    "Microsoft offered other sign-in methods but none was a "
+                    "verification code. Register an authenticator app on the account."
+                )
+        elif kind == "kmsi":
+            await _ms_click(page, "#KmsiCheckboxField", timeout_ms=1_000)
+            if not await _ms_click(page, "#idSIButton9, input[type=submit]"):
+                await _ms_click(page, "#acceptButton")
+        elif kind == "proofup":
+            raise PlatformError(
+                "Microsoft says 'More information required': the account must "
+                "finish its security-info registration once, by a person, before "
+                "it can sign in unattended."
+            )
+        elif error and typed:
+            raise PlatformError(f"Microsoft sign-in stopped with: {error}")
+        # Not the page's own timer: a popup that has just closed itself has no
+        # page to wait on, and the next pass of the loop is what notices that.
+        await asyncio.sleep(1.2)
+
+    raise PlatformError(
+        f"Microsoft sign-in did not finish within {total_ms // 1000}s; the last "
+        f"screen was {last_kind!r}"
+    )
+
+
+# ----------------------------------------------------------------------
 # registry
 # ----------------------------------------------------------------------
 
@@ -757,5 +956,13 @@ ACTIONS: dict[str, ActionSpec] = {
     "capture_attribute": ActionSpec(action_capture_attribute, ("selector",), ("as",)),
     "screenshot": ActionSpec(
         action_screenshot, (), ("name",), needs_selector=False
+    ),
+    # Sign-in only: a whole Microsoft round trip as one step. See LOGIN_ROOTS
+    # in recipe.py for the values it is handed.
+    "microsoft_sso": ActionSpec(
+        action_microsoft_sso,
+        (),
+        ("username", "password", "totp_secret"),
+        needs_selector=False,
     ),
 }

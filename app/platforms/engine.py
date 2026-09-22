@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from app.config import Settings, get_settings
 from app.logging_conf import get_logger
@@ -211,6 +211,22 @@ class RecipeEngine:
             # steps would only produce a misleading failure.
             pass
 
+        return self.report
+
+    async def run_steps(
+        self,
+        steps: list[Step],
+        context: dict[str, Any] | Callable[[], dict[str, Any]],
+    ) -> RunReport:
+        """Run a list of steps outside the document flow - a sign-in.
+
+        The context may be a callable, rebuilt before every step: a one-time
+        code minted when the flow started can be stale by the time the screen
+        asking for it appears, so the login runner hands in a factory that
+        mints a fresh one each time.
+        """
+        for step in steps:
+            await self._run_step(step, context() if callable(context) else context)
         return self.report
 
     async def _run_phase(self, steps: list[Step], context: dict[str, Any]) -> None:

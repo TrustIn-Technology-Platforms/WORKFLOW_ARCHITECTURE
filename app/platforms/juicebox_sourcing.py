@@ -543,6 +543,26 @@ def stage_plan(stage: str | None) -> list[str]:
     return stages_up_to(stage, ALL_STAGE_KEYS)
 
 
+def stage_for_filter(stage: str | None, *, stated: bool) -> str | None:
+    """The stage `Company Funding Stages` may be set from: a stated one only.
+
+    The two filters that rest on the client's stage are not the same bet
+    (D-022). The Companies list is thirty names a recruiter reads in a minute
+    and can strike out, so D-020 lets Claude's inference draw it. The funding
+    stage is a select nobody re-reads, and on Axle (2026-09-22) an inferred
+    "Series A" cut the search to Seed and Series A while Juicebox's own
+    pre-selection had run to Series C - a guess narrowing the pool past the
+    platform's own guess, under a row that said OK.
+
+    Callers pass the stage through here so the choice is made once, in the
+    module that owns the rest of the stage policy, rather than in each
+    caller's head: `stage` alone crosses `configure_filters` as a bare string
+    and an inferred "Series A" is indistinguishable there from a client who
+    wrote it.
+    """
+    return stage if (stage and stated) else None
+
+
 def new_lines(before: str, after: str) -> list[str]:
     """Section lines that appeared between two reads - the chip that landed.
 
@@ -1070,7 +1090,12 @@ async def configure_filters(
     companies: list[str] | None = None,
     stage: str | None = None,
 ) -> SourcingReport:
-    """Open the search's filter editor, add what is missing, save, verify."""
+    """Open the search's filter editor, add what is missing, save, verify.
+
+    `stage` is a stage the client STATED - callers pass it through
+    `stage_for_filter`. None leaves Company Funding Stages as Juicebox's own
+    AI set it, which is not the same as clearing it (D-022).
+    """
     report = SourcingReport(search_url=search_url)
     await page.goto(search_url, wait_until="domcontentloaded", timeout=90_000)
     await _open_editor(page)
@@ -1250,7 +1275,8 @@ async def set_up_sourcing(
     `project_url` reuses a project that already exists - one a recruiter made,
     or one an earlier run created and then stopped short of the search - rather
     than standing a duplicate up beside it. `search_url` goes further and only
-    sets the filters on a search that already exists.
+    sets the filters on a search that already exists. `stage` is a stated
+    stage only; see `stage_for_filter`.
     """
     created = False
     if search_url is None:

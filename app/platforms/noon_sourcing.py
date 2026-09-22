@@ -185,10 +185,11 @@ def targeting_preamble(
 ) -> str:
     """The search facts, stated plainly, to sit above the job description.
 
-    noon's `generate_params` is the only call that writes the role's
-    `preferences` — the location, the titles and the years of experience that
-    decide which profiles the agent looks at in the first place. It writes what
-    it can read out of the text it is given, and the text it was being given was
+    noon's `generate_params` *extracts* the role's search parameters — the
+    location, the titles and the years of experience that decide which profiles
+    the agent looks at in the first place. (It was long believed to save them
+    too; it does not save the location, which is what `save_location` is for.)
+    It reads what it can out of the text it is given, and the text it was given was
     the advert, which is marketing copy: TrustIn's adverts do not state the
     location in prose, because the location is a Notion column. So the location
     came back empty on every role and the agent searched globally
@@ -208,7 +209,8 @@ def targeting_preamble(
     search to nobody while looking like diligence.
 
     Whether it worked is not assumed — `run_wizard` reads `preferences.location`
-    back off the role afterwards and warns when it is still empty.
+    back off the role afterwards, and refuses to start the search if it is still
+    empty rather than letting it run unrestricted.
     """
     lines: list[str] = []
     role = role_title(title)
@@ -232,6 +234,22 @@ def as_text(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return ", ".join(str(item).strip() for item in value if str(item).strip())
     return str(value or "").strip()
+
+
+def as_list(value: Any) -> list[str]:
+    """The same value as the list shape `preferences` stores it in.
+
+    `as_text` is for reading; this is for writing back. Every recorded noon
+    role holds `preferences.location` as a list (artifacts/live1, and all 125
+    roles surveyed), so a location extracted as a bare string is wrapped rather
+    than sent as one — and a multi-part location stays split, because joining
+    "New York" and "Atlanta, Georgia, United States" into one string would ask
+    noon to find a single place by that name.
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
 
 
 def as_lines(value: Any) -> list[str]:
@@ -487,9 +505,11 @@ class SourcingWizard:
     async def read_job_description(self, jd: str, *, save: bool = True) -> dict[str, Any]:
         """Hand noon the advert and take back what it extracted.
 
-        Without `dont_save` the backend also writes the titles, locations and
-        years-of-experience it inferred onto the role — which is what the
-        wizard's own Submit does, and why a dry run passes `dont_save`.
+        `dont_save` keeps the call a pure read, which is what a dry run wants.
+        Without it noon caches the job description against the role — but *not*
+        the location: that was assumed from this flag's name until a role read
+        back with `preferences.location` still `[]` on 2026-09-22, having been
+        handed a location it quoted back correctly. `save_location` writes it.
         """
         payload: dict[str, Any] = {
             "token": self.session.token,
@@ -514,6 +534,47 @@ class SourcingWizard:
             },
         )
         return params
+
+    # -- step 3: confirm the criteria noon extracted ----------------------
+    async def save_location(
+        self, role: dict[str, Any], location: list[str]
+    ) -> None:
+        """Write the location onto the role, because nothing else does.
+
+        The wizard's step 3 is "Confirm the search criteria" — the screen where
+        a human accepts the location noon extracted — and it is the one step of
+        the seven whose call was never mapped. So the replay skipped it, and
+        `preferences.location` stayed `[]` from the moment the Create New Role
+        modal wrote it: every role was born searching globally and the run said
+        "Posted" (the 2026-09-22 row).
+
+        `update_role` is the write the modal's own Submit makes, recorded whole
+        in `artifacts/live1/20-after-submit.json` — same four fields, same flat
+        `preferences` block. The block is sent back amended rather than rebuilt,
+        so the keys this code has never heard of (`companyBlacklist`,
+        `managementExp`, the recruiter list) travel untouched; sending a partial
+        block would silently clear them.
+
+        **What is not proven:** no artifact in this repo holds a *populated*
+        `preferences.location`, so whether noon wants the plain strings
+        `generate_params` returns or values resolved through its own location
+        picker is a guess from the empty case. That is why the caller reads the
+        role back and refuses to start the search rather than trusting this.
+        """
+        preferences = role.get("preferences")
+        preferences = dict(preferences) if isinstance(preferences, dict) else {}
+        preferences["location"] = location
+        await self.session.post(
+            "update_role",
+            {
+                "token": self.session.token,
+                "role": self.role_id,
+                # noon's own Submit sends the name alongside; omitting it on a
+                # call that replaces the role's record is not worth the risk.
+                "name": self.role_name,
+                "preferences": preferences,
+            },
+        )
 
     # -- step 2: where to source from -----------------------------------
     async def set_candidate_pool(self) -> None:
@@ -675,12 +736,20 @@ class SourcingWizard:
 # ----------------------------------------------------------------------
 
 
-async def fetch_role(session: NoonSession, role_id: str) -> dict[str, Any]:
+async def fetch_role(
+    session: NoonSession, role_id: str, *, fresh: bool = False
+) -> dict[str, Any]:
     """The role as noon holds it — its autopilot block is what we amend.
 
     Scoped by company, and retried through `refetch_roles`: `all_roles` answers
     from a cache that a role created seconds ago is not in yet, which is exactly
     the case when the campaign flow has just made one (seen 2026-08-31).
+
+    `fresh` reverses that order, for reading back a value we have just written.
+    The cache is only retried *past* here when the role is missing entirely, so
+    a role that is present but stale answers from the cache every time — which
+    made the old read-back unable to tell a failed save from a slow one, and had
+    it report a location as unsaved seconds after saving it.
     """
 
     def _find(payload: Any) -> dict[str, Any] | None:
@@ -696,7 +765,8 @@ async def fetch_role(session: NoonSession, role_id: str) -> dict[str, Any]:
     if session.company:
         body["company"] = session.company
 
-    for route in ("all_roles", "refetch_roles"):
+    routes = ("refetch_roles", "all_roles") if fresh else ("all_roles", "refetch_roles")
+    for route in routes:
         found = _find(await session.post(route, body))
         if found is not None:
             return found
@@ -709,13 +779,31 @@ async def fetch_role(session: NoonSession, role_id: str) -> dict[str, Any]:
     )
 
 
-def _check_preferences(role: dict[str, Any], report: SourcingReport) -> None:
-    """Did the filters actually land on the role?
+def _warn_no_location(report: SourcingReport, *, targeting: str) -> None:
+    report.warnings.append(
+        "noon extracted no location from this job description, so the role "
+        "will be searched globally. Fill the row's Location column, or "
+        "state the location in the client's JD."
+        if not targeting.strip()
+        else "noon extracted no location even though one was given to it - "
+        "check the role's Control Panel and set it by hand."
+    )
 
-    `generate_params` extracts the search parameters and saves them itself, so
-    the role read back straight afterwards is the proof. This is the check the
-    location gap was missing: extraction succeeding and the save succeeding are
-    two different things, and only the second one decides who gets searched for.
+
+def _warn_no_titles(report: SourcingReport) -> None:
+    report.warnings.append(
+        "noon extracted no job titles from this job description, so it is "
+        "matching on the criteria alone. Check the role's Control Panel."
+    )
+
+
+def _check_preferences(role: dict[str, Any], report: SourcingReport) -> bool:
+    """Did the filters actually land on the role? Returns whether a location did.
+
+    Extraction succeeding and the save succeeding are two different things, and
+    only the second one decides who gets searched for — so this reads the role
+    rather than trusting the write, and its answer is what decides whether the
+    search is allowed to start.
     """
     preferences = role.get("preferences")
     if not isinstance(preferences, dict):
@@ -723,21 +811,20 @@ def _check_preferences(role: dict[str, Any], report: SourcingReport) -> None:
             "noon's role carries no preferences block, so the location and "
             "titles could not be confirmed."
         )
-        return
+        return False
 
     saved = as_text(preferences.get("location"))
     if saved:
         report.location = saved
-    elif report.location:
-        report.warnings.append(
-            f"noon read the location as {report.location!r} but did not save it "
-            "onto the role, so the search is not restricted to it. Set it in the "
-            "role's Control Panel."
-        )
 
     titles = [t for t in as_lines(preferences.get("titles")) if t]
     if titles:
         report.titles = titles
+    # Read off the role rather than off the extraction: a role that already
+    # carries titles from an earlier run is not matching on criteria alone,
+    # whatever this document's text happened to yield.
+    if not report.titles:
+        _warn_no_titles(report)
 
     log.info(
         "noon search filters after the save",
@@ -748,6 +835,7 @@ def _check_preferences(role: dict[str, Any], report: SourcingReport) -> None:
             "experience": as_text(preferences.get("experience")),
         },
     )
+    return bool(saved)
 
 
 async def set_up_sourcing(
@@ -817,26 +905,11 @@ async def run_wizard(
     )
     report.must_haves = must_haves
     report.promoted = promoted
+    # Kept in the list shape `preferences` stores, because this is what gets
+    # written back — `report.location` is the same value flattened for reading.
+    extracted_location = as_list(params.get("location"))
     report.location = as_text(params.get("location"))
     report.titles = [t for t in as_lines(params.get("titles")) if t]
-
-    # The filters, checked rather than assumed. An empty location means the
-    # agent searches globally and the criteria do the geography badly or not at
-    # all, which is invisible until a recruiter reads the shortlist.
-    if not report.location:
-        report.warnings.append(
-            "noon extracted no location from this job description, so the role "
-            "will be searched globally. Fill the row's Location column, or "
-            "state the location in the client's JD."
-            if not targeting.strip()
-            else "noon extracted no location even though one was given to it - "
-            "check the role's Control Panel and set it by hand."
-        )
-    if not report.titles:
-        report.warnings.append(
-            "noon extracted no job titles from this job description, so it is "
-            "matching on the criteria alone. Check the role's Control Panel."
-        )
 
     if not must_haves:
         raise PlatformError(
@@ -846,6 +919,11 @@ async def run_wizard(
         )
 
     if dry_run:
+        # Nothing was written, so what was extracted is all there is to judge.
+        if not report.location:
+            _warn_no_location(report, targeting=targeting)
+        if not report.titles:
+            _warn_no_titles(report)
         report.warnings.append(
             f"dry run: would set {len(must_haves)} must-have(s) "
             f"({len(promoted)} promoted from nice-to-haves) and let noon generate "
@@ -858,7 +936,23 @@ async def run_wizard(
         return report
 
     role = await fetch_role(session, role_id)
-    _check_preferences(role, report)
+
+    # The location, written and then read back. Nothing in the wizard's own
+    # calls puts it on the role — the step that would have is the one screen
+    # never mapped — so without this the role keeps the empty location its
+    # creation modal wrote and searches the whole world.
+    if extracted_location:
+        await wizard.save_location(role, extracted_location)
+        # Fresh: `all_roles` serves the copy from before the write, which would
+        # make a save that worked look like one that failed.
+        role = await fetch_role(session, role_id, fresh=True)
+
+    located = _check_preferences(role, report)
+    # Only when there was nothing to save. A location that was extracted and
+    # would not stick is a different failure, and gets its own louder line
+    # below rather than one claiming noon never read one.
+    if not located and not extracted_location:
+        _warn_no_location(report, targeting=targeting)
     autopilot = role.get("autopilot")
     autopilot = dict(autopilot) if isinstance(autopilot, dict) else {}
     autopilot["source"] = wizard.source
@@ -884,8 +978,24 @@ async def run_wizard(
             "was clearly the stricter one; answer them in noon if they matter"
         )
 
+    # A search with no location is not a footnote on a successful run: every
+    # candidate it returns comes from the wrong pool, and a shortlist that looks
+    # ordinary is the most expensive way to find that out. So the role is saved
+    # and left idle instead — the one outcome a recruiter cannot miss, and one
+    # click in noon away from being right. Raising would be quieter, not louder:
+    # `noon.py` catches a PlatformError from here into a warning and the row
+    # still reads Posted, having already started the search.
+    if extracted_location and not located:
+        wizard.start_sourcing = False
+        report.warnings.append(
+            f"noon would not keep the location ({', '.join(extracted_location)}) "
+            "on this role, so the search has NOT been started - it would have "
+            "sourced from everywhere. Everything else is saved: open the role in "
+            "noon, set the location in the Control Panel, and press Start."
+        )
+
     await wizard.finish(autopilot, answers)
-    report.started_sourcing = start_sourcing
+    report.started_sourcing = wizard.start_sourcing
 
     log.info(
         "noon sourcing criteria set",
