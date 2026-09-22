@@ -214,11 +214,20 @@ _FENCE_LINE = re.compile(r"^\s*={2,}\s*(.+?)\s*={2,}\s*$")
 
 def _promote_pseudo_headings(blocks: list[Block]) -> None:
     """Treat fully-bold short lines - and `=== fenced ===` lines - as headings
-    when the doc has no real ones."""
-    if any(b.is_heading for b in blocks):
-        return
+    where the document has none of its own.
 
-    for block in blocks:
+    Scoped to the run above the first real heading rather than abandoned for the
+    whole document. A sequence document writes its own structure as bold lines,
+    and then `Client JD` pastes the client's spec in with its Word Heading styles
+    intact. Bailing out on `any(is_heading)` let those pasted headings suppress
+    every bold heading above them: the advert, Email1-3, InMail and Wellfound
+    collapsed into one 6663-char blob and the row posted with zero email steps
+    (2026-09-22). Headings inside the spec are left alone - everything below the
+    Client JD heading is the JD verbatim, headings and all.
+    """
+    first_real = next((i for i, b in enumerate(blocks) if b.is_heading), len(blocks))
+
+    for block in blocks[:first_real]:
         if block.style != "body":
             continue
 
