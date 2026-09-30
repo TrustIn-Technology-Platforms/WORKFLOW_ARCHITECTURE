@@ -36,31 +36,32 @@ def test_no_key_returns_empty_lists_not_an_error(monkeypatch):
     assert result == SearchTargeting()
 
 
-def test_the_sourcing_wrappers_compute_the_role_name_correctly(monkeypatch):
+def test_the_sourcing_wrappers_compute_the_role_name_correctly(monkeypatch, tmp_path):
     """The production TypeError of 2026-09-02: `_role_name(document)` where the
     signature is (source_name, row, advert, email_steps). It fired only at
     runtime, after three platforms had already posted, and failed the row. Both
     dry-run paths exercise the exact call now."""
     import asyncio
 
-    from app.config import get_settings
+    from app.config import Settings
     from app.models import Advert, ParsedDocument
     from app.platforms import load_recipes, resolve
     from app.platforms.engine import RunReport
     from app.platforms.juicebox import JuiceboxAdapter
     from app.platforms.loxo import LoxoAdapter
+    from app.platforms.sourcing_profile import DraftProfile
 
-    async def fake_targeting(*args, **kwargs):
-        return SearchTargeting(similar_titles=["Platform Engineer"], skills=["AWS"],
-                               min_years=5)
+    async def fake_profile(*args, **kwargs):
+        return DraftProfile(similar_titles=["Platform Engineer"],
+                            must_have_skills=["AWS"], min_years=5)
 
     async def fake_companies(*args, **kwargs):
         return CompanyTargeting(stage="Series B", stage_basis="inferred", companies=["Ramp"])
 
-    monkeypatch.setattr("app.platforms.targeting_ai.draft_targeting", fake_targeting)
+    monkeypatch.setattr("app.platforms.sourcing_profile.draft_profile", fake_profile)
     monkeypatch.setattr("app.platforms.targeting_ai.draft_companies", fake_companies)
 
-    settings = get_settings()
+    settings = Settings(artifact_dir=str(tmp_path))
     recipes = load_recipes(settings)
     document = ParsedDocument(
         advert=Advert(title="Platform Engineer / NY", body_text="JD here.",

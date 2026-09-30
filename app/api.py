@@ -55,16 +55,25 @@ def _row_lock():
 
 
 async def _run_if_ready(page_id: str, dry_run: bool | None, *, source: str) -> None:
-    """Run one row, under the lock, only while it still reads Ready to Post."""
+    """Run one row, under the lock, only while it still reads Ready to Post -
+    or Delete, which runs the row's delete instead."""
     from app.notion.client import NotionClient
-    from app.pipeline import process_row
+    from app.pipeline import delete_row, process_row
 
     settings = get_settings()
     settings.ensure_dirs()
     async with _row_lock():
         async with NotionClient(settings) as client:
             row = await client.get_row(page_id)
-            if (row.status or "").strip() != settings.status_ready:
+            status = (row.status or "").strip()
+            if status == settings.status_delete:
+                deleted = await delete_row(row, client, settings, dry_run)
+                log.info(
+                    f"{source} row delete done",
+                    extra={"page_id": page_id, "ok": deleted.ok, "detail": deleted.detail[:500]},
+                )
+                return
+            if status != settings.status_ready:
                 log.info(
                     "row skipped - not ready",
                     extra={"page_id": page_id, "status": row.status, "source": source},
@@ -122,6 +131,7 @@ async def _poll_ready_rows(settings) -> None:
         try:
             async with NotionClient(settings) as client:
                 rows = await client.query_ready_rows()
+                rows += await client.query_rows_by_status(settings.status_delete)
             for row in rows:
                 await _run_if_ready(row.page_id, None, source="poll")
         except Exception:  # noqa: BLE001 - the poll must never take the service down
@@ -230,6 +240,48 @@ async def _sweep_stuck_rows(settings) -> None:
         await asyncio.sleep(max(60, settings.stuck_sweep_minutes * 60))
 
 
+# The last trash sweep, for /health: which rows it found deleted in Notion and
+# what became of their posts.
+_TRASH_STATE: dict = {"last_run": None, "deleted": [], "error": None}
+
+
+async def _sweep_trashed_rows(settings) -> None:
+    """Delete the posts of rows deleted in Notion, on a timer.
+
+    Under the row lock, because deleting drives the same browsers and
+    accounts a posting row does. See pipeline.sweep_trashed_rows.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.notion.client import NotionClient
+    from app.pipeline import sweep_trashed_rows
+
+    if not settings.notion_configured or not settings.delete_trashed_rows:
+        return
+    if settings.dry_run:
+        log.warning("trash sweep disabled: DRY_RUN would record nothing")
+        return
+    await asyncio.sleep(90)  # after the first poll, not racing it
+    while True:
+        try:
+            async with _row_lock():
+                async with NotionClient(settings) as client:
+                    reports = await sweep_trashed_rows(client, settings)
+            _TRASH_STATE.update(
+                last_run=datetime.now(timezone.utc).isoformat(),
+                error=None,
+                deleted=[
+                    {"page_id": r.page_id, "title": r.title, "ok": r.ok, "detail": r.detail[:400]}
+                    for r in reports
+                ] or _TRASH_STATE["deleted"],
+            )
+        except Exception as exc:  # noqa: BLE001 - the sweep must never take the service down
+            _TRASH_STATE["error"] = f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            log.exception("trash sweep failed")
+        await asyncio.sleep(max(60, settings.trash_sweep_minutes * 60))
+
+
 def create_app() -> FastAPI:
     import asyncio
     from contextlib import asynccontextmanager
@@ -243,6 +295,7 @@ def create_app() -> FastAPI:
             asyncio.create_task(_sweep_stuck_rows(settings)),
             asyncio.create_task(_poll_ready_rows(settings)),
             asyncio.create_task(_keepalive_sessions(settings)),
+            asyncio.create_task(_sweep_trashed_rows(settings)),
         ]
         try:
             yield
@@ -315,7 +368,7 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.6",  # bumped with the server-side keepalive + re-login
+            "version": "1.7",  # bumped with deleting rows
             "notion_configured": settings.notion_configured,
             # Which platforms can sign themselves in: stored credentials AND
             # login steps in the recipe. Booleans only - never the values.
@@ -325,6 +378,16 @@ def create_app() -> FastAPI:
                 "every_hours": settings.session_keepalive_hours,
                 "relogin": settings.session_relogin,
                 **_KEEPALIVE_STATE,
+            },
+            # Deleting rows: where the ledger of posted rows lives (it must be
+            # on the volume, or every deploy forgets what to delete) and what
+            # the last trash sweep found.
+            "deletes": {
+                "ledger": str(settings.ledger_file),
+                "ledger_exists": settings.ledger_file.is_file(),
+                "trashed_rows": settings.delete_trashed_rows,
+                "trash_wait_hours": settings.delete_trashed_after_hours,
+                **_TRASH_STATE,
             },
             "webhook_secret_set": bool(settings.webhook_secret),
             # False here silently costs Wellfound its Skills tags and the
@@ -410,6 +473,11 @@ def create_app() -> FastAPI:
                 dest.mkdir(parents=True, exist_ok=True)
                 for item in src.iterdir():
                     target = dest / item.name
+                    # The ledger beside the sessions is the server's own record
+                    # of what it posted; an upload never replaces it.
+                    if name == "sessions" and target.resolve() == settings.ledger_file.resolve():
+                        log.warning("upload carried a ledger - ignored", extra={"file": item.name})
+                        continue
                     if item.is_dir():
                         if target.exists():
                             shutil.rmtree(target)

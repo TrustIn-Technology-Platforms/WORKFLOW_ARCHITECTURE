@@ -201,6 +201,18 @@ class NotionClient:
         data = await self._request("GET", f"/pages/{normalise_page_id(page_id)}")
         return self._to_row(data)
 
+    async def page_in_trash(self, page_id: str) -> bool | None:
+        """Whether the page sits in Notion's trash. None when Notion will not
+        say - a 404 is also what an integration that lost access to the
+        database gets, and that is no reason to delete anything."""
+        try:
+            data = await self._request("GET", f"/pages/{normalise_page_id(page_id)}")
+        except NotionAPIError as exc:
+            if exc.status in (403, 404):
+                return None
+            raise
+        return bool(data.get("in_trash") or data.get("archived"))
+
     def _to_row(self, page: dict[str, Any]) -> NotionRow:
         s = self.settings
         props = page.get("properties", {}) or {}
@@ -291,6 +303,19 @@ class NotionClient:
             values[s.prop_notes] = (detail or "")[:1800]
         elif detail:
             values[s.prop_error] = f"Posted OK. Notes: {detail}"[:1800]
+        await self.update_properties(page_id, values)
+
+    async def mark_deleting(self, page_id: str) -> None:
+        await self.update_properties(
+            page_id, {self.settings.prop_status: self.settings.status_deleting}
+        )
+
+    async def mark_deleted(self, page_id: str, detail: str | None = None) -> None:
+        """Status Deleted, `Error` cleared, what each platform said in Notes."""
+        s = self.settings
+        values: dict[str, Any] = {s.prop_status: s.status_deleted, s.prop_error: ""}
+        if await self.resolve_property(s.prop_notes) is not None:
+            values[s.prop_notes] = (detail or "")[:1800]
         await self.update_properties(page_id, values)
 
     async def mark_failed(self, page_id: str, error: str) -> None:

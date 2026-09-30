@@ -401,6 +401,18 @@ Two changes, neither of which needs an endpoint we have not seen:
    starred. "Will accept £35-45k" is not something a profile can satisfy, so
    it would narrow the search to nobody while looking like diligence.
 
+   **Amended 2026-09-28 — the whole brief, not just the facts
+   ([D-024](../11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)).**
+   The 2026-09-28 review found live roles carrying little more than a title,
+   so the preamble now also states what the shared sourcing profile drafted:
+   `Also matching job titles:`, `Key skills:` (the profile's must-haves),
+   `Nice-to-have skills:` and `Ideal past companies:` (a shortlist of 12).
+   The JD below it is `search_jd` — the Client JD verbatim, else the
+   profile's composed spec, never the raw advert while a spec exists. And
+   when `generate_params` still extracts no requirements, the wizard writes
+   the profile's essentials as the must-haves instead of failing the stage
+   and leaving a bare role.
+
 **The preamble alone did not do it (corrected 2026-09-22).** `generate_params`
 *extracts* the location; it does not save it. That it did was inferred from the
 name of its `dont_save` flag and was wrong — a live row on 2026-09-22 had noon

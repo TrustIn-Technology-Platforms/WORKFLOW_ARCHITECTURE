@@ -202,11 +202,26 @@ class BrowserRunner:
         )
 
     async def stop(self) -> None:
+        """Teardown never raises.
+
+        An exception thrown here replaces the one from the `async with` body,
+        so the row's Error column read "Unexpected error: InvalidStateError.
+        Check the logs." instead of whatever actually went wrong, on every run
+        where the browser had already gone (2026-09-23). Playwright's own
+        cleanup races itself when the connection is already closed, and losing
+        the real error costs far more than a failed close.
+        """
         if self._browser is not None:
-            await self._browser.close()
+            try:
+                await self._browser.close()
+            except Exception as exc:
+                log.debug("browser close failed", extra={"error": str(exc)[:200]})
             self._browser = None
         if self._playwright is not None:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                log.debug("playwright stop failed", extra={"error": str(exc)[:200]})
             self._playwright = None
 
     @asynccontextmanager

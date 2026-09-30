@@ -182,6 +182,9 @@ def targeting_preamble(
     location: str = "",
     employment_type: str = "",
     skills: list[str] | None = None,
+    similar_titles: list[str] | None = None,
+    nice_to_have: list[str] | None = None,
+    companies: list[str] | None = None,
 ) -> str:
     """The search facts, stated plainly, to sit above the job description.
 
@@ -200,13 +203,22 @@ def targeting_preamble(
     so noon's own extractor picks them up. `Location:` and `Job title:` are the
     forms the portal's placeholder text uses.
 
-    Only facts noon actually filters on go in here: it keeps a location, a
-    title list, an experience range and a type, and nothing else. Salary is
-    deliberately left out even though the row carries it — noon has no
-    compensation preference, so the only thing it could become is a criterion,
-    and every criterion here is promoted to a non-negotiable and starred. "Will
-    accept £35-45k" is not a thing a profile can satisfy, so it would narrow the
-    search to nobody while looking like diligence.
+    The filter facts (`Job title:`, `Location:`, `Employment type:`) are what
+    noon keeps as `preferences`. Salary is deliberately left out even though
+    the row carries it — noon has no compensation preference, so the only thing
+    it could become is a criterion, and every criterion here is promoted to a
+    non-negotiable and starred. "Will accept £35-45k" is not a thing a profile
+    can satisfy, so it would narrow the search to nobody while looking like
+    diligence.
+
+    The list lines beyond the filters — similar titles, the two skill tiers,
+    the target companies — come from the shared sourcing profile (D-024) and
+    exist so noon's extractor reads the *whole* brief, not the title alone: the
+    2026-09-28 review found roles set up with nothing else. Must-haves become
+    dealbreakers, nice-to-haves are promoted by `tighten` anyway, and the
+    companies give the criteria generator something concrete to rank on — a
+    recruiter deletes a criterion in noon in one click, where a search missing
+    Python never says so.
 
     Whether it worked is not assumed — `run_wizard` reads `preferences.location`
     back off the role afterwards, and refuses to start the search if it is still
@@ -216,6 +228,13 @@ def targeting_preamble(
     role = role_title(title)
     if role:
         lines.append(f"Job title: {role}")
+    if similar_titles:
+        others = ", ".join(
+            t.strip() for t in similar_titles
+            if t.strip() and t.strip().lower() != role.lower()
+        )
+        if others:
+            lines.append(f"Also matching job titles: {others}")
     if location.strip():
         lines.append(f"Location: {location.strip()}")
     if employment_type.strip():
@@ -224,6 +243,14 @@ def targeting_preamble(
         named = ", ".join(s.strip() for s in skills if s.strip())
         if named:
             lines.append(f"Key skills: {named}")
+    if nice_to_have:
+        named = ", ".join(s.strip() for s in nice_to_have if s.strip())
+        if named:
+            lines.append(f"Nice-to-have skills: {named}")
+    if companies:
+        named = ", ".join(c.strip() for c in companies if c.strip())
+        if named:
+            lines.append(f"Ideal past companies: {named}")
     return "\n".join(lines)
 
 
@@ -736,6 +763,10 @@ class SourcingWizard:
 # ----------------------------------------------------------------------
 
 
+class RoleMissing(PlatformError):
+    """The role is in neither of noon's role lists - deleted, or never made."""
+
+
 async def fetch_role(
     session: NoonSession, role_id: str, *, fresh: bool = False
 ) -> dict[str, Any]:
@@ -772,7 +803,7 @@ async def fetch_role(
             return found
         log.info("role not in list yet", extra={"route": route, "role": role_id})
 
-    raise PlatformError(
+    raise RoleMissing(
         f"noon has no role {role_id!r} on this account. If it was just created, "
         "noon's role list had not caught up; run `source --role` again in a "
         "moment. Otherwise it may have been deleted."
@@ -848,6 +879,7 @@ async def set_up_sourcing(
     start_sourcing: bool = True,
     dry_run: bool = False,
     targeting: str = "",
+    fallback_must_haves: list[str] | None = None,
 ) -> SourcingReport:
     """Take the token off the live portal, then run the wizard."""
     session = await capture_session(page)
@@ -860,6 +892,7 @@ async def set_up_sourcing(
         start_sourcing=start_sourcing,
         dry_run=dry_run,
         targeting=targeting,
+        fallback_must_haves=fallback_must_haves,
     )
 
 
@@ -873,6 +906,7 @@ async def run_wizard(
     start_sourcing: bool = True,
     dry_run: bool = False,
     targeting: str = "",
+    fallback_must_haves: list[str] | None = None,
 ) -> SourcingReport:
     """Run the whole wizard for one role and report what it was told.
 
@@ -884,6 +918,12 @@ async def run_wizard(
     `targeting` is prepended to the job description — see `targeting_preamble`.
     It is separate from the description rather than merged into it by the caller
     so that what noon extracted can be compared against what it was told.
+
+    `fallback_must_haves` is what the wizard runs on when noon reads no
+    requirements out of the text at all — the shared profile's essential
+    skills, phrased as requirements by the caller. Before it existed such a
+    role failed the whole criteria stage and was left with nothing but its
+    title (the 2026-09-28 review).
     """
     jd = (job_description or "").strip()
     if not jd:
@@ -911,6 +951,19 @@ async def run_wizard(
     report.location = as_text(params.get("location"))
     report.titles = [t for t in as_lines(params.get("titles")) if t]
 
+    if not must_haves and fallback_must_haves:
+        # noon read nothing out of the text, but the shared profile knows what
+        # the role needs - better criteria from our own draft than a role with
+        # a title and nothing else.
+        must_haves = [m.strip() for m in fallback_must_haves if m.strip()]
+        report.must_haves = must_haves
+        report.promoted = []
+        if must_haves:
+            report.warnings.append(
+                "noon extracted no requirements from this text, so the "
+                "must-haves were written from the drafted sourcing profile "
+                "instead - review them in the role's Control Panel"
+            )
     if not must_haves:
         raise PlatformError(
             "noon found no requirements in this advert, so there is nothing to "

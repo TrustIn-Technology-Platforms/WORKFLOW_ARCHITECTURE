@@ -326,6 +326,59 @@ def test_the_preamble_states_the_facts_the_advert_leaves_out():
     assert targeting_preamble() == ""
 
 
+def test_the_preamble_carries_the_whole_brief_from_the_profile():
+    """The 2026-09-28 review: roles set up with a title and nothing else. The
+    shared profile's similar titles, both skill tiers and the target companies
+    all get a line, so noon's extractor reads the same brief every other
+    platform gets - and the main title is not repeated in its own list."""
+    assert targeting_preamble(
+        title="AI Engineer",
+        similar_titles=["AI Engineer", "Machine Learning Engineer", ""],
+        location="London",
+        skills=["Python", "PyTorch"],
+        nice_to_have=["TypeScript", ""],
+        companies=["Anthropic", "DeepMind"],
+    ).splitlines() == [
+        "Job title: AI Engineer",
+        "Also matching job titles: Machine Learning Engineer",
+        "Location: London",
+        "Key skills: Python, PyTorch",
+        "Nice-to-have skills: TypeScript",
+        "Ideal past companies: Anthropic, DeepMind",
+    ]
+
+
+def test_noon_reading_nothing_falls_back_to_the_profile_must_haves():
+    """noon extracting no requirements used to fail the whole criteria stage,
+    leaving the role with its title and nothing else. With the profile's
+    essentials handed over, the wizard runs on those and says so."""
+    session = FakeSession(
+        generate_params={"must_haves": "", "nice_to_haves": "", "location": "London"}
+    )
+    report = _run(
+        session,
+        fallback_must_haves=["4+ years of professional experience", "Experience with Python"],
+    )
+
+    autopilot = session.payloads("role_autopilot")[0]["autopilot"]
+    assert autopilot["must_haves"].splitlines() == [
+        "4+ years of professional experience",
+        "Experience with Python",
+    ]
+    assert report.must_haves == [
+        "4+ years of professional experience",
+        "Experience with Python",
+    ]
+    assert any("drafted sourcing profile" in w for w in report.warnings)
+
+
+def test_without_a_fallback_an_empty_extraction_still_stops_the_run():
+    session = FakeSession(generate_params={"must_haves": "", "nice_to_haves": ""})
+    with pytest.raises(PlatformError, match="no requirements"):
+        _run(session, fallback_must_haves=[])
+    assert session.paths() == ["generate_params"]
+
+
 def test_the_facts_reach_noon_above_the_job_description():
     """`generate_params` is the only call that writes the role's filters, and it
     writes what it can read - so the location has to be in the text.

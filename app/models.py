@@ -13,6 +13,7 @@ class Outcome(str, Enum):
     SKIPPED = "skipped"
     FAILED = "failed"
     DRY_RUN = "dry_run"
+    DELETED = "deleted"
 
 
 @dataclass(slots=True)
@@ -136,6 +137,91 @@ class EmailStep:
 
 
 @dataclass(slots=True)
+class SourcingProfile:
+    """Everything a candidate search is configured from, drafted once per role.
+
+    Every sourcing platform used to draft its own titles and skills from the
+    JD, so three platforms could disagree about one job and nothing kept what
+    was drafted. This is the one shared answer: built by
+    `app.platforms.sourcing_profile.ensure_sourcing`, saved as JSON under the
+    artifact dir, and read by noon, Juicebox and Loxo alike (D-024).
+    """
+
+    # One sentence saying what the role actually is - the model states its
+    # reading before listing anything, so a wrong list is explainable.
+    role_kind: str = ""
+    similar_titles: list[str] = field(default_factory=list)
+    # Two tiers on purpose: the essential stack filters, the rest ranks. The
+    # platforms that take one list read `skills`, which is both in that order.
+    must_have_skills: list[str] = field(default_factory=list)
+    nice_to_have_skills: list[str] = field(default_factory=list)
+    min_years: int | None = None
+    max_years: int | None = None
+    # Where the CANDIDATE must be, as the JD states it; empty when it is silent.
+    candidate_location: str = ""
+    stage: str = ""
+    stage_stated: bool = False
+    companies: list[str] = field(default_factory=list)
+    # A recruiter-usable boolean string over the titles and essential skills.
+    boolean_search: str = ""
+    # A search-grade JD composed from the advert, only when the document has no
+    # Client JD - the advert is marketing copy and pasting it into a platform's
+    # JD box builds the search from the pitch (the 2026-09-28 review).
+    drafted_jd: str = ""
+    jd_source: str = ""  # client_jd | advert
+    path: str = ""       # the saved JSON, "" when saving failed
+    reused: bool = False  # answered from the saved JSON rather than drafted
+
+    @property
+    def skills(self) -> list[str]:
+        """One list for platforms with one box: essentials first, no repeats."""
+        seen: set[str] = set()
+        merged: list[str] = []
+        for skill in (*self.must_have_skills, *self.nice_to_have_skills):
+            key = skill.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(skill.strip())
+        return merged
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.similar_titles or self.must_have_skills or self.nice_to_have_skills)
+
+    def as_must_haves(self, *, limit: int = 12) -> list[str]:
+        """The essentials phrased as must-have lines, for noon's wizard when
+        its own extractor reads nothing. One method, because the adapter and
+        the CLI each building this by hand had already diverged (the CLI's
+        copy lost the years line). Capped: every line here becomes a starred
+        non-negotiable, and twenty of them would match nobody.
+        """
+        lines = [f"Experience with {skill}" for skill in self.must_have_skills[:limit]]
+        if self.min_years is not None:
+            span = (
+                f"{self.min_years}+"
+                if self.max_years is None
+                else f"{self.min_years}-{self.max_years}"
+            )
+            lines.insert(0, f"{span} years of professional experience")
+        return lines
+
+    @property
+    def summary(self) -> str:
+        parts = [
+            f"{len(self.similar_titles)} title(s)",
+            f"{len(self.must_have_skills)}+{len(self.nice_to_have_skills)} skill(s)",
+            f"{len(self.companies)} company(ies)",
+        ]
+        if self.candidate_location:
+            parts.append(f"location {self.candidate_location}")
+        if self.stage:
+            parts.append(f"stage {self.stage} ({'stated' if self.stage_stated else 'inferred'})")
+        if self.reused:
+            parts.append("reused from the saved profile")
+        return ", ".join(parts)
+
+
+@dataclass(slots=True)
 class ParsedDocument:
     sections: list[Section] = field(default_factory=list)
     advert: Advert | None = None
@@ -155,6 +241,9 @@ class ParsedDocument:
     # away the version a recruiter wrote on purpose. Empty for a document that
     # names no platform, which is most of them.
     platform_adverts: dict[str, Advert] = field(default_factory=dict)
+    # The shared search setup, drafted once per document by `ensure_sourcing`
+    # and read by every sourcing platform. None until someone builds it.
+    sourcing: SourcingProfile | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -185,6 +274,25 @@ class ParsedDocument:
         """
         if self.client_jd.strip():
             return self.client_jd.strip()
+        return self.advert.body_text.strip() if self.advert else ""
+
+    @property
+    def search_jd(self) -> str:
+        """The text pasted into a platform's own JD box.
+
+        `job_description` is what *we* draft from; this is what a platform's own
+        extractor reads. A pasted Client JD is still first, verbatim. But where
+        there is none, the advert must not stand in here the way it does there:
+        Juicebox and noon build their searches from whatever lands in that box,
+        and the advert is the pitch, not the spec (the 2026-09-28 review found
+        an advert pasted as a Juicebox JD). So the profile's composed JD - the
+        role's facts restated as a spec - stands in instead, and the advert is
+        the last resort only when nothing was ever drafted.
+        """
+        if self.client_jd.strip():
+            return self.client_jd.strip()
+        if self.sourcing is not None and self.sourcing.drafted_jd.strip():
+            return self.sourcing.drafted_jd.strip()
         return self.advert.body_text.strip() if self.advert else ""
 
 
@@ -225,10 +333,30 @@ class PostResult:
     detail: str | None = None
     artifacts: list[str] = field(default_factory=list)
     finished_at: datetime | None = None
+    # What the post created on the platform, in the platform's own terms -
+    # `{"role": <uuid>}` on noon, `{"sequence": <url>, "project": <url>}` on
+    # Juicebox. Kept so the row can be deleted later: the Notion `Post URL`
+    # column holds one link, and a row that posted to three platforms keeps
+    # only the first. Only the adapter that wrote a record reads it back.
+    records: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
         return self.outcome in {Outcome.POSTED, Outcome.DRY_RUN, Outcome.SKIPPED}
+
+
+@dataclass(slots=True)
+class DeleteResult:
+    """One platform's half of deleting a row - the reverse of a `PostResult`."""
+
+    platform: str
+    outcome: Outcome  # DELETED | SKIPPED | FAILED | DRY_RUN
+    detail: str | None = None
+    artifacts: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome in {Outcome.DELETED, Outcome.DRY_RUN, Outcome.SKIPPED}
 
 
 class PipelineError(RuntimeError):

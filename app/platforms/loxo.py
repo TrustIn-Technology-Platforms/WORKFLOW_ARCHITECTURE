@@ -175,62 +175,57 @@ class LoxoAdapter(RecipeAdapter):
         (Sohaib, 2026-09-01). Same failure containment as the criteria: a
         Source failure is a warning, never a lost campaign.
         """
-        from app.platforms.loxo_source import configure_source, experience_bands
         from app.pipeline import _row_text
-        from app.platforms.targeting_ai import (
-            draft_companies,
-            draft_targeting,
-            sourcing_location,
-            stage_from_text,
-        )
+        from app.platforms.loxo_source import configure_source, experience_bands
+        from app.platforms.sourcing_profile import ensure_sourcing
 
         advert = document.advert or Advert(title="", body_text="", body_html="")
         name = _role_name(
             document.source_name, row, advert,
             sorted(document.emails, key=lambda e: e.order),
         )
-        targeting = await draft_targeting(
-            document.job_description,
+        # The shared profile (D-024): the same lists noon and Juicebox get,
+        # drafted once and saved. The past-company rubric (D-020) lives inside
+        # its companies draft; an inferred stage is said so on the row, because
+        # the list rests on it and a recruiter can check a guess in a minute
+        # that a search cannot. The row's location is the region fallback for
+        # that list, for a JD that names no place.
+        profile = await ensure_sourcing(
+            document,
+            self.settings,
             role_title=name,
-            settings=self.settings,
+            location=(
+                (_row_text(row, self.settings.prop_location) if row is not None else None)
+                or advert.location
+                or ""
+            ),
         )
-        if not targeting.similar_titles and not targeting.skills:
+        if profile is None or profile.is_empty:
             report.warnings.append(
                 "Source filters skipped: no titles or skills could be drafted "
                 "(is ANTHROPIC_API_KEY set here?)"
             )
             return
+        report.warnings.append(f"sourcing profile: {profile.summary}")
 
-        # The past-company filter follows the client's funding stage (D-020):
-        # read off the document when it states one, inferred when it does not.
-        # An inferred stage is said so on the row, because the list rests on it
-        # and a recruiter can check a guess in a minute that a search cannot.
         company = (document.source_name or "").split(" - ")[0].strip()
-        stated = stage_from_text(document.job_description, advert.body_text)
-        # The candidate's location per the JD, not the posting's (see the
-        # Juicebox adapter): the company list is drawn from the same region.
-        where = sourcing_location(
-            targeting.candidate_location,
-            _row_text(row, self.settings.prop_location) if row is not None else None,
-            advert.location,
-        )
-        companies = await draft_companies(
-            document.job_description,
-            company=company,
-            stage=stated,
-            location=where,
-            role_title=name,
-            limit=self.settings.sourcing_max_companies,
-            settings=self.settings,
-        )
-        bands = experience_bands(targeting.min_years, targeting.max_years)
-        if companies.companies and companies.inferred:
+        skills = profile.skills[: self.settings.sourcing_max_skills]
+        bands = experience_bands(profile.min_years, profile.max_years)
+        if profile.companies and profile.stage and not profile.stage_stated:
             report.warnings.append(
                 f"the document does not state {company or 'the client'}'s funding "
-                f"stage; Claude inferred {companies.stage} and chose the past-company "
+                f"stage; Claude inferred {profile.stage} and chose the past-company "
                 "filter from it - check the saved search's Past Company list"
             )
-        elif not companies.companies:
+        elif profile.companies and not profile.stage:
+            # Inferred as Unknown: the list was still drafted, but it rests on
+            # sector and region alone - quieter than a guess, not safer.
+            report.warnings.append(
+                f"no funding stage for {company or 'the client'} could be read "
+                "or inferred, so the Past Company list rests on sector and "
+                "region alone - check the saved search's Past Company list"
+            )
+        elif not profile.companies:
             report.warnings.append(
                 "no target companies could be drafted, so the Past Company filter "
                 "was left empty"
@@ -238,10 +233,11 @@ class LoxoAdapter(RecipeAdapter):
 
         if self.dry_run:
             report.warnings.append(
-                f"dry run: would set {len(targeting.similar_titles)} title(s), "
-                f"{len(targeting.skills)} skill(s), experience "
-                f"{'/'.join(bands) or 'unset'} and {len(companies.companies)} past "
-                f"company(ies) at {companies.stage} on job {job_id}'s Source screen"
+                f"dry run: would set {len(profile.similar_titles)} title(s), "
+                f"{len(skills)} skill(s), experience "
+                f"{'/'.join(bands) or 'unset'} and {len(profile.companies)} past "
+                f"company(ies) at {profile.stage or 'an unknown stage'} on job "
+                f"{job_id}'s Source screen"
             )
             return
 
@@ -249,10 +245,10 @@ class LoxoAdapter(RecipeAdapter):
             result = await configure_source(
                 page,
                 job_id,
-                titles=targeting.similar_titles,
-                skills=targeting.skills,
-                years=(targeting.min_years, targeting.max_years),
-                companies=companies.companies,
+                titles=profile.similar_titles,
+                skills=skills,
+                years=(profile.min_years, profile.max_years),
+                companies=profile.companies,
                 search_name=f"{name} - auto"[:80],
                 base_url=self.recipe.defaults.get("base_url", "https://app.loxo.co"),
                 agency_id=str(self.recipe.defaults.get("agency_id", "28356")),
@@ -414,6 +410,10 @@ class LoxoAdapter(RecipeAdapter):
             await self._open_stages(page, campaign_url.rstrip("/") + "/stages")
 
         report.captures["post_url"] = campaign_url or _clean_campaign_url(page.url)
+        # For deleting the row later. Whether this run made the campaign is
+        # kept too: one found by name may be a recruiter's own.
+        report.records["campaign"] = report.captures["post_url"]
+        report.records["campaign_created"] = "no" if existing else "yes"
 
         # Guard: never edit a campaign whose title is not the one we intend. The
         # header renders the name as text once the editor is loaded.

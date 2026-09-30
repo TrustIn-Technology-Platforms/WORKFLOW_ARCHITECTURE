@@ -67,6 +67,9 @@ to the same column even without an override.
 | `STATUS_POSTING` | `Posting` | Set on claim, so a second worker skips the row. |
 | `STATUS_POSTED` | `Posted` | Every platform on the row succeeded. |
 | `STATUS_FAILED` | `Failed` | Something failed; `PROP_ERROR` says what. |
+| `STATUS_DELETE` | `Delete` | Set by a recruiter: delete everything the row posted, on every platform. Picked up like `STATUS_READY`. |
+| `STATUS_DELETING` | `Deleting` | Set on claim of a delete. A row left here by a restart is released by the stuck-row sweep. |
+| `STATUS_DELETED` | `Deleted` | Every platform's records are gone. A partial delete is `STATUS_FAILED` instead, naming what is left. |
 
 These must match the option names in the Notion database **exactly**, including
 capitalisation. Notion rejects an option name that does not already exist.
@@ -122,6 +125,10 @@ supported state: the gaps stay empty and the run says which ones did.
 | `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
 | `STUCK_POSTING_MINUTES` | `45` | A row untouched on `Posting` this long is taken as orphaned by a dead process (a redeploy) and marked Failed with a note. Longer than any live run on three platforms takes. |
 | `STUCK_SWEEP_MINUTES` | `10` | How often the deployed service sweeps for such rows (also once at startup). |
+| `LEDGER_PATH` | *(empty)* | Where the record of what each posted row created is kept. Blank means `<SESSION_DIR>/posted-rows.json`, which on Railway is the volume. It must survive deploys: a row whose records are lost can only be deleted by hand. `scripts/push_sessions.py` never uploads it and the import endpoint never overwrites it. |
+| `DELETE_TRASHED_ROWS` | `true` | A posted row moved to Notion's trash has its posts deleted too. `false` leaves only the `Delete` status as a trigger. |
+| `DELETE_TRASHED_AFTER_HOURS` | `24` | How long a row sits in the trash before its posts are deleted. The wait is the undo: restore the row inside it and nothing is touched. |
+| `TRASH_SWEEP_MINUTES` | `30` | How often the deployed service asks Notion whether each recorded row is in the trash. |
 | `POLL_MINUTES` | `2` | How often the deployed service asks Notion for `Ready to Post` rows and runs them itself, one at a time, without waiting for n8n's webhook call. `0` leaves the webhook as the only trigger, and so does `DRY_RUN=true` — a dry run writes no row back, so polling would run the same rows for ever. |
 
 ## Storage

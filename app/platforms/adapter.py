@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.logging_conf import get_logger
 from app.models import (
     AuthenticationRequired,
+    DeleteResult,
     NotionRow,
     Outcome,
     ParsedDocument,
@@ -177,6 +178,8 @@ class RecipeAdapter:
                     post_url=report.post_url,
                     detail=detail,
                     finished_at=datetime.now(timezone.utc),
+                    # A dry run created nothing, so there is nothing to delete.
+                    records={} if self.dry_run else self._records(report),
                 )
         except (PlatformError, AuthenticationRequired):
             raise
@@ -195,6 +198,118 @@ class RecipeAdapter:
         finally:
             if owned_runner:
                 await runner.stop()
+
+    def _records(self, report: "RunReport") -> dict[str, str]:
+        """What this run created, for deleting it later (PostResult.records).
+
+        The post URL is the one record every platform has; a driver adds the
+        ids its own delete needs.
+        """
+        records = dict(report.records)
+        if report.post_url and "post_url" not in records:
+            records["post_url"] = report.post_url
+        return records
+
+    # A platform whose delete is written sets this. The rest report "delete by
+    # hand" without opening a browser - a row must not read as Deleted while
+    # the campaign it made is still there.
+    supports_delete = False
+
+    async def delete(
+        self, records: list[dict[str, str]], *, row_title: str = ""
+    ) -> DeleteResult:
+        """Delete everything `records` names on this platform, read back after.
+
+        `records` is one dict per post of the row (a row re-run after a failure
+        posted twice). The session handling is the posting path's: the same
+        check, the same automatic sign-in, the same artifacts on failure.
+        """
+        recipe = self.recipe
+        if not records:
+            return DeleteResult(
+                platform=recipe.key,
+                outcome=Outcome.FAILED,
+                detail=(
+                    f"there is no record of what this row created on {recipe.label} "
+                    "(it was posted before deletes were tracked) - delete it there by hand"
+                ),
+            )
+        if not self.supports_delete:
+            where = "; ".join(r.get("post_url", "") for r in records if r.get("post_url"))
+            return DeleteResult(
+                platform=recipe.key,
+                outcome=Outcome.FAILED,
+                detail=(
+                    f"deleting is not automated for {recipe.label} yet - delete it there "
+                    f"by hand{f' ({where})' if where else ''}"
+                ),
+            )
+
+        use_profile = bool(self.settings.use_browser_profile)
+        state = None
+        if use_profile:
+            self.sessions.require_profile(recipe.key, recipe.label)
+        else:
+            state = self.sessions.require(recipe.key, recipe.label, recipe.session_file)
+
+        owned_runner = self.runner is None
+        runner = self.runner or BrowserRunner(self.settings)
+        if owned_runner:
+            await runner.start()
+        trace = f"{recipe.key}-delete"
+        opener = (
+            runner.profile_context(recipe.key, trace_name=trace, channel=recipe.browser_channel)
+            if use_profile
+            else runner.context(storage_state=state, trace_name=trace)
+        )
+        try:
+            async with opener as (context, page):
+                try:
+                    await self.ensure_logged_in(page)
+                    done, notes = await self._delete(page, records, row_title=row_title)
+                except (PlatformError, AuthenticationRequired) as exc:
+                    artifacts = await save_failure(context, page, f"{trace}-failed", self.settings)
+                    return DeleteResult(
+                        platform=recipe.key, outcome=Outcome.FAILED,
+                        detail=str(exc), artifacts=artifacts,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one platform's browser
+                    # failing must not stop the others from being deleted.
+                    artifacts = await save_failure(context, page, f"{trace}-failed", self.settings)
+                    first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+                    return DeleteResult(
+                        platform=recipe.key, outcome=Outcome.FAILED,
+                        detail=f"the browser step failed - {exc.__class__.__name__}: {first[:300]}",
+                        artifacts=artifacts,
+                    )
+        except Exception as exc:  # noqa: BLE001 - opening or closing the browser
+            first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+            return DeleteResult(
+                platform=recipe.key, outcome=Outcome.FAILED,
+                detail=f"the browser could not be opened - {exc.__class__.__name__}: {first[:300]}",
+            )
+        finally:
+            if owned_runner:
+                await runner.stop()
+
+        if self.dry_run:
+            outcome = Outcome.DRY_RUN
+        else:
+            outcome = Outcome.DELETED if done else Outcome.FAILED
+        log.info(
+            "platform delete finished",
+            extra={"platform": recipe.key, "outcome": outcome.value, "notes": notes[:5]},
+        )
+        return DeleteResult(platform=recipe.key, outcome=outcome, detail="; ".join(notes) or None)
+
+    async def _delete(
+        self, page: "Page", records: list[dict[str, str]], *, row_title: str
+    ) -> tuple[bool, list[str]]:
+        """Delete and read back. Returns (everything is gone, notes for the row).
+
+        Overridden by each platform that sets `supports_delete`.
+        """
+        raise PlatformError(f"{self.recipe.label} has no delete step.")
 
     async def _drive(
         self, page: "Page", document: ParsedDocument, row: NotionRow | None

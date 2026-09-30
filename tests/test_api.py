@@ -189,6 +189,91 @@ def test_a_row_is_run_only_while_it_still_reads_ready(monkeypatch):
     assert processed == ["ready"]
 
 
+def test_a_row_set_to_delete_runs_the_delete_not_the_post(monkeypatch):
+    """The webhook and the poll carry Delete rows the same way as Ready ones;
+    a row already claimed as Deleting is left alone like one on Posting."""
+    import asyncio
+
+    from app import api
+    from app.models import NotionRow
+
+    rows = {
+        "del": NotionRow(page_id="del", title="D", document_url="x", status="Delete"),
+        "busy": NotionRow(page_id="busy", title="B", document_url="x", status="Deleting"),
+    }
+    deleted: list[str] = []
+
+    class FakeClient:
+        def __init__(self, settings):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def get_row(self, page_id):
+            return rows[page_id]
+
+    async def fake_delete_row(row, client, settings, dry_run):
+        deleted.append(row.page_id)
+
+        class Report:
+            ok = True
+            detail = ""
+
+        return Report()
+
+    async def no_post(*a, **k):
+        raise AssertionError("a Delete row must not be posted")
+
+    monkeypatch.setattr("app.notion.client.NotionClient", FakeClient)
+    monkeypatch.setattr("app.pipeline.delete_row", fake_delete_row)
+    monkeypatch.setattr("app.pipeline.process_row", no_post)
+    monkeypatch.setattr("app.api.get_settings", lambda: __import__("app.config").config.Settings(
+        notion_token="t", notion_database_id="d"))
+
+    asyncio.run(api._run_if_ready("del", None, source="test"))
+    asyncio.run(api._run_if_ready("busy", None, source="test"))
+    assert deleted == ["del"]
+
+
+def test_a_session_upload_never_replaces_the_ledger(tmp_path, monkeypatch):
+    """The ledger sits beside the sessions on the volume and is the server's
+    own; a tarball carrying a laptop's copy must not overwrite it."""
+    import io
+    import tarfile
+
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "posted-rows.json").write_text("server", encoding="utf-8")
+    settings = Settings(session_dir=str(sessions), browser_profile_dir=str(tmp_path / "profiles"),
+                        webhook_secret="s")
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, text in (("sessions/posted-rows.json", b"laptop"),
+                           ("sessions/noon.storage_state.json", b"{}")):
+            info = tarfile.TarInfo(name)
+            info.size = len(text)
+            tar.addfile(info, io.BytesIO(text))
+
+    route = next(r.path for r in api.create_app().routes if "import" in getattr(r, "path", ""))
+    response = TestClient(api.create_app()).post(
+        route, content=buf.getvalue(), headers={"X-Webhook-Secret": "s"}
+    )
+    assert response.status_code == 200, response.text
+    assert (sessions / "posted-rows.json").read_text(encoding="utf-8") == "server"
+    assert (sessions / "noon.storage_state.json").exists()
+
+
 def test_the_poller_stands_down_in_a_dry_run(monkeypatch):
     """A dry run writes no row back, so every poll would find the same rows and
     drive the real platforms again, for ever (review, 2026-09-03)."""

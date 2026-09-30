@@ -118,6 +118,51 @@ _COUNTS = "()=>{" + _EDS + """
 class JuiceboxAdapter(RecipeAdapter):
     """Create a Juicebox email sequence from a document's email steps."""
 
+    supports_delete = True
+
+    async def _delete(
+        self, page: "Page", records: list[dict[str, str]], *, row_title: str
+    ) -> tuple[bool, list[str]]:
+        """Delete each post's sequence, and its sourcing project when the run
+        created one (juicebox_delete; the project is checked before it goes)."""
+        from app.platforms.juicebox_delete import delete_records, sequence_id
+
+        done, notes = True, []
+        for record in records:
+            sequence = record.get("sequence") or sequence_id(record.get("post_url", ""))
+            project = record.get("project") or None
+            if not sequence and not project:
+                done = False
+                notes.append(
+                    "a post left no sequence id to delete by - delete it in Juicebox "
+                    f"by hand ({record.get('post_url') or 'no link'})"
+                )
+                continue
+            # A ledger written by hand - or by an older build - can hold a
+            # stamp `fromisoformat` will not take. Unguarded it raised out of
+            # this loop, so the records after it were never attempted and the
+            # row read "the browser step failed", which names the wrong thing.
+            # No stamp means the project's age cannot be checked, and
+            # `delete_records` then refuses the project rather than guessing.
+            created = _posted_at(record.get("project_created_at"))
+            report = await delete_records(
+                page,
+                sequence=sequence,
+                project=project,
+                dry_run=self.dry_run,
+                project_names=tuple(n for n in (record.get("project_name"), row_title) if n),
+                posted_at=created,
+            )
+            notes.append(report.summary)
+            # Every warning, live runs included. "already gone" is the one
+            # correction a recruiter must see: the summary says "deleted", and
+            # dropping the note left the row claiming this run deleted
+            # something a person had already removed by hand.
+            notes.extend(report.warnings)
+            if not self.dry_run and not report.complete:
+                done = False
+        return done, notes
+
     async def _assert_logged_in(self, page: "Page") -> None:
         """Juicebox never fires `domcontentloaded`, so the base check hangs.
 
@@ -203,6 +248,10 @@ class JuiceboxAdapter(RecipeAdapter):
 
         await self._save(page)
         report.submitted = True
+        from app.platforms.juicebox_delete import sequence_id
+
+        if sequence_id(report.post_url or ""):
+            report.records["sequence"] = sequence_id(report.post_url or "") or ""
         log.info(
             "juicebox sequence saved",
             extra={"sequence": name, "steps": report.emails_written, "url": report.post_url},
@@ -245,12 +294,8 @@ class JuiceboxAdapter(RecipeAdapter):
             stage_plan,
             years_span,
         )
-        from app.platforms.targeting_ai import (
-            draft_companies,
-            draft_targeting,
-            sourcing_location,
-            stage_from_text,
-        )
+        from app.platforms.sourcing_profile import ensure_sourcing
+        from app.platforms.targeting_ai import sourcing_location
 
         # An existing project when the row names one - a recruiter made it, or
         # an earlier run created it and stopped short of the search. Creating
@@ -273,23 +318,37 @@ class JuiceboxAdapter(RecipeAdapter):
             document.source_name, row, advert,
             sorted(document.emails, key=lambda e: e.order),
         )
-        targeting = await draft_targeting(
-            document.job_description,
+        # The shared profile (D-024): the same titles, skills, years, location
+        # and companies every other sourcing platform reads, drafted once and
+        # saved. Before it, each platform drafted its own and the searches
+        # disagreed about one job. The row's location is the region fallback
+        # for the company list, for a JD that names no place.
+        profile = await ensure_sourcing(
+            document,
+            self.settings,
             role_title=name,
-            settings=self.settings,
+            location=(
+                (_row_text(row, self.settings.prop_location) if row is not None else None)
+                or advert.location
+                or ""
+            ),
         )
-        if not targeting.similar_titles and not targeting.skills:
+        if profile is None or profile.is_empty:
             report.warnings.append(
                 "sourcing skipped: no titles or skills could be drafted "
                 "(is ANTHROPIC_API_KEY set here?)"
             )
             return
+        report.warnings.append(f"sourcing profile: {profile.summary}")
+        # Both tiers in one list, essentials first: Juicebox has one Skills box
+        # and the cap cuts from the nice-to-have end.
+        skills = profile.skills[: self.settings.sourcing_max_skills]
         # Where the CANDIDATE must be, as the Client JD states it. The row's
         # `Location` and the advert's are the job's location as the posting
         # gives it, which on Axle was where the company sits and not where the
         # hire had to be (Sohaib's review, 2026-09-07) - they only fill the gap.
         location = sourcing_location(
-            targeting.candidate_location,
+            profile.candidate_location,
             _row_text(row, self.settings.prop_location) if row is not None else None,
             advert.location,
         ) or None
@@ -301,20 +360,9 @@ class JuiceboxAdapter(RecipeAdapter):
         # Companies list and is said so on the row; it does not set Company
         # Funding Stages (D-022), which stays as Juicebox's own AI left it.
         company = (document.source_name or "").split(" - ")[0].strip()
-        stated = stage_from_text(document.job_description, advert.body_text)
-        drafted = await draft_companies(
-            document.job_description,
-            company=company,
-            stage=stated,
-            location=location or "",
-            role_title=name,
-            limit=self.settings.sourcing_max_companies,
-            settings=self.settings,
-        )
-        stage = stated or (
-            drafted.stage if drafted.stage and drafted.stage != "Unknown" else None
-        )
-        selected = stage_for_filter(stage, stated=bool(stated))
+        stated = profile.stage if profile.stage_stated else None
+        stage = profile.stage or None
+        selected = stage_for_filter(stage, stated=profile.stage_stated)
         if stage and not stated:
             report.warnings.append(
                 f"the document does not state {company or 'the client'}'s funding "
@@ -329,7 +377,7 @@ class JuiceboxAdapter(RecipeAdapter):
                 "no funding stage could be read or inferred, so Company Funding "
                 "Stages was left as Juicebox set it"
             )
-        if not drafted.companies:
+        if not profile.companies:
             report.warnings.append(
                 "no target companies could be drafted, so the Companies filter "
                 "was left empty"
@@ -339,11 +387,11 @@ class JuiceboxAdapter(RecipeAdapter):
             where = f"search in {project_url}" if project_url else "create a sourcing project"
             report.warnings.append(
                 f"dry run: would {where} with "
-                f"{len(targeting.similar_titles)} title(s), "
-                f"{len(targeting.skills)} skill(s)"
+                f"{len(profile.similar_titles)} title(s), "
+                f"{len(skills)} skill(s)"
                 + (f", location {location}" if location else "")
-                + (f", {span}" if (span := years_span(targeting.min_years, targeting.max_years)) else "")
-                + f", {len(drafted.companies)} company(ies) at {stage or 'an unknown stage'}"
+                + (f", {span}" if (span := years_span(profile.min_years, profile.max_years)) else "")
+                + f", {len(profile.companies)} company(ies) at {stage or 'an unknown stage'}"
                 + (f", stages {'/'.join(stage_plan(selected))}" if stage_plan(selected)
                    else ", stages left as Juicebox set them")
             )
@@ -354,13 +402,17 @@ class JuiceboxAdapter(RecipeAdapter):
                 page,
                 project_name=name,
                 project_url=project_url,
-                jd=document.job_description,
-                titles=targeting.similar_titles,
-                skills=targeting.skills,
+                # The Client JD verbatim, else the profile's composed spec -
+                # never the raw advert while a spec exists. Juicebox's own AI
+                # builds the search from this paste, and on 2026-09-28 a search
+                # was found built from the marketing copy.
+                jd=document.search_jd,
+                titles=profile.similar_titles,
+                skills=skills,
                 location=location,
-                min_years=targeting.min_years,
-                max_years=targeting.max_years,
-                companies=drafted.companies,
+                min_years=profile.min_years,
+                max_years=profile.max_years,
+                companies=profile.companies,
                 stage=selected,
             )
         except Exception as exc:  # noqa: BLE001 - a sourcing failure is a warning,
@@ -382,6 +434,19 @@ class JuiceboxAdapter(RecipeAdapter):
             f"sourcing project: {result.project_url}"
             + (" (created)" if result.project_created else " (existing)")
         )
+        # Only a project this run made is ever deleted with the row; an
+        # existing one is a recruiter's. The name and time are what the delete
+        # checks the project against before trusting the id (juicebox_delete).
+        if result.project_created:
+            from datetime import datetime, timezone
+
+            from app.platforms.juicebox_delete import project_id
+            from app.platforms.juicebox_sourcing import project_title
+
+            if project_id(result.project_url):
+                report.records["project"] = project_id(result.project_url) or ""
+                report.records["project_name"] = project_title(name)
+                report.records["project_created_at"] = datetime.now(timezone.utc).isoformat()
         report.warnings.append(
             f"sourcing search: {result.search_url} ({result.summary})"
         )
@@ -425,14 +490,15 @@ class JuiceboxAdapter(RecipeAdapter):
             )
             return
 
-        # The document's Client JD, else its advert; the search's own job
-        # description is the last resort, inside `set_criteria`. Same rule on
-        # all three platforms, so the three criteria sets agree.
+        # The document's Client JD, else the profile's composed spec, else the
+        # advert; the search's own job description is the last resort, inside
+        # `set_criteria`. Same rule on all three platforms, so the three
+        # criteria sets agree.
         try:
             result = await set_criteria(
                 page,
                 search,
-                document.job_description,
+                document.search_jd,
                 role_name=document.source_name,
                 settings=self.settings,
                 dry_run=self.dry_run,
@@ -682,6 +748,26 @@ class JuiceboxAdapter(RecipeAdapter):
 # ----------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------
+
+
+def _posted_at(value: str | None):
+    """A ledger's `project_created_at` as a datetime, or None when it is not one.
+
+    The project delete uses this to check the project is the one this run made.
+    A value it cannot read is treated as no value: `delete_records` then refuses
+    to delete the project rather than trusting the id alone, which is the safe
+    direction - on 2026-09-23 a captured id turned out to be a live client's.
+    """
+    from datetime import datetime
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        log.warning("ledger holds an unreadable created stamp", extra={"value": text[:40]})
+        return None
 
 
 def _sequence_name(

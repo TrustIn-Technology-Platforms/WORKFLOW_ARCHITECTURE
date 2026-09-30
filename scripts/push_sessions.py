@@ -43,9 +43,15 @@ _SKIP_DIRS = {
 }
 
 
+# The posted-rows ledger lives beside the sessions but belongs to the server:
+# the laptop's copy knows nothing of what the service posted, and uploading it
+# would make the service forget what every row created.
+_SKIP_FILES = {"posted-rows.json", "posted-rows.json.tmp"}
+
+
 def _excluding(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
     parts = set(tarinfo.name.replace("\\", "/").split("/"))
-    if parts & _SKIP_DIRS:
+    if parts & _SKIP_DIRS or parts & _SKIP_FILES:
         return None
     return tarinfo
 

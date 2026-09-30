@@ -37,6 +37,8 @@ class RunReport:
     submitted: bool = False
     emails_written: int = 0
     warnings: list[str] = field(default_factory=list)
+    # What the run created, for deleting it later: see PostResult.records.
+    records: dict[str, str] = field(default_factory=dict)
 
     @property
     def post_url(self) -> str | None:

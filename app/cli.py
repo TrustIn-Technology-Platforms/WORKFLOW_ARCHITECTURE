@@ -5,6 +5,7 @@
     python -m app.cli parse  ./advert.docx
     python -m app.cli post   noon --doc ./advert.docx --dry-run --headed
     python -m app.cli run --watch
+    python -m app.cli delete-row --page <notion page> --live
 """
 
 from __future__ import annotations
@@ -807,6 +808,122 @@ async def _retire_noon(role: str, settings: Any, delete: bool, dry_run: bool) ->
                 raise
 
 
+@app.command("delete-row")
+def delete_row_command(
+    page: str = typer.Option(..., "--page", help="The Notion page id or URL."),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run finds each record and changes nothing, on the platforms or the row.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Delete everything a Notion row posted, on every platform, and write
+    the result back - what setting its status to Delete does in the service.
+    """
+    from app.notion.client import NotionClient
+    from app.pipeline import delete_row
+
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    async def _go() -> Any:
+        async with NotionClient(settings) as client:
+            row = await client.get_row(page)
+            return await delete_row(row, client, settings, dry_run)
+
+    try:
+        report = asyncio.run(_go())
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+    _print_delete(report, dry_run)
+
+
+@app.command("delete")
+def delete_command(
+    platform: str = typer.Argument(..., help="Recipe key: noon, juicebox."),
+    record: list[str] = typer.Option(
+        ..., "--record",
+        help="KEY=VALUE, as the ledger holds them: role=<uuid> on noon; "
+             "sequence=<id>, project=<id>, project_name=<name>, "
+             "project_created_at=<ISO time> on Juicebox. Repeat for each.",
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="A dry run finds each record and changes nothing."
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Delete one platform's records directly, with no Notion row - how a
+    platform's delete is proven on a ZZ TEST record before it runs on rows."""
+    from app.platforms import get_adapter
+
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+    fields: dict[str, str] = {}
+    for pair in record:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            _fail(f"--record {pair!r} should be KEY=VALUE.")
+            return
+        fields[key.strip()] = value.strip()
+    try:
+        adapter = get_adapter(platform, settings=settings, dry_run=dry_run)
+        result = asyncio.run(adapter.delete([fields]))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+    colour = "green" if result.ok else "red"
+    console.print(f"\n[{colour}]{result.platform}: {result.outcome.value}[/{colour}]")
+    for note in (result.detail or "").split("; "):
+        if note:
+            console.print(f"  {note}")
+    for artifact in result.artifacts:
+        console.print(f"  [dim]{artifact}[/dim]")
+
+
+@app.command("ledger")
+def ledger_command(
+    open_only: bool = typer.Option(False, "--open", help="Only rows with something left to delete."),
+) -> None:
+    """What every posted row created, as the delete will read it."""
+    from app.ledger import Ledger
+
+    settings = _setup()
+    ledger = Ledger(settings.ledger_file)
+    entries = ledger.open_entries() if open_only else ledger.entries()
+    console.print(f"[dim]{settings.ledger_file}[/dim]")
+    if not entries:
+        console.print("[dim]no rows recorded[/dim]")
+        return
+    for entry in entries:
+        state = "deleted" if entry.done_at else (
+            f"in trash since {entry.trashed_seen_at}" if entry.trashed_seen_at else "live"
+        )
+        console.print(f"\n[bold]{entry.title}[/bold]  [dim]{entry.page_id}  {state}[/dim]")
+        for platform, records in entry.records.items():
+            gone = " [green](deleted)[/green]" if platform in entry.deleted else ""
+            for rec in records:
+                shown = ", ".join(f"{k}={v}" for k, v in rec.items() if k != "post_url")
+                console.print(f"  {platform}{gone}: {shown or rec.get('post_url', '')}")
+            if platform in entry.last_attempt and platform not in entry.deleted:
+                console.print(f"    [yellow]last attempt: {entry.last_attempt[platform]}[/yellow]")
+
+
+def _print_delete(report: Any, dry_run: bool) -> None:
+    console.print(f"\n[bold]{report.title}[/bold]")
+    for result in report.results:
+        colour = "green" if result.ok else "red"
+        console.print(f"  [{colour}]{result.platform}: {result.outcome.value}[/{colour}]  {result.detail or ''}")
+    if report.error:
+        console.print(f"\n[red]{report.error}[/red]")
+    if dry_run:
+        console.print("[dim]Dry run: nothing was deleted and the row was not changed. Use --live.[/dim]")
+
+
 @app.command("juicebox-sourcing")
 def juicebox_sourcing(
     doc: str = typer.Option(
@@ -908,13 +1025,8 @@ async def _juicebox_sourcing(
         stage_plan,
         years_span,
     )
-    from app.platforms.targeting_ai import (
-        configured,
-        draft_companies,
-        draft_targeting,
-        sourcing_location,
-        stage_from_text,
-    )
+    from app.platforms.sourcing_profile import ensure_sourcing
+    from app.platforms.targeting_ai import configured, sourcing_location
 
     if project and not project.startswith("http"):
         raise PipelineError(
@@ -949,48 +1061,63 @@ async def _juicebox_sourcing(
     project_name = (
         name or _role_name(document.source_name, row, advert, emails) or "New Project"
     )
-    targeting = await draft_targeting(jd, role_title=project_name, settings=settings)
-    # The Client JD says where the candidate must be; the row's column (or
-    # --set) and the advert only fill the gap - the posting's location was the
-    # company's on Axle, not the hire's.
-    location = sourcing_location(
-        targeting.candidate_location,
-        _row_text(row, settings.prop_location) if row else None,
-        advert.location,
-    ) or None
-    if not targeting.similar_titles and not targeting.skills:
+    # The shared profile (D-024): drafted once, saved under the artifact dir,
+    # and identical to what a full `post` run gives every platform. The row's
+    # location (or --set) is the region fallback for the company list.
+    profile = await ensure_sourcing(
+        document,
+        settings,
+        role_title=project_name,
+        location=(
+            (_row_text(row, settings.prop_location) if row else None)
+            or advert.location
+            or ""
+        ),
+    )
+    if profile is None or profile.is_empty:
         raise PipelineError(
             "No titles or skills could be drafted from this JD, so there are no "
             "filters to set. Check the Anthropic key with `python -m app.cli check`."
         )
+    skills = profile.skills[: settings.sourcing_max_skills]
+    # The Client JD says where the candidate must be; the row's column (or
+    # --set) and the advert only fill the gap - the posting's location was the
+    # company's on Axle, not the hire's.
+    location = sourcing_location(
+        profile.candidate_location,
+        _row_text(row, settings.prop_location) if row else None,
+        advert.location,
+    ) or None
 
     places = split_locations(location)
     console.print(f"\n[bold]project[/bold]    {project or project_name + '  (to be created)'}")
-    console.print(f"[bold]titles[/bold]     {', '.join(targeting.similar_titles) or '-'}")
-    console.print(f"[bold]skills[/bold]     {', '.join(targeting.skills) or '-'}")
+    console.print(f"[bold]role[/bold]       {profile.role_kind or '-'}")
+    console.print(f"[bold]titles[/bold]     {', '.join(profile.similar_titles) or '-'}")
+    console.print(f"[bold]must-have[/bold]  {', '.join(profile.must_have_skills) or '-'}")
+    console.print(f"[bold]nice-to-have[/bold] {', '.join(profile.nice_to_have_skills) or '-'}")
     if places:
         console.print(f"[bold]location[/bold]   {', '.join(places)}")
     else:
         console.print("[bold]location[/bold]   [yellow]none - pass --set 'Location=...'[/yellow]")
-    span = years_span(targeting.min_years, targeting.max_years)
+    span = years_span(profile.min_years, profile.max_years)
     console.print(f"[bold]years[/bold]      {span or '-'}")
 
-    # Same-stage companies and the stages from Seed up to the client's own.
-    company = (document.source_name or "").split(" - ")[0].strip()
-    stated = stage_from_text(jd, advert.body_text)
-    drafted = await draft_companies(
-        jd, company=company, stage=stated, location=location or "",
-        role_title=project_name, limit=settings.sourcing_max_companies, settings=settings,
+    stage = profile.stage or None
+    basis = (
+        "stated in the document" if profile.stage_stated
+        else ("inferred by Claude" if stage else "unknown")
     )
-    stage = stated or (drafted.stage if drafted.stage and drafted.stage != "Unknown" else None)
-    basis = "stated in the document" if stated else ("inferred by Claude" if stage else "unknown")
     console.print(f"[bold]stage[/bold]      {stage or '-'}  [dim]({basis})[/dim]")
     # Only a stated stage sets the filter (D-022); an inferred one draws the
     # company list and nothing else.
-    selected = stage_for_filter(stage, stated=bool(stated))
+    selected = stage_for_filter(stage, stated=profile.stage_stated)
     plan = stage_plan(selected)
     console.print(f"[bold]stages[/bold]     {', '.join(plan) if plan else '[yellow]left as Juicebox set them[/yellow]'}")
-    console.print(f"[bold]companies[/bold]  {', '.join(drafted.companies) or '[yellow]none drafted[/yellow]'}")
+    console.print(f"[bold]companies[/bold]  {', '.join(profile.companies) or '[yellow]none drafted[/yellow]'}")
+    if profile.boolean_search:
+        console.print(f"[bold]boolean[/bold]    {profile.boolean_search}")
+    if profile.path:
+        console.print(f"[dim]profile saved: {profile.path}[/dim]")
     if dry_run:
         return None
 
@@ -1019,13 +1146,15 @@ async def _juicebox_sourcing(
                     project_name=project_name,
                     project_url=project,
                     search_url=search,
-                    jd=jd,
-                    titles=targeting.similar_titles,
-                    skills=targeting.skills,
+                    # The Client JD verbatim, else the profile's composed
+                    # spec - the raw advert is the pitch, not the spec.
+                    jd=document.search_jd,
+                    titles=profile.similar_titles,
+                    skills=skills,
                     location=location,
-                    min_years=targeting.min_years,
-                    max_years=targeting.max_years,
-                    companies=drafted.companies,
+                    min_years=profile.min_years,
+                    max_years=profile.max_years,
+                    companies=profile.companies,
                     stage=selected,
                 )
                 # The proof, kept: the reloaded filter editor as the run left it.
@@ -1248,12 +1377,8 @@ async def _loxo_source(
     from app.platforms.engine import _role_name
     from app.platforms.loxo import job_id_from
     from app.platforms.loxo_source import configure_source, experience_bands
-    from app.platforms.targeting_ai import (
-        draft_companies,
-        draft_targeting,
-        sourcing_location,
-        stage_from_text,
-    )
+    from app.platforms.sourcing_profile import ensure_sourcing
+    from app.platforms.targeting_ai import sourcing_location
 
     job_id = job_id_from(job)
     if not job_id:
@@ -1277,40 +1402,51 @@ async def _loxo_source(
     origin = "Client JD" if document.client_jd else "advert"
     console.print(f"[dim]{origin}: {len(jd)} chars from {doc}[/dim]")
 
-    targeting = await draft_targeting(jd, role_title=role_name, settings=settings)
+    # The shared profile (D-024): the same lists a full `post` run gives every
+    # platform, drafted once and saved under the artifact dir. --location is
+    # the operator's word, so it also steers the company list's region.
+    profile = await ensure_sourcing(
+        document,
+        settings,
+        role_title=role_name,
+        location=location or (advert.location if advert else None) or "",
+    )
+    if profile is None or profile.is_empty:
+        raise PipelineError("no titles or skills could be drafted, so there is nothing to write.")
+    skills = profile.skills[: settings.sourcing_max_skills]
     # --location is the operator's word and wins; then the JD's own statement
     # of where the candidate must be; the advert's location last.
     where = sourcing_location(
-        location, targeting.candidate_location, advert.location if advert else None
+        location, profile.candidate_location, advert.location if advert else None
     )
-    stated = stage_from_text(jd, advert.body_text if advert else "")
-    companies = await draft_companies(
-        jd, company=company, stage=stated, location=where,
-        role_title=role_name, limit=settings.sourcing_max_companies, settings=settings,
-    )
-    bands = experience_bands(targeting.min_years, targeting.max_years)
+    bands = experience_bands(profile.min_years, profile.max_years)
 
     console.print(f"\n[bold]role[/bold]       {role_name}")
+    console.print(f"[bold]kind[/bold]       {profile.role_kind or '-'}")
     console.print(f"[bold]company[/bold]    {company or '-'}   [bold]location[/bold] {where or '-'}")
-    console.print(f"[bold]titles[/bold]     {', '.join(targeting.similar_titles) or '-'}")
-    console.print(f"[bold]skills[/bold]     {', '.join(targeting.skills) or '-'}")
+    console.print(f"[bold]titles[/bold]     {', '.join(profile.similar_titles) or '-'}")
+    console.print(f"[bold]must-have[/bold]  {', '.join(profile.must_have_skills) or '-'}")
+    console.print(f"[bold]nice-to-have[/bold] {', '.join(profile.nice_to_have_skills) or '-'}")
     years = (
-        f"{targeting.min_years if targeting.min_years is not None else '?'}"
-        f"-{targeting.max_years if targeting.max_years is not None else '+'}"
+        f"{profile.min_years if profile.min_years is not None else '?'}"
+        f"-{profile.max_years if profile.max_years is not None else '+'}"
         if bands else "not stated"
     )
     console.print(f"[bold]experience[/bold] {years} -> bands {', '.join(bands) or '-'}")
     console.print(
-        f"[bold]stage[/bold]      {companies.stage} ({companies.stage_basis})"
+        f"[bold]stage[/bold]      {profile.stage or 'Unknown'} "
+        f"({'stated' if profile.stage_stated else 'inferred'})"
     )
-    console.print(f"[bold]companies[/bold]  {', '.join(companies.companies) or '-'}")
-    if companies.inferred:
+    console.print(f"[bold]companies[/bold]  {', '.join(profile.companies) or '-'}")
+    if profile.boolean_search:
+        console.print(f"[bold]boolean[/bold]    {profile.boolean_search}")
+    if profile.path:
+        console.print(f"[dim]profile saved: {profile.path}[/dim]")
+    if profile.companies and not profile.stage_stated:
         console.print(
             "[yellow]the document does not state the funding stage - the company "
             "list rests on Claude's inference; check it[/yellow]"
         )
-    if not targeting.similar_titles and not targeting.skills:
-        raise PipelineError("no titles or skills could be drafted, so there is nothing to write.")
     if dry_run:
         return None
 
@@ -1337,10 +1473,10 @@ async def _loxo_source(
                 report = await configure_source(
                     page,
                     job_id,
-                    titles=targeting.similar_titles,
-                    skills=targeting.skills,
-                    years=(targeting.min_years, targeting.max_years),
-                    companies=companies.companies,
+                    titles=profile.similar_titles,
+                    skills=skills,
+                    years=(profile.min_years, profile.max_years),
+                    companies=profile.companies,
                     search_name=f"{role_name} - auto"[:80],
                     base_url=recipe.defaults.get("base_url", "https://app.loxo.co"),
                     agency_id=str(recipe.defaults.get("agency_id", "28356")),
@@ -1414,15 +1550,52 @@ async def _source(
     # A Client JD is enough on its own, so the advert may be absent entirely.
     advert = advert or Advert(title="", body_text="", body_html="")
     role_name = name or _role_name(document.source_name, None, advert, emails)
-    # The advert's title only - `role_name` is the filename, whose leading
-    # segment is the company rather than the role.
-    targeting = targeting_preamble(
-        title=advert.title,
+    # The shared profile (D-024), exactly as the noon adapter builds it: the
+    # advert's title only - `role_name` is the filename, whose leading segment
+    # is the company rather than the role.
+    from app.platforms.sourcing_profile import ensure_sourcing
+    from app.platforms.targeting_ai import sourcing_location
+
+    profile = await ensure_sourcing(
+        document,
+        settings,
+        role_title=advert.title,
         location=advert.location or "",
-        employment_type=advert.employment_type or "",
-        skills=advert.tags,
     )
-    origin = "Client JD" if document.client_jd else "advert"
+    fallback_must_haves: list[str] | None = None
+    if profile is None:
+        console.print(
+            "[yellow]no sourcing profile could be drafted (is ANTHROPIC_API_KEY "
+            "set?), so noon gets the document's facts alone[/yellow]"
+        )
+        targeting = targeting_preamble(
+            title=advert.title,
+            location=advert.location or "",
+            employment_type=advert.employment_type or "",
+            skills=advert.tags,
+        )
+    else:
+        targeting = targeting_preamble(
+            title=advert.title,
+            similar_titles=profile.similar_titles,
+            location=sourcing_location(profile.candidate_location, advert.location),
+            employment_type=advert.employment_type or "",
+            skills=profile.must_have_skills[:12] or advert.tags,
+            nice_to_have=profile.nice_to_have_skills[:12],
+            companies=profile.companies[:12],
+        )
+        fallback_must_haves = profile.as_must_haves()
+        jd = document.search_jd or jd
+        console.print(f"[dim]profile: {profile.summary}[/dim]")
+        if profile.boolean_search:
+            console.print(f"[dim]boolean: {profile.boolean_search}[/dim]")
+        if profile.path:
+            console.print(f"[dim]profile saved: {profile.path}[/dim]")
+    origin = (
+        "Client JD" if document.client_jd
+        else "composed spec" if profile is not None and profile.drafted_jd
+        else "advert"
+    )
     console.print(f"[dim]job description: {len(jd)} chars from the {origin} in {doc}[/dim]")
     if targeting:
         console.print(f"[dim]targeting:\n{targeting}[/dim]")
@@ -1464,6 +1637,7 @@ async def _source(
                     start_sourcing=start,
                     dry_run=dry_run,
                     targeting=targeting,
+                    fallback_must_haves=fallback_must_haves,
                 )
             except PipelineError:
                 await save_failure(context, page, "noon-sourcing-failed", settings)

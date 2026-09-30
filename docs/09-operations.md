@@ -190,6 +190,30 @@ python -m app.cli run --page <notion page url>   # one row
 python -m app.cli run --watch                    # poll, like the server does
 ```
 
+## Deleting a row
+
+Two ways, both ending in the same delete ([D-023](11-decisions.md)):
+
+- Set the row's `Post Status` to **Delete**. Within `POLL_MINUTES` it reads
+  `Deleting`, then `Deleted` - or `Failed`, with `Error` naming what is left
+  and why. Set it back to `Delete` to retry; what was deleted is skipped.
+- Delete the row in Notion. After it has sat in the trash for 24 hours
+  (`DELETE_TRASHED_AFTER_HOURS`) its posts are deleted and the outcome is in
+  the log and `/health` (`deletes`). Restore it inside the 24 hours to keep
+  everything.
+
+By hand:
+
+```bash
+python -m app.cli ledger --open                          # what each row created
+python -m app.cli delete-row --page <notion url>         # dry run: finds, changes nothing
+python -m app.cli delete-row --page <notion url> --live --headed
+python -m app.cli delete juicebox --record sequence=<id> --live   # one platform, no row
+```
+
+Loxo and Wellfound deletes are not mapped yet; a row that posted there reads
+`Failed` with the link to remove by hand.
+
 ## Deployment (Railway)
 
 The configuration is already shaped for this — `SESSION_DIR`, `ARTIFACT_DIR` and

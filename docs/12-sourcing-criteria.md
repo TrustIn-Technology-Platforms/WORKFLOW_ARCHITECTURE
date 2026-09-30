@@ -399,6 +399,45 @@ Two ways forward, one to pick:
    known: the Role Title box is bound to Loxo's title taxonomy and discards free
    text on blur, so a document title cannot be typed in verbatim.
 
+## The 2026-09-28 review: one profile, drafted once, for every platform — **BUILT, needs a live run**
+
+Sohaib reviewed the live searches and found three things at once:
+
+1. **noon roles were set up with little more than a title.** The wizard's
+   inputs existed but were thin, and a run whose extraction came back empty
+   failed the whole criteria stage — leaving exactly a title and nothing else.
+2. **A Juicebox search's JD box held the advert.** The document had no
+   `Client JD`, and the documented fallback (D-018) pasted the pitch into the
+   one box the platform builds its whole search from.
+3. **Skills stopped at the broad strokes.** An AI-engineer search with no
+   Python, a cloud role with no Terraform — because every drafting prompt
+   forbade naming anything the text did not state, and each platform drafted
+   its own lists per run, none of them kept or comparable.
+
+**What was built** ([D-024](11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform),
+[sourcing_profile.py](../app/platforms/sourcing_profile.py)):
+
+- **One `SourcingProfile` per document**: role reading, similar titles,
+  must-have and nice-to-have skills — *including what a role of this kind
+  entails even when the JD does not name it* — years, candidate location,
+  stage + same-stage companies (still `draft_companies`, so D-020/D-022
+  hold), and a boolean search string. Saved as JSON under
+  `artifacts/sourcing/` and reused while the document is unchanged; the row's
+  detail carries the summary and the boolean string.
+- **`ParsedDocument.search_jd`**: what a platform's own JD box gets. The
+  Client JD verbatim first; where there is none, the profile's **composed
+  spec** — the role restated as requirements — and the raw advert only when
+  nothing was ever drafted.
+- **noon gets the whole brief**: the preamble now carries the similar titles,
+  both skill tiers and a shortlist of target companies, and when noon's
+  extractor still reads nothing, the profile's essentials are written as the
+  must-haves instead of failing the stage.
+- All three adapters and both CLI sourcing commands read the same profile.
+
+**Not yet proven live.** The next supervised noon and Juicebox runs (below)
+are the proof; read the profile JSON afterwards against what landed on each
+platform.
+
 ## Order of work
 
 | # | Step | State |
@@ -408,6 +447,7 @@ Two ways forward, one to pick:
 | 3 | Set noon's location from the row, and check it landed | **done in code** — `targeting_preamble`, `_check_preferences`; needs one live run |
 | 4 | Probe Loxo's Longlist Agent panel; write similar titles and skills | **probe written**, needs a live session; writer unbuilt |
 | 5 | Map Wellfound's Skills field | **done** — `skills.py`, `wellfound.yaml`; drafting proven live 2026-09-01 |
+| 6 | One shared sourcing profile: deep two-tier skills, composed JD, boolean string, saved and reused | **done in code 2026-09-28** — `sourcing_profile.py`, D-024; needs the same live runs as 3 |
 
 All three drafting paths were run against the real Anthropic API on
 2026-09-01 once the key was configured — skills from a Client JD, Loxo's

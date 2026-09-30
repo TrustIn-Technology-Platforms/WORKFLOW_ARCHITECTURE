@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     status_posting: str = "Posting"
     status_posted: str = "Posted"
     status_failed: str = "Failed"
+    # Deleting a row: a recruiter sets the status to `status_delete`, the
+    # service claims it as `status_deleting`, removes what the row created on
+    # every platform, and writes `status_deleted` (or Failed, saying which
+    # platform is left). See pipeline.delete_row.
+    status_delete: str = "Delete"
+    status_deleting: str = "Deleting"
+    status_deleted: str = "Deleted"
 
     # --- documents ----------------------------------------------------------
     document_timeout_seconds: float = 60.0
@@ -186,6 +193,21 @@ class Settings(BaseSettings):
     stuck_posting_minutes: int = 45
     stuck_sweep_minutes: int = 10
 
+    # --- deleting rows ------------------------------------------------------
+    # What every posted row created on each platform, so it can be deleted
+    # later. Notion's `Post URL` holds one link; this holds them all. Blank
+    # puts it beside the sessions (`<SESSION_DIR>/posted-rows.json`), which on
+    # Railway is the volume - a ledger on container disk dies with each deploy.
+    ledger_path: Path | None = None
+    # A posted row moved to Notion's trash has its records deleted too, once it
+    # has sat there this long. The wait is the undo: a row trashed by mistake
+    # and restored inside it keeps everything. Notion sends no event for a
+    # deleted row, so the sweep checks the ledger's rows every
+    # `trash_sweep_minutes`.
+    delete_trashed_rows: bool = True
+    delete_trashed_after_hours: float = 24
+    trash_sweep_minutes: int = 30
+
     # --- picking up rows ----------------------------------------------------
     # The service asks Notion for `Ready to Post` rows itself, every this many
     # minutes, instead of waiting for n8n's call (which arrived up to half an
@@ -215,6 +237,18 @@ class Settings(BaseSettings):
         # pointed at. A relative one is anchored to the checkout.
         path = Path(str(value)).expanduser()
         return path if path.is_absolute() else PROJECT_ROOT / path
+
+    @field_validator("ledger_path", mode="before")
+    @classmethod
+    def _as_optional_path(cls, value: object) -> Path | None:
+        if value in (None, ""):
+            return None
+        path = Path(str(value)).expanduser()
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+    @property
+    def ledger_file(self) -> Path:
+        return self.ledger_path or self.session_dir / "posted-rows.json"
 
     @property
     def notion_configured(self) -> bool:

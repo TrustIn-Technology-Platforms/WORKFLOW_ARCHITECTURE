@@ -636,3 +636,109 @@ funding-stage filter, so its Past Company list is unaffected.
 **Revisit when** the Notion row carries the client's stage as a column — D-020
 already names this as its own revisit condition. A column is a stated stage,
 which makes this rule quiet: both filters would be set from fact.
+
+---
+
+## D-023 · A row is deleted from a status or from Notion's trash, out of a ledger the service keeps
+
+**Date** 2026-09-23 · **Status** Accepted · **Where** [app/pipeline.py](../app/pipeline.py) (`delete_row`, `sweep_trashed_rows`), [app/ledger.py](../app/ledger.py), [app/platforms/juicebox_delete.py](../app/platforms/juicebox_delete.py)
+
+**Context.** Sohaib's ask (2026-09-08, again 2026-09-23): a row leaving the
+Notion table should take its sequences and campaigns with it, automatically.
+Three facts shape how. Notion sends no event when a row is deleted, and a
+trashed page can no longer be written to. The row's `Post URL` is a
+single-link `url` column, so a row that posted to three platforms keeps one
+link - Axle's kept only Juicebox's. And a delete cannot be undone, which on
+2026-09-23 was nearly demonstrated: a Juicebox project id captured from the
+page URL turned out to be a real client project's.
+
+**Decision.** Every post records each platform's own ids
+(`PostResult.records`: noon's role uuid, Juicebox's sequence and - only when
+the run made it - project) in a ledger on the volume, one entry per post. Two
+triggers read it: a `Delete` value on `Post Status`, which the poll and
+webhook carry like `Ready to Post` and which writes `Deleted` or `Failed`
+back; and a sweep that finds a recorded row in Notion's trash and deletes its
+posts once it has been there 24 hours. Each platform's delete reads back what
+it removed, treats "already gone" as done, and a platform whose delete is not
+written reports "delete by hand" rather than letting the row read `Deleted`.
+Juicebox projects are deleted only when name, creation time and the absence
+of an agent all match the run that recorded them.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Status only | Not what was asked for: deleting the row is the natural act, and a trashed row silently left its campaigns running |
+| Trash only | A trashed row cannot be written back, so the recruiter never sees the outcome; and there is no retry a person can trigger |
+| Delete as soon as the row is trashed | A row deleted by mistake would take live sequences with it, and restoring the row restores nothing on the platforms |
+| Find each platform's records by name at delete time | Names collide (re-posts, "(1)" copies, `New Project`), and a wrong match deletes another client's work |
+| Keep the ids in a Notion column | Recruiters edit and delete columns; the row is exactly the thing being deleted; and the ids would sit beside the only copy of the evidence |
+
+**Trade-off.** The ledger is state the service now owns: it must live on the
+volume, a laptop push must never replace it (the push leaves it out and the
+import refuses it), and a row posted before 2026-09-23 has only its one link.
+The 24-hour wait means a trashed row's outreach keeps running for a day.
+Loxo and Wellfound are not mapped, so their rows fail the delete until they
+are.
+
+**Revisit when** Notion offers a delete webhook, or when the ledger's rows
+need to be seen by recruiters - at which point it belongs in a database
+rather than a file.
+
+
+## D-024 · One sourcing profile per document, drafted once, saved, read by every platform
+
+**Date** 2026-09-28 · **Status** Accepted · **Where** [app/platforms/sourcing_profile.py](../app/platforms/sourcing_profile.py), [app/models.py](../app/models.py) (`SourcingProfile`, `ParsedDocument.search_jd`), the noon / Juicebox / Loxo adapters and CLI sourcing commands
+
+**Context.** Sohaib's review of the live searches (2026-09-28): a noon role
+set up with little more than its title; a Juicebox search whose JD box held
+the *advert* — the pitch, not the spec — because the document had no `Client
+JD` and the advert was the documented fallback (D-018); and skills lists that
+stopped at the broad strokes, an AI-engineer search with no Python on it,
+because the prompt forbade naming anything the text did not. Underneath all
+three: each adapter drafted its own titles/skills/companies from
+`draft_targeting` + `draft_companies`, per platform, per run — three Claude
+answers to one question, none kept, none comparable, and nothing a recruiter
+could open to see what the searches had been told.
+
+**Decision.** `ensure_sourcing` builds **one `SourcingProfile` per document**
+— role reading, similar titles, *must-have and nice-to-have* skills (the
+prompt now names what a role of this kind entails even when the JD does not),
+years, candidate location, stage + same-stage companies (still through
+`draft_companies`, so D-020/D-022 hold), and a boolean search string — saves
+it as JSON under `artifacts/sourcing/`, and reuses it while the document is
+unchanged (fingerprint over JD + prompt version + list sizes + the row's
+fallback location, since the region shapes the company list). A profile with
+holes — no companies back from a rate-limited call, or no composed JD where
+one was needed — serves its own run but is never cached, so the next run
+retries instead of freezing the gap. All three
+adapters and both CLI sourcing commands read it. When the document has no
+`Client JD`, the profile also carries a **composed JD** — the role restated
+as a spec — and `ParsedDocument.search_jd` hands *that* to a platform's own
+JD box; the raw advert is pasted only when nothing was ever drafted. noon
+additionally gets the whole brief in its preamble (similar titles, both skill
+tiers, a company shortlist) and falls back to the profile's essentials as
+must-haves when its own extractor reads nothing.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep per-adapter drafting, just improve the prompt | Fixes depth, not disagreement: three calls still give three answers for one job, at triple the cost, and still leave no record |
+| Sharpen the "only what the JD states" rule instead of relaxing it | The complaint was the opposite: an unnamed essential skill silently excludes the right candidates, and a recruiter can delete a chip in a second but cannot see one that was never added |
+| Rewrite the Client JD too, for a cleaner paste | D-018's whole value is the client's words verbatim; a pasted JD stays untouched, only the *absence* of one is composed around |
+| Store the profile on the Notion row | Recruiters edit and rename columns; the JSON survives redeploys on the volume, and the row still gets the summary and the boolean string in its detail |
+| Draft in the orchestrator before platforms run | The first adapter builds it and the rest reuse `document.sourcing` anyway; a pipeline pre-step would draft even for rows whose only platform posts adverts |
+
+**Trade-off.** The profile leans on inference by design: it may name a skill
+the client would not require, and the row's detail says which stage the
+companies rest on, but a wrong entailed skill only shows up when a recruiter
+prunes the chips. The saved JSON is state under `artifacts/` that a fresh
+container starts without (first run redrafts). And noon's preamble now feeds
+its extractor a company shortlist that can become starred non-negotiables —
+deliberately tight, one click each to remove in the Control Panel.
+
+**Revisit when** a platform grows a field the shared shape cannot carry, when
+the entailed-skills policy produces prunes on most rows (tighten the prompt),
+or when profiles need recruiter editing before the run — at which point the
+profile belongs on a surface they own, not in a JSON file.
