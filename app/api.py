@@ -37,6 +37,29 @@ class WebhookPayload(BaseModel):
     page_id: str
 
 
+class JobPayload(BaseModel):
+    """One direct job: a role's document, platforms and advert fields.
+
+    `job_id` is the caller's own id (RecruitOS sends its posting row's UUID);
+    repeating it with more platforms queues just the new ones. `fields` uses
+    the same column names the Notion door reads (Location, Salary, Employment
+    Type, Skills, Loxo Job, Juicebox Search, Juicebox Project).
+    """
+
+    job_id: str
+    document_url: str
+    platforms: list[str]
+    title: str = ""
+    fields: dict[str, str] = {}
+    force: bool = False
+    dry_run: bool | None = None
+
+
+class JobDeletePayload(BaseModel):
+    # None = delete everything this job may have put up.
+    platforms: list[str] | None = None
+
+
 # One row at a time on this box. Two browser contexts on one account are how a
 # platform logs both out, and the webhook and the poller below must not race
 # for the same row: whichever holds the lock re-reads the row and takes it only
@@ -102,6 +125,26 @@ async def _process(page_id: str, dry_run: bool | None) -> None:
         log.error("webhook row failed", extra={"page_id": page_id, "error": str(exc)})
     except Exception:  # noqa: BLE001 - a background task must not crash the worker
         log.exception("webhook row crashed", extra={"page_id": page_id})
+
+
+async def _direct_post(job_id: str) -> None:
+    """Background worker for POST /jobs - the direct door's `_process`."""
+    from app import direct
+
+    try:
+        await direct.run_job(job_id, get_settings(), _row_lock())
+    except Exception:  # noqa: BLE001 - a background task must not crash the worker
+        log.exception("direct job task crashed", extra={"job_id": job_id})
+
+
+async def _direct_delete(job_id: str) -> None:
+    """Background worker for POST /jobs/{id}/delete."""
+    from app import direct
+
+    try:
+        await direct.run_delete(job_id, get_settings(), _row_lock())
+    except Exception:  # noqa: BLE001 - a background task must not crash the worker
+        log.exception("direct delete task crashed", extra={"job_id": job_id})
 
 
 async def _poll_ready_rows(settings) -> None:
@@ -366,10 +409,25 @@ def create_app() -> FastAPI:
                 ).exists(),
             }
 
+        from app.direct import JobStore
+
+        # The direct door: jobs over HTTP (POST /jobs) beside the Notion rows,
+        # per-platform states in a store on the volume. RecruitOS reads this
+        # block to know the door exists before using it. An unreadable store is
+        # reported, never a 500 - health must always answer.
+        try:
+            direct_block: dict = {
+                "jobs_file": str(settings.direct_jobs_file),
+                "platform_states": JobStore(settings.direct_jobs_file).counts(),
+            }
+        except Exception as exc:  # noqa: BLE001 - health must always answer
+            direct_block = {"jobs_file": str(settings.direct_jobs_file), "error": str(exc)[:200]}
+
         return {
             "status": "ok",
-            "version": "1.7",  # bumped with deleting rows
+            "version": "1.8",  # bumped with the direct door (1.7: deleting rows)
             "notion_configured": settings.notion_configured,
+            "direct": direct_block,
             # Which platforms can sign themselves in: stored credentials AND
             # login steps in the recipe. Booleans only - never the values.
             "credentials": settings.credentials_configured(sorted(recipes)),
@@ -431,6 +489,94 @@ def create_app() -> FastAPI:
         background.add_task(_process, payload.page_id.strip(), None)
         log.info("webhook accepted", extra={"page_id": payload.page_id.strip()})
         return {"status": "accepted", "page_id": payload.page_id.strip()}
+
+    def _require_secret(x_webhook_secret: str | None) -> None:
+        """The webhook's gate, shared by the direct door's routes."""
+        if not settings.webhook_secret:
+            raise HTTPException(503, "WEBHOOK_SECRET is not configured on the server.")
+        # Constant-time compare so a wrong secret can't be timed byte by byte.
+        if not x_webhook_secret or not hmac.compare_digest(
+            x_webhook_secret, settings.webhook_secret
+        ):
+            raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+
+    @app.post("/jobs", status_code=202)
+    async def post_job(
+        payload: JobPayload,
+        background: BackgroundTasks,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """The direct door: take a job without a Notion row (see app/direct.py).
+
+        Repeating a job_id with more platforms queues just the new ones, so
+        RecruitOS can add Loxo to a role already up on noon. A platform already
+        posted is skipped unless `force` - posting twice makes a duplicate on
+        every platform, so it must be said on purpose.
+        """
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        job_id = payload.job_id.strip()
+        if not job_id:
+            raise HTTPException(422, "job_id is required.")
+        if not payload.document_url.strip():
+            raise HTTPException(422, "document_url is required.")
+        platforms = [p for p in payload.platforms if p.strip()]
+        if not platforms:
+            raise HTTPException(422, "platforms must name at least one platform.")
+
+        settings.ensure_dirs()
+        queued, skipped = JobStore(settings.direct_jobs_file).queue(
+            job_id,
+            title=payload.title.strip(),
+            document_url=payload.document_url.strip(),
+            fields=payload.fields,
+            platforms=platforms,
+            force=payload.force,
+            dry_run=payload.dry_run,
+        )
+        if queued:
+            background.add_task(_direct_post, job_id)
+        return {"status": "accepted", "job_id": job_id, "queued": queued, "skipped": skipped}
+
+    @app.get("/jobs/{job_id}")
+    async def get_job(
+        job_id: str,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """A job's per-platform states. Secret-gated: the summary carries
+        recruiter-facing error text, not something for the open internet."""
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        store = JobStore(settings.direct_jobs_file)
+        # The direct door's stuck sweep: a platform a dead process left mid-run
+        # is released on read, so polling self-heals the store - no extra timer.
+        store.release_stuck(settings.stuck_posting_minutes)
+        summary = store.summary(job_id)
+        if summary is None:
+            raise HTTPException(404, "No job with that id has been taken here.")
+        return summary
+
+    @app.post("/jobs/{job_id}/delete", status_code=202)
+    async def delete_job(
+        job_id: str,
+        payload: JobDeletePayload,
+        background: BackgroundTasks,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """Take a job down from the named platforms - or all of them when the
+        payload names none. What exactly to remove comes from the ledger."""
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        store = JobStore(settings.direct_jobs_file)
+        if store.get(job_id) is None:
+            raise HTTPException(404, "No job with that id has been taken here.")
+        queued, skipped = store.queue_delete(job_id, payload.platforms)
+        if queued:
+            background.add_task(_direct_delete, job_id)
+        return {"status": "accepted", "job_id": job_id, "queued": queued, "skipped": skipped}
 
     @app.post("/admin/import-sessions")
     async def import_sessions(

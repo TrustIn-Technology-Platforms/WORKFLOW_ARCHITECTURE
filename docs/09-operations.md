@@ -94,6 +94,32 @@ row re-reads it under a lock and runs it only while it still says
 `Ready to Post`, so the two cannot post the same row twice. A row that is not
 on `Ready to Post` when the webhook fires is skipped and logged, not run.
 
+**The direct door (2026-09-30).** RecruitOS posts a job over HTTP instead of
+through a Notion row — same pipeline, same ledger, same row lock, but the state
+is per platform and lives in `direct-jobs.json` on the volume (see
+[app/direct.py](../app/direct.py) and
+[D-025](11-decisions.md#d-025--recruitos-posts-through-a-direct-door-beside-notion)).
+All three routes take the webhook's secret.
+
+```
+# Queue a job (repeat with more platforms to add them; posted ones are
+# skipped unless "force": true)
+curl -s -X POST -H "X-Webhook-Secret: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  https://<app>.up.railway.app/jobs \
+  -d '{"job_id": "<uuid>", "document_url": "https://...", "platforms": ["noon", "juicebox"],
+       "title": "Company - Role - Location", "fields": {"Location": "London"}}'
+
+# Poll its per-platform states (queued/posting/posted/failed/... per platform)
+curl -s -H "X-Webhook-Secret: $WEBHOOK_SECRET" https://<app>.up.railway.app/jobs/<uuid>
+
+# Take it down from one platform - or everywhere, with "platforms": null
+curl -s -X POST -H "X-Webhook-Secret: $WEBHOOK_SECRET" -H "Content-Type: application/json" \
+  https://<app>.up.railway.app/jobs/<uuid>/delete -d '{"platforms": ["noon"]}'
+```
+
+The Notion door keeps running beside it; a job posted through either can be
+deleted, because both record in the same ledger.
+
 ## Getting the logins onto the server
 
 **A deployed run cannot log itself in.** `.profiles/` is excluded from git *and*

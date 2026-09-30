@@ -365,6 +365,133 @@ def test_keepalive_timer_stands_down_when_switched_off():
     asyncio.run(asyncio.wait_for(api._keepalive_sessions(settings), timeout=5))
 
 
+# -- the direct door: jobs over HTTP beside the Notion rows ----------------------
+
+
+def _direct_app(tmp_path, monkeypatch):
+    """A client against a temp store, with the background workers stubbed so a
+    202 never starts a real fetch or browser in a test."""
+    from app import api
+    from app.config import get_settings
+
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3cret")
+    monkeypatch.setenv("SESSION_DIR", str(tmp_path / "sessions"))
+    get_settings.cache_clear()
+    started: list[tuple[str, str]] = []
+
+    async def fake_post(job_id):
+        started.append(("post", job_id))
+
+    async def fake_delete(job_id):
+        started.append(("delete", job_id))
+
+    monkeypatch.setattr(api, "_direct_post", fake_post)
+    monkeypatch.setattr(api, "_direct_delete", fake_delete)
+    return TestClient(api.create_app()), started
+
+
+def test_direct_routes_are_secret_gated(tmp_path, monkeypatch):
+    """A job summary carries recruiter-facing error text and a POST posts to
+    real platforms, so every door takes the webhook's secret."""
+    from app.config import get_settings
+
+    client, _ = _direct_app(tmp_path, monkeypatch)
+    body = {"job_id": "j", "document_url": "http://x/d.docx", "platforms": ["noon"]}
+    try:
+        assert client.post("/jobs", json=body).status_code == 401
+        assert client.get("/jobs/j").status_code == 401
+        assert client.post("/jobs/j/delete", json={}).status_code == 401
+        assert client.post(
+            "/jobs", json=body, headers={"X-Webhook-Secret": "wrong"}
+        ).status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_direct_job_is_taken_queued_and_readable(tmp_path, monkeypatch):
+    from app.config import get_settings
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        taken = client.post("/jobs", json={
+            "job_id": "row-1", "document_url": "http://x/d.docx",
+            "platforms": ["noon", "Juicebox"], "title": "Axle - Eng",
+            "fields": {"Location": "London"},
+        }, headers=headers)
+        assert taken.status_code == 202, taken.text
+        assert taken.json()["queued"] == ["noon", "juicebox"]
+        assert started == [("post", "row-1")]
+
+        summary = client.get("/jobs/row-1", headers=headers).json()
+        assert summary["title"] == "Axle - Eng"
+        assert summary["platforms"]["noon"]["status"] == "queued"
+
+        assert client.get("/jobs/unknown", headers=headers).status_code == 404
+        health = client.get("/health").json()
+        assert health["direct"]["platform_states"] == {"queued": 2}
+    finally:
+        get_settings.cache_clear()
+
+
+def test_adding_a_platform_later_queues_only_the_new_one(tmp_path, monkeypatch):
+    """The user's headline flow: a role up on noon gets Loxo added later - the
+    re-ask must not re-post noon without being told to."""
+    from app.config import get_settings
+    from app.direct import JobStore
+    from app.models import Outcome, PostResult
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    body = {"job_id": "row-1", "document_url": "http://x/d.docx", "platforms": ["noon"]}
+    try:
+        client.post("/jobs", json=body, headers=headers)
+        store = JobStore(get_settings().direct_jobs_file)
+        store.claim("row-1")
+        store.record_results("row-1", [PostResult(
+            platform="noon", outcome=Outcome.POSTED, post_url="https://noon/r1",
+        )], [])
+
+        again = client.post("/jobs", json={**body, "platforms": ["noon", "loxo"]},
+                            headers=headers).json()
+        assert again["queued"] == ["loxo"]
+        assert "force" in again["skipped"]["noon"]
+        assert started == [("post", "row-1"), ("post", "row-1")]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_direct_delete_names_platforms_or_everything(tmp_path, monkeypatch):
+    from app.config import get_settings
+    from app.direct import JobStore
+    from app.models import Outcome, PostResult
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        client.post("/jobs", json={
+            "job_id": "row-1", "document_url": "http://x/d.docx",
+            "platforms": ["noon", "juicebox"],
+        }, headers=headers)
+        store = JobStore(get_settings().direct_jobs_file)
+        store.claim("row-1")
+        store.record_results("row-1", [
+            PostResult(platform="noon", outcome=Outcome.POSTED, post_url="https://noon/r1"),
+            PostResult(platform="juicebox", outcome=Outcome.POSTED, post_url="https://jb/s1"),
+        ], [])
+
+        one = client.post("/jobs/row-1/delete", json={"platforms": ["noon"]}, headers=headers)
+        assert one.status_code == 202 and one.json()["queued"] == ["noon"]
+
+        everything = client.post("/jobs/row-1/delete", json={}, headers=headers).json()
+        assert set(everything["queued"]) == {"noon", "juicebox"}
+
+        assert client.post("/jobs/unknown/delete", json={}, headers=headers).status_code == 404
+        assert started[-2:] == [("delete", "row-1"), ("delete", "row-1")]
+    finally:
+        get_settings.cache_clear()
+
+
 def test_a_by_hand_round_replaces_only_the_platforms_it_visited(monkeypatch):
     import asyncio
 

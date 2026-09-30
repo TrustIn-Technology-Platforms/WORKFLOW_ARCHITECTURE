@@ -413,6 +413,7 @@ async def delete_records(
     *,
     post_url: str | None = None,
     dry_run: bool = False,
+    only_named: bool = False,
 ) -> DeleteReport:
     """Delete what the row created on each platform, one platform at a time.
 
@@ -420,6 +421,12 @@ async def delete_records(
     platform the ledger has nothing on. A platform already deleted by an
     earlier attempt is not visited again, so setting a half-deleted row back
     to Delete finishes the job rather than repeating it.
+
+    `only_named` limits the delete to the `platforms` given. Without it, every
+    ledger record joins in - the Notion door's behaviour, where Delete means
+    the whole row even if the multi-select changed since posting. The direct
+    door asks per platform, and "take it off noon" must not also take it off
+    Juicebox.
     """
     ledger = Ledger(settings.ledger_file)
     entry: LedgerEntry | None = ledger.get(page_id)
@@ -432,9 +439,13 @@ async def delete_records(
         if entry is None or platform not in entry.records:
             records.setdefault(platform, recs)
 
+    named = list(dict.fromkeys(p.lower() for p in platforms))
+    if only_named:
+        records = {p: r for p, r in records.items() if p in named}
+
     recipes = load_recipes(settings)
     already = set(entry.deleted) if entry else set()
-    order = list(dict.fromkeys([*(p.lower() for p in platforms), *records]))
+    order = named if only_named else list(dict.fromkeys([*named, *records]))
     async with BrowserRunner(settings) as runner:
         for name in order:
             if resolve(name, recipes) is None:

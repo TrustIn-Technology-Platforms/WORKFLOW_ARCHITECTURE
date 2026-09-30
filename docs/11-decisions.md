@@ -742,3 +742,49 @@ deliberately tight, one click each to remove in the Control Panel.
 the entailed-skills policy produces prunes on most rows (tighten the prompt),
 or when profiles need recruiter editing before the run — at which point the
 profile belongs on a surface they own, not in a JSON file.
+
+
+## D-025 · RecruitOS posts through a direct door beside Notion
+
+**Date** 2026-09-30 · **Status** Accepted · **Where** [app/direct.py](../app/direct.py), `POST /jobs` / `GET /jobs/{id}` / `POST /jobs/{id}/delete` in [app/api.py](../app/api.py), `only_named` in [app/pipeline.py](../app/pipeline.py)
+
+**Context.** RecruitOS (the team's ATS) generates the posting document and
+already knows every advert field, yet to post a role it created a Notion row
+whose only job was to carry that data here and one flattened status back.
+"Wellfound failed" hid "the other three posted"; adding a platform later meant
+a second row; and taking a role off *one* platform was impossible — the
+Notion door's Delete means the whole row. RecruitOS's own migration 109 had
+rejected a direct call because the agent's claim-by-status, sweeps and ledger
+were all keyed by Notion page ids. Sohaib asked for the Notion table to stop
+being the record (2026-09-30).
+
+**Decision.** A second trigger — jobs over HTTP, secret-gated like the
+webhook — runs beside the Notion door, not instead of it. RecruitOS sends its
+posting row's UUID as `job_id`, the document URL, the platforms and the
+advert fields; per-platform states live in `direct-jobs.json` on the volume;
+the caller polls. Both doors run the same pipeline under the same row lock
+and record in the same ledger, so a job posted through either can be deleted.
+Deletes are per platform (`only_named`): "take it off noon" leaves Juicebox
+up. The ledger key (the UUID, dashes stripped) reads like a page id Notion
+answers 404 for, which the trash sweep treats as "leave it alone" by design.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep Notion as the only door (migration 109's choice) | The objections it rested on are answered by the job store; the table itself was the remaining cost — a third system carrying data both ends already hold, with one status for four platforms |
+| Replace the Notion door outright | It is the proven production path, and the old workflow (a row + n8n) must keep working while the direct one earns trust; removal is a later cleanup, not a precondition |
+| A callback from the agent to RecruitOS instead of polling | The website already polls on the cadence it wants; a callback adds a second secret, a public route on the website, and a retry story for nothing the poll does not already give |
+| One Notion row per platform to get per-platform state | Multiplies the thing being removed; delete stays row-shaped and the table stays the record |
+
+**Trade-off.** Two doors means two trigger protocols to keep true, and the
+direct door's state is one more file that must live on the volume. A job the
+store forgets (a volume wipe) can no longer be deleted from the website —
+the ledger fallback and a person remain. Per-platform delete had to change
+`delete_records`' contract (`only_named`), a shared function the Notion door
+also uses; its default keeps the old behaviour.
+
+**Revisit when** the direct door has carried every posting for a month —
+then the Notion door, the n8n workflow and their settings are the dead code
+to remove — or when a second caller besides RecruitOS appears, at which point
+`job_id` needs a namespace.

@@ -215,6 +215,13 @@ class Settings(BaseSettings):
     # the webhook as the only trigger. Rows run one at a time either way.
     poll_minutes: int = 2
 
+    # --- the direct door ------------------------------------------------------
+    # Per-job state for jobs taken over HTTP (POST /jobs) instead of from a
+    # Notion row - see app/direct.py. Blank puts it beside the sessions, which
+    # on Railway is the volume; a store on container disk forgets every job's
+    # state on deploy, exactly like the ledger would.
+    direct_jobs_path: Path | None = None
+
     # --- service ------------------------------------------------------------
     webhook_secret: str = Field(default="")
     # Where the deployed service answers. Only the upload script reads it, so
@@ -238,7 +245,7 @@ class Settings(BaseSettings):
         path = Path(str(value)).expanduser()
         return path if path.is_absolute() else PROJECT_ROOT / path
 
-    @field_validator("ledger_path", mode="before")
+    @field_validator("ledger_path", "direct_jobs_path", mode="before")
     @classmethod
     def _as_optional_path(cls, value: object) -> Path | None:
         if value in (None, ""):
@@ -249,6 +256,10 @@ class Settings(BaseSettings):
     @property
     def ledger_file(self) -> Path:
         return self.ledger_path or self.session_dir / "posted-rows.json"
+
+    @property
+    def direct_jobs_file(self) -> Path:
+        return self.direct_jobs_path or self.session_dir / "direct-jobs.json"
 
     @property
     def notion_configured(self) -> bool:

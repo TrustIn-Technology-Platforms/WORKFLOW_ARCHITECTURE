@@ -3,7 +3,7 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-09-23 (deleting rows)
+> **Last reviewed** 2026-09-30 (the direct door)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
@@ -163,6 +163,7 @@ write endpoints have been observed.
 |---|-------|-------|----------|
 | 1 | Trigger — CLI | **BUILT** | [cli.py](../app/cli.py): `run`, `post`, `parse`, `login`, `inspect`, `platforms`, `check` |
 | 1 | Trigger — webhook service | **BUILT** | [api.py](../app/api.py): `create_app()` factory, `POST /webhook` (secret-gated, backgrounds `run_page`), `GET /health`. `Dockerfile`, `railway.json`, `.dockerignore` added 2026-08-28 |
+| 1 | Trigger — direct door (RecruitOS, no Notion row) | **BUILT 2026-09-30, NOT YET CALLED BY RECRUITOS** | [direct.py](../app/direct.py) + `POST /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/delete` in [api.py](../app/api.py) — per-platform states in `direct-jobs.json` on the volume, same pipeline and ledger as the Notion door, per-platform delete (`only_named` in [pipeline.py](../app/pipeline.py)). Stuck platforms self-release on read. [D-025](11-decisions.md#d-025--recruitos-posts-through-a-direct-door-beside-notion); tests in [tests/test_direct.py](../tests/test_direct.py) and [tests/test_api.py](../tests/test_api.py) |
 | 2 | Resolve and fetch document | **BUILT and verified live** | [sharelinks.py](../app/documents/sharelinks.py), [fetcher.py](../app/documents/fetcher.py) — a real `-my.sharepoint.com` share link from the Notion row downloaded as `.docx` anonymously on 2026-08-27 via the `sharepoint-download` strategy |
 | 3 | Read `.docx` into blocks | **BUILT** | [docx_reader.py](../app/documents/docx_reader.py) |
 | 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document. **`Client JD` added 2026-08-31** — the client's spec as the document's last section, on `client_jd`, with `job_description` falling back to the advert ([D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)) |

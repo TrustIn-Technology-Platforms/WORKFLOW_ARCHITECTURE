@@ -474,6 +474,32 @@ def test_a_platform_whose_post_recorded_nothing_does_not_hold_the_row_back(monke
     assert "recorded anything on loxo" in report.detail
 
 
+def test_a_named_delete_leaves_the_other_platforms_alone(monkeypatch, tmp_path):
+    """The direct door deletes per platform: "take it off noon" must not also
+    take it off Juicebox, which the ledger remembers for the same job. Without
+    only_named every recorded platform joins in (the Notion door's whole-row
+    Delete)."""
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import delete_records
+
+    settings = _delete_setup(monkeypatch, tmp_path, {"noon": Outcome.DELETED})
+    Ledger(settings.ledger_file).record_post(
+        "p1", "Row", {"noon": {"role": "r1"}, "juicebox": {"sequence": "s1"}}
+    )
+
+    report = asyncio.run(delete_records(
+        "p1", "Row", ["noon"], settings, dry_run=False, only_named=True,
+    ))
+
+    assert report.ok
+    assert [name for name, _ in _FakeDeleteAdapter.calls] == ["noon"]
+    entry = Ledger(settings.ledger_file).get("p1")
+    assert entry.open_platforms == ["juicebox"]  # still up, still deletable later
+
+
 def test_a_row_posted_before_the_ledger_falls_back_to_its_one_link(monkeypatch, tmp_path):
     import asyncio
 
