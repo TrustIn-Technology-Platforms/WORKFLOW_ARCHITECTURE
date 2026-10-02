@@ -10,6 +10,7 @@ Usage:
     python scripts/refresh_storage_state.py          # always run this first
     python scripts/push_sessions.py --dry-run        # see the archive, upload nothing
     python scripts/push_sessions.py --url https://myapp.up.railway.app
+    python scripts/push_sessions.py wellfound        # one platform, others untouched
 
 The URL and the secret both fall back to SERVICE_URL and WEBHOOK_SECRET in
 `.env`, so with those set the last line is just `python scripts/push_sessions.py`.
@@ -59,6 +60,15 @@ def _excluding(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Upload sessions/profiles to the deployed volume.")
     ap.add_argument(
+        "platforms",
+        nargs="*",
+        help="Only these platform keys (same positional form as "
+             "refresh_storage_state.py). Default: every platform. One platform "
+             "freshly re-captured must not drag the laptop's older copies of "
+             "the other three over the server's live ones - Loxo in particular "
+             "kills whichever copy of a session it saw second (2026-09-02).",
+    )
+    ap.add_argument(
         "--url",
         help="Base service URL, e.g. https://app.up.railway.app. "
              "Defaults to SERVICE_URL from .env",
@@ -79,12 +89,20 @@ def main() -> None:
     url = (args.url or settings.service_url or "").strip()
     secret = (args.secret or settings.webhook_secret or "").strip()
 
+    keys = set(load_recipes(settings))
+    unknown = [p for p in args.platforms if p not in keys]
+    if unknown:
+        sys.exit(f"No recipe for: {', '.join(unknown)}. Known: {', '.join(sorted(keys))}")
+    wanted = set(args.platforms) or keys
+
     # On the Linux target the storage_state export is the only cookie source -
     # the profile's own store arrives OS-encrypted and unreadable - so shipping
     # a fossil export next to a fresh profile deploys a logged-out platform.
     # Say so before the upload, not after the failed row.
     import time
     for state in sorted(pathlib.Path(settings.session_dir).glob("*.storage_state.json")):
+        if state.name.split(".")[0] not in wanted:
+            continue
         age_days = (time.time() - state.stat().st_mtime) / 86_400
         marker = "  <-- STALE, run scripts/refresh_storage_state.py first" if age_days > 3 else ""
         print(f"  {state.name}: exported {age_days:.1f}d ago{marker}")
@@ -111,20 +129,24 @@ def main() -> None:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         if settings.session_dir.exists():
-            tar.add(settings.session_dir, arcname="sessions", filter=_excluding)
+            for item in sorted(settings.session_dir.iterdir()):
+                if item.is_file() and item.name.split(".")[0] in wanted:
+                    tar.add(item, arcname=f"sessions/{item.name}", filter=_excluding)
         # One directory per platform that exists, verified, and nothing else.
         # A retired profile keeps its `.login-verified` marker - the abandoned
         # `juicebox.chromium-failed-20260827` still carries one - so the marker
         # alone does not identify a live platform. Matching recipe keys does,
         # and it also stops a stray directory arriving on the volume looking
         # like a platform that does not exist.
-        keys = set(load_recipes(settings))
         if settings.browser_profile_dir.exists():
             for profile in sorted(settings.browser_profile_dir.iterdir()):
                 if not profile.is_dir():
                     continue
                 if profile.name not in keys:
                     print(f"  skipping {profile.name} - not a platform in platforms/")
+                    continue
+                if profile.name not in wanted:
+                    print(f"  skipping {profile.name} - not asked for")
                     continue
                 if not (profile / ".login-verified").is_file():
                     print(f"  skipping {profile.name} - no verified login in it")

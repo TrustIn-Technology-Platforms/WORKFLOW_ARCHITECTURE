@@ -302,6 +302,21 @@ live session was reported as expired after 90 seconds (failure artifact
 selector; it is on every recruiter page. Completing the company profile on
 Wellfound would stop the dialog appearing.
 
+**And wrong again on 2026-10-02, with the logo selector shipped.** The same
+Hand-picked page renders the logo link *twice*: a hidden copy first in the DOM
+(`href="/recruit/source"`, in a header the route keeps collapsed), then the
+visible one (`href="/recruit/dashboard"`). The check waited on
+`locator(...).first` — the hidden copy — for the whole 90s and reported a live
+session as expired for the third time (keepalive artifacts `20261002-134706`
+and `20261002-182604`; the trace's own log reads "locator resolved to hidden").
+Fixed in the engine, not the recipe: `find()` now waits on the first *visible*
+match of each candidate (`>> visible=true`), so a hidden twin earlier in the
+DOM no longer soaks up the wait. The same change fixed the relogin
+verification, which had been passing the ready-selector *list* into a
+single-selector resolve and so read every list-shaped recipe as still logged
+out. The fixture `mock-wellfound-handpicked.html` now carries the hidden twin
+first, as measured.
+
 Both halves are held open by `tests/test_adapter.py`, which drives the real
 check against `tests/fixtures/pages/mock-wellfound-handpicked.html` and
 `mock-wellfound-signedout.html`: the three old selectors still read the

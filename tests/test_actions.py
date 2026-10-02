@@ -180,3 +180,38 @@ def test_goto_until_names_where_the_app_kept_landing(page_url):
                 {"url": page_url, "selector": "#not-on-this-page", "attempts": 2},
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# find(): the hidden-twin case
+
+
+async def _find_href(markup: str, selector: str) -> str | None:
+    from app.platforms.actions import find
+
+    reset_settings_cache()
+    async with BrowserRunner(headless=True) as runner:
+        async with runner.context() as (_context, page):
+            await page.set_content(markup)
+            locator = await find(
+                StepRun(page=page, params={"selector": selector}, timeout_ms=4_000)
+            )
+            return await locator.get_attribute("href")
+
+
+def test_find_skips_a_hidden_twin_and_returns_the_visible_match():
+    """Wellfound's recruiter pages render the logo link twice, the hidden copy
+    first in the DOM. `.first` alone pinned the session check to that copy for
+    the whole 90s budget and reported a live login as expired (keepalive,
+    2026-10-02). The wait must land on the match a person can actually see."""
+    href = asyncio.run(
+        _find_href(
+            """
+            <a aria-label='Wellfound' href='/recruit/source'
+               style='display:none'>hidden twin</a>
+            <a aria-label='Wellfound' href='/recruit/dashboard'>visible logo</a>
+            """,
+            "a[aria-label='Wellfound'][href^='/recruit/']",
+        )
+    )
+    assert href == "/recruit/dashboard"

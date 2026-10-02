@@ -57,11 +57,20 @@ class ActionSpec:
 # ----------------------------------------------------------------------
 
 
-def resolve_locator(run: StepRun, selector: str) -> "Locator":
+def resolve_locator(run: StepRun, selector: str, *, visible_only: bool = False) -> "Locator":
     """Turn one selector string into a Locator, honouring a `frame` parameter.
 
     Rich-text editors are often inside an iframe, and a selector that works in
     devtools then finds nothing from the page root.
+
+    `visible_only` filters the match set down to visible elements before any
+    `.first` is applied. Pages render the same control twice - a desktop and a
+    mobile header, say - and `.first` on its own then pins the wait to whichever
+    sits first in the DOM. Wellfound's recruiter pages carry two logo links, the
+    hidden one first, so the session check stared at it for the full 90s and
+    reported a live login as expired (keepalive, 2026-10-02). Only the engines
+    Playwright chains natively support the filter; the `get_by_*` prefixes keep
+    first-match semantics.
     """
     root: Any = run.page
     frame_selector = run.params.get("frame")
@@ -82,6 +91,8 @@ def resolve_locator(run: StepRun, selector: str) -> "Locator":
     if prefix == "title":
         return root.get_by_title(rest, exact=False)
     # `role=`, `text=`, `css=`, `xpath=` and bare CSS are all handled natively.
+    if visible_only:
+        return root.locator(f"{selector} >> visible=true")
     return root.locator(selector)
 
 
@@ -101,7 +112,10 @@ async def find(run: StepRun, *, required: bool = True) -> "Locator | None":
     problems: list[str] = []
 
     for selector in selectors:
-        locator = resolve_locator(run, selector).first
+        # First *visible* match, not first match: the wait re-resolves on every
+        # poll, so an element that renders late is still caught, while a hidden
+        # twin earlier in the DOM no longer soaks up the whole timeout.
+        locator = resolve_locator(run, selector, visible_only=True).first
         try:
             await locator.wait_for(state="visible", timeout=per_selector)
             return locator

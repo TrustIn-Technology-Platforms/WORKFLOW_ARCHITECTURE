@@ -569,12 +569,16 @@ async def capture_login(
                         # wait at 3s whatever timeout_ms says, and Loxo paints
                         # nothing for 10-22s after a cold load. Logins that had
                         # plainly worked were reported dead for exactly that
-                        # reason (2026-09-02, -03, -07).
+                        # reason (2026-09-02, -03, -07). A required `find` keeps
+                        # the full budget, takes the selector LIST (the old
+                        # direct resolve choked on one and read every list-shaped
+                        # recipe as logged out), and waits for a visible match
+                        # rather than the DOM's first (Wellfound's hidden twin
+                        # logo, 2026-10-02).
                         run = StepRun(page=check, params={"selector": login.ready_selector})
+                        run.timeout_ms = 45_000
                         try:
-                            await resolve_locator(run, login.ready_selector).first.wait_for(
-                                state="visible", timeout=45_000
-                            )
+                            await find(run)
                             still_out = False
                         except Exception:
                             still_out = True
