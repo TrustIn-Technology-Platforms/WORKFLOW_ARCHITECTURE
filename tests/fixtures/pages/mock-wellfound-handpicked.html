@@ -46,6 +46,20 @@
   </style>
 </head>
 <body>
+  <!-- The live page renders the logo link TWICE: a hidden copy first in the
+       DOM (href="/recruit/source", inside a header the route keeps collapsed),
+       then the visible one. `.first` on the logo selector therefore resolves
+       to the hidden copy, and a wait pinned to it reads a live session as
+       expired - which is exactly what the keepalive did for 90s on 2026-10-02
+       (artifact 20261002-134706, trace line "locator resolved to hidden").
+       The check must find the visible copy past the hidden one. -->
+  <div style="display:none">
+    <a aria-label="Wellfound" href="/recruit/source">
+      <svg width="28" height="17" viewBox="0 0 28 17" role="img" aria-hidden="true">
+        <rect width="28" height="17" fill="#1f1f1f"></rect>
+      </svg>
+    </a>
+  </div>
   <header>
     <!-- Present on every recruiter page. The public shell's logo points at "/". -->
     <a aria-label="Wellfound" href="/recruit/jobs" id="logo">
