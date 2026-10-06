@@ -471,8 +471,8 @@ that one link to go on.
 
 | Platform | What is deleted | Status |
 |---|---|---|
-| noon | the role: sourcing stopped (`role_autopilot` enabled:false), then `delete_role` | **proven live 2026-09-08** ([noon](platforms/noon.md#retiring-a-role-2026-09-08)); wired to rows 2026-09-23, not yet run from one |
-| Juicebox | the sequence (`DELETE /api/sequence`), and the sourcing project **only if the run created it** and it still matches by name and creation time (close, then `DELETE /api/projects`) | **sequence delete proven live 2026-09-23** on `ZZ TEST delete me 2026-09-23`; project close+delete **built, not yet proven** ([juicebox](platforms/juicebox.md#deleting-a-row-2026-09-23)) |
+| noon | the role: sourcing stopped (`role_autopilot` enabled:false), then `delete_role` | **proven live 2026-09-08** ([noon](platforms/noon.md#retiring-a-role-2026-09-08)); wired to rows 2026-09-23; **proven live through the adapter 2026-09-30** (`delete noon --record role=… --live`, the path rows and RecruitOS take); not yet run from a Notion row |
+| Juicebox | the sequence (`DELETE /api/sequence`), and the sourcing project **only if the run created it** and it still matches by name and creation time (close, then `DELETE /api/projects`) | **sequence delete proven live 2026-09-23** on `ZZ TEST delete me 2026-09-23`; project close+delete **built, not yet proven** ([juicebox](platforms/juicebox.md#deleting-a-row-2026-09-23)). 2026-10-02: `create_project` now opens only the id that appeared in `/api/projects` after the click (it used to open the first "New Project" row, a name 18 client projects share) - **unproven live**: the ZZ TEST post that should have exercised it skipped sourcing because the local Anthropic key has no credit |
 | Loxo | the campaign the run created (recorded from 2026-09-23) | **not mapped** - reports "delete by hand"; needs the live session |
 | Wellfound | the saved draft job | **not mapped** - reports "delete by hand"; the laptop profile is signed out |
 

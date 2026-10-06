@@ -512,6 +512,13 @@ after the delete. Remaining test roles: `ZZ TEST - delete me`, `ZZ TEST 2 -
 delete me`, `ZZ TEST NOTE - delete me`, `ZZ TEST inmail subject - delete me`,
 and the 20260831 one (now stopped) - all deletable with `--delete --live`.
 
+**Proof through the adapter, 2026-09-30:** `python -m app.cli delete noon
+--record role=318c1d46-ca08-417f-8916-0961add4bc2a --live --headed` - the path a
+row's delete and RecruitOS's `POST /jobs/{id}/delete` both take - deleted `ZZ
+TEST inmail subject - delete me` and read it back gone. The one test role
+`refetch_roles` still lists is `ZZ TEST - Senior Recruitment Consultant -
+20260831` (2e3d07c4-abc8-4075-885e-d90d4b0b9c6c); the others had already gone.
+
 ## Two things to know before calling this "posting"
 
 1. **Outreach sends through their Chrome extension.** Every page shows

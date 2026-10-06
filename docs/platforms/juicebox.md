@@ -576,6 +576,17 @@ its search up inside an existing project. Not fixed here; it needs its own
 look at `create_project` (read the new id from `/api/projects` rather than
 from the page URL).
 
+**Fixed 2026-10-02** in `create_project`. The project ids are listed through
+`/api/projects` before "Create new project" is clicked; the one id that
+appears afterwards, titled `New Project` and not an agent, is the project
+(`new_project_id` - none, or two at once, stops the sourcing with nothing
+opened). The browser goes straight to `/project/<that id>/home` and the run
+stops if it lands anywhere else, so the rename and the JD search can only
+reach the project this click made. After the rename the list is read again:
+any other project now carrying this run's name stops the sourcing and is
+named on the row, so it can be put back. The returned URL is built from the
+id, never from the address bar. The rename failure itself is not touched.
+
 Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
 2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
 project half is proven.

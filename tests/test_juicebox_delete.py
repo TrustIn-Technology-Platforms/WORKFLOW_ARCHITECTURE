@@ -63,3 +63,12 @@ def test_a_refused_project_keeps_the_row_from_reading_as_deleted():
     assert not report.complete
     assert "left alone" in report.summary
     assert JuiceboxDeleteReport(sequence_id="s", sequence_deleted=True).complete
+
+
+def test_a_dry_run_does_not_call_a_missing_project_found():
+    """2026-10-02: the leftover test project had already been deleted, and the
+    dry run read 'project ... found' beside 'was already gone'."""
+    gone = JuiceboxDeleteReport(project_id="p", project_deleted=True, dry_run=True)
+    assert "already gone" in gone.summary and "found" not in gone.summary
+    there = JuiceboxDeleteReport(project_id="p", sequence_id="s", dry_run=True)
+    assert there.summary == "dry run: sequence s found; project p found"

@@ -514,6 +514,12 @@ def post(
         console.print(f"  detail   {result.detail}")
     for artifact in result.artifacts:
         console.print(f"  artifact {artifact}")
+    # What a row's ledger would hold - with no row here, printed so the post
+    # can be taken down with `delete <platform> --record KEY=VALUE ...`.
+    records = {k: v for k, v in result.records.items() if k != "post_url" and v}
+    if records and not dry_run:
+        flags = " ".join(f'--record "{k}={v}"' for k, v in records.items())
+        console.print(f"  delete   python -m app.cli delete {result.platform} {flags} --dry-run")
     if dry_run:
         console.print("\n[dim]Dry run - nothing was submitted. Use --live to post.[/dim]")
 

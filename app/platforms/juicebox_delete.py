@@ -166,6 +166,11 @@ async def list_sequences(session: JuiceboxSession) -> list[dict[str, Any]]:
     return _items(await session.call("GET", "/api/sequence/list"))
 
 
+async def list_projects(session: JuiceboxSession) -> list[dict[str, Any]]:
+    """Every project the account can see, closed ones included."""
+    return _items(await session.call("GET", "/api/projects"))
+
+
 async def get_project(session: JuiceboxSession, project: str) -> dict[str, Any] | None:
     """The project from the full list, or None once it is deleted.
 
@@ -173,7 +178,7 @@ async def get_project(session: JuiceboxSession, project: str) -> dict[str, Any] 
     closed project with the same 404 as a deleted one, and a project closed by
     hand but never deleted would read as gone.
     """
-    return _find(_items(await session.call("GET", "/api/projects")), project)
+    return _find(await list_projects(session), project)
 
 
 def _find(items: list[dict[str, Any]], wanted: str) -> dict[str, Any] | None:
@@ -242,12 +247,20 @@ class JuiceboxDeleteReport:
         parts: list[str] = []
         if self.sequence_id:
             label = f"sequence {self.sequence_name!r}" if self.sequence_name else f"sequence {self.sequence_id}"
-            state = "found" if self.dry_run else "deleted" if self.sequence_deleted else "NOT deleted"
+            # A dry run marks something missing as deleted (there is nothing
+            # left to do), so it must not then report it as found.
+            state = (
+                "already gone" if self.dry_run and self.sequence_deleted
+                else "found" if self.dry_run
+                else "deleted" if self.sequence_deleted
+                else "NOT deleted"
+            )
             parts.append(f"{label} {state}")
         if self.project_id:
             label = f"project {self.project_name!r}" if self.project_name else f"project {self.project_id}"
             state = (
                 "left alone" if self.project_refused
+                else "already gone" if self.dry_run and self.project_deleted
                 else "found" if self.dry_run
                 else "deleted" if self.project_deleted
                 else "NOT deleted"
