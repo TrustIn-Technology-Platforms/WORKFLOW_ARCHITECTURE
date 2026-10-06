@@ -3,10 +3,23 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-09-30 (the direct door)
+> **Last reviewed** 2026-10-07 (the Notion door closes)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
+
+**Amended 2026-10-07: the Notion door is closed in production.** RecruitOS
+now reads the Roles board itself (`Post Status` = `Ready to Post` plus a DOCX)
+and posts each role per platform through the direct door (`POST /jobs`,
+D-025), the Trust-In careers page included. With this service's poll and
+RecruitOS both reading the same board, a row set to `Ready to Post` would have
+gone out twice, so `NOTION_DOOR_ENABLED=false` on Railway stands the poll, the
+stuck-row and trash sweeps and `/webhook` down together (D-026). The n8n
+workflow "Post ready rows to Railway" is deactivated and its JSON removed from
+this repo. Rows the Notion door posted before (Axl Insurance, FOMO, Arca
+Wealth, Reducto, Thunder Compute) stay up; taking one down is now by hand on
+the platform, or by reopening the door for one `Delete` cycle. Everything
+below describes the service with the door open.
 
 **The full chain runs in production (2026-08-28).** A Notion row set to
 `Ready to Post` is picked up by n8n, POSTed to the Railway-deployed webhook,

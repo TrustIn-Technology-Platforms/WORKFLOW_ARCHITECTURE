@@ -512,3 +512,55 @@ def test_a_by_hand_round_replaces_only_the_platforms_it_visited(monkeypatch):
     assert sorted(r["platform"] for r in api._KEEPALIVE_STATE["results"]) == ["loxo", "noon"]
     assert api._KEEPALIVE_STATE["last_run"]
     assert api._KEEPALIVE_STATE["running"] is False
+
+
+# -- the Notion door -----------------------------------------------------------------
+
+
+def test_a_closed_notion_door_stands_every_notion_task_down(monkeypatch):
+    """NOTION_DOOR_ENABLED=false: the poll and both sweeps return without
+    building a Notion client, and /webhook refuses rows with 409 - after the
+    secret check, so a stranger learns nothing. RecruitOS reads the same board
+    since 2026-10-07, so an open door beside it posts a Ready to Post row twice
+    (D-026)."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    called: list[str] = []
+
+    class Boom:
+        def __init__(self, settings):
+            called.append("client")
+
+    monkeypatch.setattr("app.notion.client.NotionClient", Boom)
+    settings = Settings(_env_file=None, notion_token="t", notion_database_id="d",
+                        webhook_secret="s", notion_door_enabled=False)
+    for task in (api._poll_ready_rows, api._sweep_stuck_rows, api._sweep_trashed_rows):
+        asyncio.run(asyncio.wait_for(task(settings), timeout=5))
+    assert called == [], "a Notion task queried Notion through a closed door"
+
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+    client = TestClient(api.create_app())
+    refused = client.post("/webhook", json={"page_id": "abc"}, headers={"X-Webhook-Secret": "s"})
+    assert refused.status_code == 409, refused.text
+    assert "RecruitOS" in refused.json()["detail"]
+    assert client.post("/webhook", json={"page_id": "abc"}).status_code == 401
+    assert client.get("/health").json()["notion_door"] == "closed"
+
+
+def test_an_open_notion_door_is_the_default_and_health_says_so(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, webhook_secret="s")
+    assert settings.notion_door_enabled is True
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+    health = TestClient(api.create_app()).get("/health").json()
+    assert health["notion_door"] == "open"
+    assert health["poll_minutes"] == settings.poll_minutes

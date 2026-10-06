@@ -208,6 +208,16 @@ class Settings(BaseSettings):
     delete_trashed_after_hours: float = 24
     trash_sweep_minutes: int = 30
 
+    # --- the Notion door ----------------------------------------------------
+    # Whether this service takes rows from the Notion board on its own: the
+    # `Ready to Post` poll, the stuck-row and trash sweeps, and /webhook. Since
+    # 2026-10-07 RecruitOS reads the same board and posts through POST /jobs,
+    # so with this door open a row set to Ready to Post would go out twice.
+    # False closes all four at once; POLL_MINUTES and DELETE_TRASHED_ROWS only
+    # matter while it is open. The direct door (POST /jobs) is unaffected and
+    # needs no Notion configuration. See docs/11-decisions.md D-026.
+    notion_door_enabled: bool = True
+
     # --- picking up rows ----------------------------------------------------
     # The service asks Notion for `Ready to Post` rows itself, every this many
     # minutes, instead of waiting for n8n's call (which arrived up to half an

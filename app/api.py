@@ -147,6 +147,28 @@ async def _direct_delete(job_id: str) -> None:
         log.exception("direct delete task crashed", extra={"job_id": job_id})
 
 
+# Logged once per process, not once per background task: three tasks stand
+# down on the same switch, and three identical lines would read as three faults.
+_DOOR_LOGGED = False
+
+
+def _notion_door_closed(settings) -> bool:
+    """True when NOTION_DOOR_ENABLED=false.
+
+    The poll, both sweeps and /webhook all stand down on it, and roles reach
+    the platforms through POST /jobs only. RecruitOS reads the same board
+    since 2026-10-07, so an open door beside it posts a Ready to Post row
+    twice (D-026).
+    """
+    global _DOOR_LOGGED
+    if settings.notion_door_enabled:
+        return False
+    if not _DOOR_LOGGED:
+        _DOOR_LOGGED = True
+        log.info("Notion door closed: roles are posted from RecruitOS (POST /jobs)")
+    return True
+
+
 async def _poll_ready_rows(settings) -> None:
     """Pick up `Ready to Post` rows without waiting for n8n.
 
@@ -161,6 +183,8 @@ async def _poll_ready_rows(settings) -> None:
 
     from app.notion.client import NotionClient
 
+    if _notion_door_closed(settings):
+        return
     if not settings.notion_configured or settings.poll_minutes <= 0:
         return
     if settings.dry_run:
@@ -270,7 +294,7 @@ async def _sweep_stuck_rows(settings) -> None:
     from app.notion.client import NotionClient
     from app.pipeline import recover_stuck_rows
 
-    if not settings.notion_configured:
+    if _notion_door_closed(settings) or not settings.notion_configured:
         return
     while True:
         try:
@@ -300,6 +324,8 @@ async def _sweep_trashed_rows(settings) -> None:
     from app.notion.client import NotionClient
     from app.pipeline import sweep_trashed_rows
 
+    if _notion_door_closed(settings):
+        return
     if not settings.notion_configured or not settings.delete_trashed_rows:
         return
     if settings.dry_run:
@@ -425,8 +451,15 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "version": "1.8",  # bumped with the direct door (1.7: deleting rows)
+            "version": "1.9",  # bumped with the Notion door switch (1.8: the direct door)
             "notion_configured": settings.notion_configured,
+            # The Notion door. Open: the poll, the sweeps and /webhook take rows
+            # from the board on their own. Closed (NOTION_DOOR_ENABLED=false):
+            # roles arrive through POST /jobs only. RecruitOS reads this to warn
+            # while both doors are open, since a Ready to Post row would then go
+            # out twice.
+            "notion_door": "open" if settings.notion_door_enabled else "closed",
+            "poll_minutes": settings.poll_minutes,
             "direct": direct_block,
             # Which platforms can sign themselves in: stored credentials AND
             # login steps in the recipe. Booleans only - never the values.
@@ -483,6 +516,15 @@ def create_app() -> FastAPI:
             x_webhook_secret, settings.webhook_secret
         ):
             raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+        # After the secret check, so an unauthenticated caller learns nothing
+        # about the configuration. 409: the request is well formed, the service
+        # is up, and the Notion path is deliberately not in service.
+        if not settings.notion_door_enabled:
+            raise HTTPException(
+                409,
+                "The Notion door is closed: roles are posted from RecruitOS (POST /jobs). "
+                "Set NOTION_DOOR_ENABLED=true to take Notion rows here again.",
+            )
         if not payload.page_id.strip():
             raise HTTPException(422, "page_id is required.")
 

@@ -5,6 +5,14 @@
 > **Status** BUILT — reflects [app/notion/client.py](../app/notion/client.py) and [app/notion/schema.py](../app/notion/schema.py).
 > **Related** [04-configuration](04-configuration.md)
 
+> **Note (2026-10-07)** The Roles board is now read by RecruitOS, which creates
+> a role per `Ready to Post` row and posts it through this service's direct
+> door (`POST /jobs`). This service's own Notion door — the poll, the sweeps
+> and `/webhook` — is closed in production (`NOTION_DOOR_ENABLED=false`,
+> D-026). This contract still describes what the code does when the door is
+> open; nothing below runs while it is closed, and the write-backs
+> (`Post Status`, `Post URL`, `Posted At`, `Error`) stop.
+
 ## The two optional targeting columns
 
 Criteria are written to a record the recruiters already made — a Loxo job, a

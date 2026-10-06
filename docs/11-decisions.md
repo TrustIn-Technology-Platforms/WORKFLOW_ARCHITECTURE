@@ -788,3 +788,45 @@ also uses; its default keeps the old behaviour.
 then the Notion door, the n8n workflow and their settings are the dead code
 to remove — or when a second caller besides RecruitOS appears, at which point
 `job_id` needs a namespace.
+
+## D-026 · The Notion door closes; RecruitOS drives posting
+
+**Context.** Since D-025 two doors took work: Notion rows (the poll, n8n's
+webhook call, the sweeps) and RecruitOS over `POST /jobs`. On 2026-10-07 the
+team decided that Notion stays where roles are written and RecruitOS is the
+one place roles are posted, checked and taken down, per platform, with the
+Trust-In careers page as a fifth platform. RecruitOS now reads the same Roles
+board (`Post Status = Ready to Post` with a DOCX) and creates a role per row.
+That is the problem: a row set to `Ready to Post` would be taken by this
+service's poll and shown in RecruitOS, and a recruiter pressing Post there
+would post the same role a second time. Taking the board away from this
+service also ends the fight over `Post Status`, which the corporate site's
+own Notion sync wrote too.
+
+**Decision.** One setting, `NOTION_DOOR_ENABLED` (default true), stands the
+`Ready to Post` poll, the stuck-row sweep, the trash sweep and `/webhook`
+down together; `/webhook` answers 409 after the secret check, so a
+reactivated n8n workflow cannot post. `/health` reports `notion_door`, and
+RecruitOS warns while it reads "open". Production runs with it false. The
+direct door is untouched and needs no Notion configuration. The n8n workflow
+"Post ready rows to Railway" is deactivated and its JSON removed from the
+repo; the Notion code stays.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Set `POLL_MINUTES=0` and `DELETE_TRASHED_ROWS=false` and stop there | Two variables for one intent; the stuck-row sweep kept writing `Failed` onto rows nobody here owns any more; and `/webhook` stayed open, one reactivated n8n workflow away from double posting |
+| Blank `NOTION_TOKEN` / `NOTION_DATABASE_ID` | Works, but reads as a misconfiguration in `/health` (`notion_configured: false`) and in every log line, and turns the one-off `Delete` of a legacy row into a redeploy |
+| Delete the Notion code | It is the proven fallback and the only way to take down the rows it posted; D-025 already names its removal as a later cleanup, once RecruitOS has carried a month of postings |
+
+**Trade-off.** Rows this door posted before (Axl Insurance, FOMO, Arca Wealth,
+Reducto, Thunder Compute) can no longer be deleted from Notion: a take-down
+is by hand on the platform, or the door is reopened for one `Delete` cycle
+while no row reads `Ready to Post`. The board's write-back columns
+(`Post Status`, `Post URL`, `Posted At`, `Error`) go stale from here on;
+RecruitOS is where status lives.
+
+**Revisit when** RecruitOS has carried every posting for a month — then the
+Notion door, its settings and `app/notion` are the dead code D-025 spoke of —
+or when a second board or caller appears.
