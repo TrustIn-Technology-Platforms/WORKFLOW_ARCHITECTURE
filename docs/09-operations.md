@@ -264,6 +264,33 @@ The configuration is already shaped for this — `SESSION_DIR`, `ARTIFACT_DIR` a
 Memory is the usual constraint: a Chromium context is a few hundred megabytes,
 so keep row concurrency low on a small instance.
 
+### Deploying, and knowing what is live
+
+The service is **not** deployed from GitHub. Each deploy is `railway up`, an
+upload of the working folder, so Railway cannot say which commit a deployment
+holds and `railway deployment list` shows only ids, states and times. Until
+2026-10-09 the only clue was the hand-bumped `version` in `/health`, and three
+different builds that day all said `1.9`.
+
+Deploy with the script, from a clean tree on `main`:
+
+```
+python scripts/deploy.py            # stamps HEAD on the service, uploads, waits until /health reports it
+python scripts/deploy.py --check    # live sha  vs  GitHub main  vs  this folder
+```
+
+It sets `BUILD_SHA` / `BUILD_BRANCH` / `BUILD_TIME` as service variables
+(with `--skip-deploys`, so they do not trigger a deploy of their own), runs
+`railway up --detach`, and polls `/health` until `build.sha` is the commit it
+started from. "Is the backend up to date" is then `--check` saying
+`UP TO DATE`, which means `build.sha == origin/main`. A deploy with a dirty
+tree is refused: the upload would include uncommitted edits, and a sha that
+does not describe what was uploaded is worse than none.
+
+A redeploy restarts the container. Check `/health` or the logs for a row in
+progress first: a restart mid-row leaves it on `Posting` until the stuck-row
+sweep releases it, with the posts it made already up.
+
 ## Debugging a failed row
 
 1. **Read the `Error` column.** Every deliberate failure writes a message meant

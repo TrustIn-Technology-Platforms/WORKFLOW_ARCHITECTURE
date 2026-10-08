@@ -554,13 +554,25 @@ class JuiceboxAdapter(RecipeAdapter):
                 await page.wait_for_timeout(8_000)
                 await self._click_button_or_text(page, "New sequence")
                 await page.wait_for_timeout(2_500)
-                # The redesigned modal (2026-10-08) offers "Build from scratch"
-                # under a list of projects; the older one said "Start from
-                # scratch". Four retries on the old label alone failed a live
-                # row (artifact 20261008-203006), so both are tried.
-                await self._click_first_label(
-                    page, "Build from scratch", "Start from scratch"
-                )
+                # Juicebox's 2026-10-08 redesign: the modal offers "Build from
+                # scratch" under a list of projects, and behind it is a new
+                # editor (Tiptap/ProseMirror, not TinyMCE) that none of the
+                # fill code below knows. Clicking through created an empty
+                # sequence in a real client project and then failed anyway
+                # (artifact 20261008-203918). Until the driver is remapped
+                # against that editor, stop here, before anything is created.
+                if await page.get_by_text("Build from scratch", exact=True).count():
+                    raise _Redesigned(
+                        "Juicebox redesigned its sequence editor on 2026-10-08 "
+                        "(a new 'Build from scratch' modal and a new message "
+                        "editor) and this automation has not been remapped to "
+                        "it yet. Nothing was created. Build this sequence in "
+                        "Juicebox by hand for now; the other platforms are "
+                        "unaffected."
+                    )
+                await self._click_button_or_text(page, "Start from scratch")
+            except _Redesigned:
+                raise
             except Exception as exc:
                 last = _short(exc)
                 log.warning(
@@ -767,16 +779,11 @@ class JuiceboxAdapter(RecipeAdapter):
                 continue
         raise PlatformError(f"could not click {label!r}")
 
-    async def _click_first_label(self, page: "Page", *labels: str) -> None:
-        """`_click_button_or_text` over the labels a control has carried, in
-        order of likelihood; the error names all of them."""
-        for label in labels:
-            try:
-                await self._click_button_or_text(page, label)
-                return
-            except PlatformError:
-                continue
-        raise PlatformError(f"could not click any of {' / '.join(repr(l) for l in labels)}")
+
+class _Redesigned(PlatformError):
+    """The screen is one this driver has never been mapped against. Raised
+    before anything is created, and never retried: a retry would only create
+    the same stray thing again."""
 
 
 # ----------------------------------------------------------------------

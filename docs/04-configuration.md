@@ -188,7 +188,9 @@ adding its three fields to `Settings` and three rows here.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `WEBHOOK_SECRET` | *(empty)* | Shared secret for the inbound webhook. Requests are rejected when it is set and does not match. |
-| `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read by `scripts/push_sessions.py` and `scripts/pull_artifacts.py`, so the first upload of a captured login and a download of a failure trace need nothing pasted on the command line. |
+| `SERVICE_URL` | *(empty)* | Where the deployed service answers, e.g. `https://app.up.railway.app`. Read by `scripts/push_sessions.py`, `scripts/pull_artifacts.py` and `scripts/deploy.py`, so the first upload of a captured login, a download of a failure trace and a deploy need nothing pasted on the command line. |
+| `BUILD_SHA`, `BUILD_BRANCH`, `BUILD_TIME` | *(empty)* | The commit a deploy was made from. Set on the Railway service by `scripts/deploy.py` right before each `railway up` (never by hand), reported under `build` in `GET /health`. Empty on a build deployed with a bare `railway up`. |
+| `RAILWAY_GIT_COMMIT_SHA`, `RAILWAY_GIT_BRANCH`, `RAILWAY_DEPLOYMENT_ID` | *(Railway)* | Injected by Railway: the first two only on a GitHub-triggered deploy, the last on every deploy. `/health` falls back to them for `build.sha` / `build.branch`, and `build.deployment_id` matches `railway deployment list`. |
 | `PORT` | `8000` | Railway injects this. |
 | `POLL_LIMIT` | `10` | Maximum rows claimed per poll. Also caps the Notion query page size. |
 | `DRY_RUN` | `false` | Walk every step up to the final submit, then stop. Nothing is published and nothing is written back as posted. |

@@ -599,16 +599,60 @@ Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
 2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
 project half is proven.
 
-## "Build from scratch" (2026-10-08)
+## The redesigned sequence editor - driver PAUSED (2026-10-08)
 
-The same redesign renamed the New sequence modal's blank-editor option from
-**Start from scratch** to **Build from scratch**, now shown under a list of
-recent projects and a "Clone existing sequence" option (artifacts
-20261008-113052 and 20261008-203006; both pages contain the new label and not
-the old). The driver retried the old label four times and failed the Decart
-row on Juicebox after Loxo and noon had posted. `_open_new_sequence` now tries
-"Build from scratch" first and "Start from scratch" second, through
-`_click_first_label`.
+**Status: Juicebox posting stops at the New sequence modal with a message on
+the row, until the driver is remapped.** Everything below comes from the
+three failure artifacts of 2026-10-08 (113052, 203006, 203918) and one live
+run; nothing has been driven by hand yet.
+
+What changed, in the order the driver meets it:
+
+1. **The modal.** "New sequence" opens *Generate a sequence for one of your
+   projects*: a list of recent projects, a "Choose project" dropdown, then
+   **Build from scratch** and **Clone existing sequence**. "Start from
+   scratch" is gone from the page. The driver retried the old label four
+   times on the Decart row (203006).
+2. **Build from scratch creates the sequence at once, inside a project.** On
+   the next attempt (203918) the click produced an autosaved sequence titled
+   **"Token - Infra Eng - SF - 10/08/2026"** - a real client project, named
+   after it with the date - with one empty email step marked *Needs
+   attention*. The old flow opened an unnamed editor the driver then named;
+   the new one files the sequence under a project first. Which project the
+   recipe's `sequences_url` (`AXAaleEq2JfO29jIjBXW`) now resolves to, and
+   whether the modal's first project card is what got picked, is unknown
+   until someone drives it headed. **That stray sequence has to be deleted
+   by hand** (Juicebox → Sequences → search the title); the run recorded
+   nothing, so the automation's delete does not know it.
+3. **The editor is not TinyMCE any more.** The step editor is a full-screen
+   dialog over the Sequences page (`role=dialog`, a "Done" button, no
+   Cancel/Close). The subject is a single-line **Tiptap/ProseMirror**
+   `contenteditable` (`data-step-subject-input="true"`,
+   `aria-labelledby="sequence-step-subject-label-<id>"`), the body another
+   (`aria-label="Message body"`, class `tiptap ProseMirror tiptap--composer
+   email-editor-content`). `tinymce` does not exist on the page, so
+   `_COUNTS` reports zero editors, the driver believes the editor stalled,
+   and its retry cannot close the dialog or reach the Sequences link behind
+   it ("could not click 'Sequences'"). Token chips are offered above the
+   toolbar (`{First Name}`, `{Current Company}`, `{Job title}`, `{Education}`,
+   `{Sender first name}`, `{Last Name}`), steps are added with an
+   `aria-label="Add step"` button, step 1 shows a "Start immediately" chip,
+   and a `sequence-validation-errors` panel lists what is missing.
+
+What the driver does now: after "New sequence", if the modal shows "Build
+from scratch" it raises before clicking anything - *"Juicebox redesigned its
+sequence editor on 2026-10-08 ... Nothing was created. Build this sequence in
+Juicebox by hand for now"* - and the row fails on Juicebox alone, with the
+other platforms unaffected. The old-layout path ("Start from scratch", TinyMCE)
+is kept in case the redesign is rolled back or staged.
+
+The remap needs a headed run on a ZZ TEST row: `python -m app.cli post
+juicebox --doc <file> --headed`, then the modal (which project, how to open a
+blank editor without the AI generation), the name field
+(`sequence-name-resize-handle` suggests an inline-editable title), the two
+ProseMirror fields (a `paste` event with HTML is how noon's Draft.js is
+filled; ProseMirror takes the same), step delays, and "Done". Every stray
+sequence a trial creates must be deleted before the next.
 
 ## The expiry that was not one (2026-10-08)
 

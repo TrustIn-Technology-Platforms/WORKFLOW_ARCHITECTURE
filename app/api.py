@@ -456,6 +456,14 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "version": "1.9",  # bumped with the Notion door switch (1.8: the direct door)
+            # The commit that is running - see Settings.build_sha. `None`
+            # means the deploy was not stamped (a bare `railway up`).
+            "build": {
+                "sha": (settings.build_sha or settings.railway_git_commit_sha or None),
+                "branch": settings.build_branch or settings.railway_git_branch or None,
+                "built_at": settings.build_time or None,
+                "deployment_id": settings.railway_deployment_id or None,
+            },
             "notion_configured": settings.notion_configured,
             # The Notion door. Open: the poll, the sweeps and /webhook take rows
             # from the board on their own. Closed (NOTION_DOOR_ENABLED=false):

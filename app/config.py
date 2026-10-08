@@ -246,6 +246,19 @@ class Settings(BaseSettings):
     # that re-uploading expired logins is one command with nothing to paste -
     # a secret typed on a command line ends up in the shell history.
     service_url: str = Field(default="", description="e.g. https://app.up.railway.app")
+    # Which commit is running. `scripts/deploy.py` sets BUILD_* as Railway
+    # variables right before each `railway up`, and /health reports them, so
+    # "is the backend up to date" is a comparison of two shas rather than a
+    # guess from a hand-bumped version string (three builds on 2026-10-08 all
+    # said "1.9"). Railway fills RAILWAY_GIT_* only on a GitHub-triggered
+    # deploy, and RAILWAY_DEPLOYMENT_ID on every deploy - that one matches
+    # `railway deployment list`.
+    build_sha: str = Field(default="")
+    build_branch: str = Field(default="")
+    build_time: str = Field(default="")
+    railway_git_commit_sha: str = Field(default="")
+    railway_git_branch: str = Field(default="")
+    railway_deployment_id: str = Field(default="")
     port: int = 8000
     poll_limit: int = 10
     dry_run: bool = False

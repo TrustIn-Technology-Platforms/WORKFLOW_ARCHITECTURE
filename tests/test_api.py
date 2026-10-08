@@ -564,3 +564,41 @@ def test_an_open_notion_door_is_the_default_and_health_says_so(monkeypatch):
     health = TestClient(api.create_app()).get("/health").json()
     assert health["notion_door"] == "open"
     assert health["poll_minutes"] == settings.poll_minutes
+
+
+def test_health_reports_the_deployed_commit(monkeypatch):
+    """`scripts/deploy.py` stamps BUILD_* on the service; /health must show
+    them, so "is the backend up to date" is a comparison of shas rather than
+    a reading of a hand-bumped version string."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("BUILD_SHA", "0123456789abcdef0123456789abcdef01234567")
+    monkeypatch.setenv("BUILD_BRANCH", "main")
+    monkeypatch.setenv("BUILD_TIME", "2026-10-09T00:00:00Z")
+    monkeypatch.setenv("RAILWAY_DEPLOYMENT_ID", "dep-1")
+    get_settings.cache_clear()
+    try:
+        build = TestClient(create_app()).get("/health").json()["build"]
+    finally:
+        get_settings.cache_clear()
+
+    assert build == {
+        "sha": "0123456789abcdef0123456789abcdef01234567",
+        "branch": "main",
+        "built_at": "2026-10-09T00:00:00Z",
+        "deployment_id": "dep-1",
+    }
+
+
+def test_health_says_so_when_a_build_is_not_stamped(monkeypatch):
+    from app.config import get_settings
+
+    for name in ("BUILD_SHA", "BUILD_BRANCH", "BUILD_TIME", "RAILWAY_GIT_COMMIT_SHA",
+                 "RAILWAY_GIT_BRANCH", "RAILWAY_DEPLOYMENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    get_settings.cache_clear()
+    try:
+        build = TestClient(create_app()).get("/health").json()["build"]
+    finally:
+        get_settings.cache_clear()
+    assert build["sha"] is None and build["branch"] is None
