@@ -97,9 +97,21 @@ def check(url: str) -> int:
     if live_sha == origin_main:
         print("\nUP TO DATE: Railway runs exactly what GitHub main holds.")
         code = 0
+    elif not _known(live_sha):
+        print("\nUNKNOWN: the live commit is not in this clone - fetch, or it was "
+              "deployed from another machine's unpushed work.")
+        code = 1
+    elif _is_ancestor(live_sha, origin_main):
+        behind = _git("rev-list", "--count", f"{live_sha}..{origin_main}")
+        print(f"\nBEHIND: GitHub main is {behind} commit(s) ahead of what Railway runs - deploy.")
+        code = 1
+    elif _is_ancestor(origin_main, live_sha):
+        ahead = _git("rev-list", "--count", f"{origin_main}..{live_sha}")
+        print(f"\nAHEAD: Railway runs {ahead} commit(s) GitHub main does not have yet - push them.")
+        code = 1
     else:
-        behind = _git("rev-list", "--count", f"{live_sha}..{origin_main}") if _known(live_sha) else "?"
-        print(f"\nBEHIND: GitHub main is {behind} commit(s) ahead of what Railway runs.")
+        print("\nDIVERGED: the live commit and GitHub main share history but differ - "
+              "merge or rebase, then deploy.")
         code = 1
     if head != origin_main:
         print("This folder differs from GitHub main - push or pull before deploying.")
@@ -109,6 +121,14 @@ def check(url: str) -> int:
 def _known(sha: str) -> bool:
     try:
         _git("cat-file", "-e", f"{sha}^{{commit}}")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _is_ancestor(older: str, newer: str) -> bool:
+    try:
+        _git("merge-base", "--is-ancestor", older, newer)
         return True
     except subprocess.CalledProcessError:
         return False
