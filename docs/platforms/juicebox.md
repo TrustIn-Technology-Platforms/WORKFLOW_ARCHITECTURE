@@ -599,6 +599,17 @@ Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
 2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
 project half is proven.
 
+## "Build from scratch" (2026-10-08)
+
+The same redesign renamed the New sequence modal's blank-editor option from
+**Start from scratch** to **Build from scratch**, now shown under a list of
+recent projects and a "Clone existing sequence" option (artifacts
+20261008-113052 and 20261008-203006; both pages contain the new label and not
+the old). The driver retried the old label four times and failed the Decart
+row on Juicebox after Loxo and noon had posted. `_open_new_sequence` now tries
+"Build from scratch" first and "Start from scratch" second, through
+`_click_first_label`.
+
 ## The expiry that was not one (2026-10-08)
 
 A row failed with *"the session had expired and the automatic sign-in failed -

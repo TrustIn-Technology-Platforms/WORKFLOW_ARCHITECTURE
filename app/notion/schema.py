@@ -159,6 +159,12 @@ def build_value(prop_type: str, value: Any) -> dict[str, Any] | None:
     if prop_type == "email":
         return {"email": str(value) if value else None}
     if prop_type == "select":
+        # A list reaching a single-select - `Posted On` created as a select
+        # rather than a multi-select (2026-10-08) - becomes one option. Joined
+        # without commas: Notion rejects an option name containing one, and
+        # str(list) put "['loxo', 'noon']" on the wire.
+        if isinstance(value, (list, tuple)):
+            value = " + ".join(str(n) for n in value if n)
         return {"select": {"name": str(value)} if value else None}
     if prop_type == "status":
         return {"status": {"name": str(value)} if value else None}

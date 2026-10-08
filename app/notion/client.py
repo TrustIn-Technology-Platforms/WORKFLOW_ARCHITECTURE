@@ -314,6 +314,16 @@ class NotionClient:
         leaves an honest record of how far it got.
         """
         s = self.settings
+        for column in (s.prop_posted_on, s.prop_failed_on):
+            resolved = await self.resolve_property(column)
+            if resolved is not None and resolved[1] == "select":
+                # Written as one "loxo + noon" option, which works but hides
+                # the point: a recruiter cannot tick one platform off. Said
+                # once per run rather than failing the row over a column type.
+                log.warning(
+                    "platform column is a single select - make it a multi-select",
+                    extra={"property": resolved[0]},
+                )
         await self.update_properties(
             page_id,
             {s.prop_posted_on: sorted(set(posted)), s.prop_failed_on: sorted(set(failed))},

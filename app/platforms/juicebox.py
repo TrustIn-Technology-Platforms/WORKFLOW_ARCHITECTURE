@@ -554,7 +554,13 @@ class JuiceboxAdapter(RecipeAdapter):
                 await page.wait_for_timeout(8_000)
                 await self._click_button_or_text(page, "New sequence")
                 await page.wait_for_timeout(2_500)
-                await self._click_button_or_text(page, "Start from scratch")
+                # The redesigned modal (2026-10-08) offers "Build from scratch"
+                # under a list of projects; the older one said "Start from
+                # scratch". Four retries on the old label alone failed a live
+                # row (artifact 20261008-203006), so both are tried.
+                await self._click_first_label(
+                    page, "Build from scratch", "Start from scratch"
+                )
             except Exception as exc:
                 last = _short(exc)
                 log.warning(
@@ -760,6 +766,17 @@ class JuiceboxAdapter(RecipeAdapter):
             except Exception:
                 continue
         raise PlatformError(f"could not click {label!r}")
+
+    async def _click_first_label(self, page: "Page", *labels: str) -> None:
+        """`_click_button_or_text` over the labels a control has carried, in
+        order of likelihood; the error names all of them."""
+        for label in labels:
+            try:
+                await self._click_button_or_text(page, label)
+                return
+            except PlatformError:
+                continue
+        raise PlatformError(f"could not click any of {' / '.join(repr(l) for l in labels)}")
 
 
 # ----------------------------------------------------------------------
