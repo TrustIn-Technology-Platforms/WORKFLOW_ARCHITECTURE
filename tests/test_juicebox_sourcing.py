@@ -15,6 +15,7 @@ from app.platforms.juicebox_sourcing import (
     is_search_url,
     match_mode,
     new_lines,
+    new_project_id,
     pick_option,
     present,
     project_home,
@@ -353,3 +354,34 @@ def test_only_a_stated_stage_may_set_the_funding_stage_filter():
     # What the Axle run wrote, and what it writes now.
     assert stage_plan(stage_for_filter("Series A", stated=True)) == ["seed", "series_a"]
     assert stage_plan(stage_for_filter("Series A", stated=False)) == []
+
+
+def test_only_the_project_that_appeared_after_the_click_is_ours():
+    """2026-09-23: opening "the first 'New Project' row" handed back a real
+    client's project. 18 real projects carry that name, so only an id that was
+    not in the list before the click counts."""
+    before = {"AXAaleEq2JfO29jIjBXW", "InClM8FYqv9KJLCKSRpX"}
+    listed = [
+        {"id": "AXAaleEq2JfO29jIjBXW", "title": "New Project"},  # Axle's, unrenamed
+        {"id": "InClM8FYqv9KJLCKSRpX", "title": "Rowspace Infrastructure Engineer"},
+        {"id": "Fresh0000000000000ab", "title": "New Project"},
+    ]
+    assert new_project_id(before, listed) == ("Fresh0000000000000ab", "")
+
+
+def test_no_new_project_or_two_at_once_opens_nothing():
+    before = {"AXAaleEq2JfO29jIjBXW"}
+    same = [{"id": "AXAaleEq2JfO29jIjBXW", "title": "New Project"}]
+    found, why = new_project_id(before, same)
+    assert found is None and "no new project" in why
+
+    two = same + [{"id": "a" * 20, "title": "New Project"}, {"id": "b" * 20, "title": "New Project"}]
+    found, why = new_project_id(before, two)
+    assert found is None and "2 new" in why
+
+    # A teammate's new agent project, or one already named, is not this click's.
+    others = same + [
+        {"id": "c" * 20, "title": "New Project", "isAgenticProject": True},
+        {"id": "d" * 20, "title": "Someone's role"},
+    ]
+    assert new_project_id(before, others)[0] is None

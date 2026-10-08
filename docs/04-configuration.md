@@ -49,6 +49,8 @@ to the same column even without an override.
 | `PROP_POST_URL` | `Post URL` | Written back on success. |
 | `PROP_POSTED_AT` | `Posted At` | Written back on success. |
 | `PROP_ERROR` | `Error` | Written back on failure. |
+| `PROP_POSTED_ON` | `Posted On` | **Optional** multi-select. Each platform is added the moment its post succeeds and removed the moment its delete succeeds. A row set back to `Ready to Post` skips every platform already listed here, so re-running a half-failed row posts only what is missing. Create the column with the four platform names as options. |
+| `PROP_FAILED_ON` | `Failed On` | **Optional** multi-select. The platforms that failed in the last run; cleared when a run starts. `PROP_ERROR` carries the per-platform reasons. |
 | `PROP_NOTES` | `Notes` | **Optional.** Where a successful run's notes go: the search it built, what a taxonomy refused, a stage Claude inferred. Without this column the notes land in `Error` prefixed `Posted OK`, which reads as a failure. Add a rich-text column of this name and `Error` stays empty on success. |
 | `PROP_TITLE` | `Name` | Fallback title. The client also detects the real `title` column by type. |
 | `PROP_LOCATION` | `Location` | Fills `advert.location` when the document has none. Job boards (Wellfound) require it. |
@@ -67,6 +69,9 @@ to the same column even without an override.
 | `STATUS_POSTING` | `Posting` | Set on claim, so a second worker skips the row. |
 | `STATUS_POSTED` | `Posted` | Every platform on the row succeeded. |
 | `STATUS_FAILED` | `Failed` | Something failed; `PROP_ERROR` says what. |
+| `STATUS_DELETE` | `Delete` | Set by a recruiter: delete everything the row posted, on every platform. Picked up like `STATUS_READY`. |
+| `STATUS_DELETING` | `Deleting` | Set on claim of a delete. A row left here by a restart is released by the stuck-row sweep. |
+| `STATUS_DELETED` | `Deleted` | Every platform's records are gone. A partial delete is `STATUS_FAILED` instead, naming what is left. |
 
 These must match the option names in the Notion database **exactly**, including
 capitalisation. Notion rejects an option name that does not already exist.
@@ -122,7 +127,13 @@ supported state: the gaps stay empty and the run says which ones did.
 | `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
 | `STUCK_POSTING_MINUTES` | `45` | A row untouched on `Posting` this long is taken as orphaned by a dead process (a redeploy) and marked Failed with a note. Longer than any live run on three platforms takes. |
 | `STUCK_SWEEP_MINUTES` | `10` | How often the deployed service sweeps for such rows (also once at startup). |
+| `LEDGER_PATH` | *(empty)* | Where the record of what each posted row created is kept. Blank means `<SESSION_DIR>/posted-rows.json`, which on Railway is the volume. It must survive deploys: a row whose records are lost can only be deleted by hand. `scripts/push_sessions.py` never uploads it and the import endpoint never overwrites it. |
+| `DELETE_TRASHED_ROWS` | `true` | A posted row moved to Notion's trash has its posts deleted too. `false` leaves only the `Delete` status as a trigger. |
+| `DELETE_TRASHED_AFTER_HOURS` | `24` | How long a row sits in the trash before its posts are deleted. The wait is the undo: restore the row inside it and nothing is touched. |
+| `TRASH_SWEEP_MINUTES` | `30` | How often the deployed service asks Notion whether each recorded row is in the trash. |
+| `NOTION_DOOR_ENABLED` | `true` | Whether this service takes rows from the Notion board on its own: the `Ready to Post` poll, the stuck-row and trash sweeps, and `/webhook` (which answers 409 while closed). `false` closes all four at once; `POLL_MINUTES` and `DELETE_TRASHED_ROWS` only matter while it is open. The direct door (`POST /jobs`) is unaffected. **Closed in production since 2026-10-07**: RecruitOS reads the same board and posts through the direct door, so an open door beside it would post a `Ready to Post` row twice (D-026). |
 | `POLL_MINUTES` | `2` | How often the deployed service asks Notion for `Ready to Post` rows and runs them itself, one at a time, without waiting for n8n's webhook call. `0` leaves the webhook as the only trigger, and so does `DRY_RUN=true` — a dry run writes no row back, so polling would run the same rows for ever. |
+| `DIRECT_JOBS_PATH` | *(empty)* | Where the direct door (`POST /jobs`, see `app/direct.py`) keeps each job's per-platform states. Blank means `<SESSION_DIR>/direct-jobs.json`, which on Railway is the volume — a store on container disk forgets every job's state on deploy, exactly like the ledger would. |
 
 ## Storage
 

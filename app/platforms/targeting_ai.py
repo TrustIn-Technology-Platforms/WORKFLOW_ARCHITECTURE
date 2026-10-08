@@ -442,6 +442,13 @@ def _company_key(name: str) -> str:
     return " ".join(text.split())
 
 
+# The names other modules use. `sourcing_profile` builds its lists with the
+# same cleaning and the same years sanity-check as the drafts here, and a
+# private name reached across a module boundary breaks silently on a rename.
+clean_list = _clean
+clamp_years = _years
+
+
 def _clean_companies(
     values: list[str], hiring_company: str, limit: int = MAX_COMPANIES
 ) -> list[str]:

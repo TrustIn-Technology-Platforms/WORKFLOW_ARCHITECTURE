@@ -43,7 +43,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.logging_conf import get_logger
 from app.models import PlatformError
@@ -691,28 +691,69 @@ async def _go_to_projects(page: "Page") -> None:
     raise PlatformError("Juicebox's Projects page never rendered.")
 
 
+def new_project_id(
+    before: set[str], projects: list[dict[str, Any]]
+) -> tuple[str | None, str]:
+    """The one project in `projects` that `before` did not hold, or why not.
+
+    Only an id that was not there before the click is ours. Opening "the
+    first 'New Project' row" is not enough: 18 of the account's real client
+    projects carry that name too (the rename does not always stick), and on
+    2026-09-23 this flow handed back a real client's project instead.
+    """
+    fresh = [
+        p for p in projects
+        if str(p.get("id") or "") and str(p.get("id")) not in before
+        and str(p.get("title") or "").strip() == "New Project"
+        and not p.get("isAgenticProject") and not p.get("agentStatus")
+    ]
+    if len(fresh) == 1:
+        return str(fresh[0]["id"]), ""
+    if not fresh:
+        return None, "Juicebox listed no new project after 'Create new project'"
+    ids = ", ".join(str(p["id"]) for p in fresh)
+    return None, f"Juicebox listed {len(fresh)} new 'New Project's at once ({ids})"
+
+
 async def create_project(page: "Page", name: str) -> str:
     """A new project, renamed. Returns its URL.
 
-    "Create new project" creates instantly with no dialog, so the newest
-    "New Project" row is opened and renamed by double-clicking the title.
+    "Create new project" creates instantly with no dialog. Which project that
+    made is read from the project list - the ids before the click against the
+    ids after it - and the browser is sent to that id before anything is
+    renamed, so a click that opened some other project cannot rename or fill
+    it.
     """
+    from app.platforms.juicebox_delete import capture_session, list_projects
+
+    session = await capture_session(page)
+    titles_before = {
+        str(p.get("id")): str(p.get("title") or "") for p in await list_projects(session)
+    }
     await _go_to_projects(page)
     await page.wait_for_timeout(2_000)
     await page.get_by_text("Create new project", exact=True).first.click(timeout=15_000)
-    await page.wait_for_timeout(6_000)
 
-    row = page.get_by_text("New Project", exact=True).first
-    if not await row.count():
+    new_id, why = None, ""
+    for _ in range(10):
+        await page.wait_for_timeout(2_000)
+        new_id, why = new_project_id(set(titles_before), await list_projects(session))
+        if new_id:
+            break
+    if new_id is None:
         raise PlatformError(
-            "Juicebox created no 'New Project' row - its create flow may have "
-            "changed. Create the project by hand and put its URL in the row's "
-            "Juicebox Project column."
+            f"{why}, so no project was opened or renamed. Create the project by "
+            "hand and put its URL in the row's Juicebox Project column."
         )
-    await row.click(timeout=15_000)
+
+    await page.goto(f"{BASE}/project/{new_id}/home", wait_until="commit", timeout=90_000)
     await page.wait_for_timeout(8_000)
-    if "/project/" not in page.url:
-        raise PlatformError(f"opening the new project landed on {page.url}")
+    if f"/project/{new_id}" not in page.url:
+        raise PlatformError(
+            f"opening the new project {new_id} landed on {page.url}, so it was "
+            "not renamed or filled. Put its URL in the row's Juicebox Project "
+            "column and run the row again."
+        )
 
     # The rename: double-click the title, wait for the inline input (the
     # Railway container takes longer than 1.5s to show it), type the name as
@@ -763,10 +804,36 @@ async def create_project(page: "Page", name: str) -> str:
             await page.screenshot(path=str(shots / f"{stamp}-juicebox-rename-failed.png"))
         except Exception:  # noqa: BLE001 - evidence is best effort
             pass
+
+    # The inline rename double-clicks whatever "New Project" text the page
+    # shows first. Read back that it landed on our project and nowhere else -
+    # a client's project renamed to this role is worth stopping the sourcing
+    # for, and naming, so it can be put back. Only a project that took *this*
+    # name counts: a teammate renaming their own at the same moment is not us.
+    renamed_others = [
+        pid for pid, title in (
+            (str(p.get("id")), str(p.get("title") or "").strip())
+            for p in await list_projects(session)
+        )
+        if pid != new_id and pid in titles_before
+        and title == title_text and titles_before[pid].strip() != title_text
+    ]
+    if renamed_others:
+        log.error(
+            "juicebox rename touched another project",
+            extra={"project": new_id, "others": renamed_others},
+        )
+        raise PlatformError(
+            f"renaming the new project also renamed {', '.join(renamed_others)}, "
+            "which this run did not create - open it in Juicebox and give it its "
+            f"old name back ({', '.join(titles_before[p] for p in renamed_others)}). "
+            "No search was set up."
+        )
+
     # `project`, not `name`: `name` is a reserved LogRecord field, and a log
     # call raising here is exactly what stopped the first production run.
     log.info("juicebox project created", extra={"project": name, "url": page.url})
-    return page.url.split("?")[0]
+    return f"{BASE}/project/{new_id}/home"
 
 
 async def open_project(page: "Page", project_url: str) -> str:

@@ -401,6 +401,18 @@ Two changes, neither of which needs an endpoint we have not seen:
    starred. "Will accept £35-45k" is not something a profile can satisfy, so
    it would narrow the search to nobody while looking like diligence.
 
+   **Amended 2026-09-28 — the whole brief, not just the facts
+   ([D-024](../11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)).**
+   The 2026-09-28 review found live roles carrying little more than a title,
+   so the preamble now also states what the shared sourcing profile drafted:
+   `Also matching job titles:`, `Key skills:` (the profile's must-haves),
+   `Nice-to-have skills:` and `Ideal past companies:` (a shortlist of 12).
+   The JD below it is `search_jd` — the Client JD verbatim, else the
+   profile's composed spec, never the raw advert while a spec exists. And
+   when `generate_params` still extracts no requirements, the wizard writes
+   the profile's essentials as the must-haves instead of failing the stage
+   and leaving a bare role.
+
 **The preamble alone did not do it (corrected 2026-09-22).** `generate_params`
 *extracts* the location; it does not save it. That it did was inferred from the
 name of its `dont_save` flag and was wrong — a live row on 2026-09-22 had noon
@@ -499,6 +511,13 @@ after the stop; `ZZ TEST NOTE - delete me (1)` was gone from `refetch_roles`
 after the delete. Remaining test roles: `ZZ TEST - delete me`, `ZZ TEST 2 -
 delete me`, `ZZ TEST NOTE - delete me`, `ZZ TEST inmail subject - delete me`,
 and the 20260831 one (now stopped) - all deletable with `--delete --live`.
+
+**Proof through the adapter, 2026-09-30:** `python -m app.cli delete noon
+--record role=318c1d46-ca08-417f-8916-0961add4bc2a --live --headed` - the path a
+row's delete and RecruitOS's `POST /jobs/{id}/delete` both take - deleted `ZZ
+TEST inmail subject - delete me` and read it back gone. The one test role
+`refetch_roles` still lists is `ZZ TEST - Senior Recruitment Consultant -
+20260831` (2e3d07c4-abc8-4075-885e-d90d4b0b9c6c); the others had already gone.
 
 ## Two things to know before calling this "posting"
 

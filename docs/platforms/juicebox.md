@@ -51,6 +51,17 @@ open the search, then set the titles, location, skills and experience** — and,
 from 2026-09-03, **the companies and the funding stages** too. Wired into the
 adapter after the sequence saves, under `CRITERIA_ENABLED`.
 
+**Amended 2026-09-28
+([D-024](../11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)).**
+Two changes from Sohaib's review of the live searches. What gets **pasted**
+is `search_jd`: the Client JD verbatim, else the shared profile's composed
+spec — a document without a Client JD used to have its *advert* pasted here,
+and Juicebox built the whole search from the pitch. And the **filters** now
+come from the shared sourcing profile rather than a per-run draft: the same
+titles, two-tier skills (essentials first, so the cap cuts nice-to-haves),
+years, candidate location and companies that noon and Loxo get, saved under
+`artifacts/sourcing/` for a recruiter to read.
+
 ### What the first production run left behind (Axle, 2026-09-02, 22:56 local)
 
 A renamed project with an empty search box — Sohaib's screenshot. The Railway
@@ -532,6 +543,85 @@ shape as Loxo. Never read an empty page as failure before 30s.
 2. One read-only probe: open the app, dump controls, editors and network calls.
    Nothing clicked that creates or sends.
 3. Fill this brief in, then write the recipe.
+
+## Deleting a row (2026-09-23)
+
+> **Status** Sequence delete **PROVEN LIVE**; project close + delete **built,
+> not yet proven**. [app/platforms/juicebox_delete.py](../../app/platforms/juicebox_delete.py).
+
+Read out of the bundle (`fetcher` in the `3p2l…` chunk, the sequence calls in
+`340b…`), then called from inside the tab:
+
+| What | Call |
+|---|---|
+| Auth | Every `/api/` call carries the Firebase ID token in an **`fbauthorization`** header, added by the app's `fetcher`. Not a cookie: a raw `fetch('/api/sequence/list')` is a 401. Read off the app's own traffic after load. |
+| Sequences | `GET /api/sequence/list` -> `{result: [{id, title, archived, ...}]}` (152 on 2026-09-23, 39 archived) |
+| Delete a sequence | `DELETE /api/sequence?sequenceId=<id>` (the app's `archiveSequence`). The sequence stays in the list as `archived: true`. |
+| Projects | `GET /api/projects` -> `{result: {your_agents, agent_projects, your_projects, team_projects, organization_projects}}`, each a list of `{id, title, closed, dateAdded, isAgenticProject, agentStatus, ...}`; closed projects stay listed, deleted ones do not. `GET /api/projects?project_id=` answers a closed or deleted project alike with 404 `project-not-found`. |
+| Close a project | `PATCH /api/projects?project_id=<id>` `{closed: true, closedReason, closedReasonDetails, shouldCancelSequences}`; reasons `hired_juicebox`, `hired_outside`, `no_longer_hiring`, `other`. |
+| Delete a project | `DELETE /api/projects?&project_id=<id>` - refused with 400 `project-not-closed` until it is closed ("Close and delete" in the UI does both). |
+
+**Proof, 2026-09-23:** `ZZ TEST delete me 2026-09-23` created with the app's
+own `POST /api/sequence`, deleted with `DELETE /api/sequence`, read back
+`archived: true`; a second delete reported it already gone.
+
+**The near miss, and the guard it produced.** The proof also created a
+throwaway project through `create_project` (the sourcing code). The rename did
+not stick and the click on the new project never navigated headless, so
+`create_project` returned the URL of the project the browser was *already* in:
+**Rowspace Infrastructure Engineer**, a real client project with three
+searches. The delete then aimed at it, and only Juicebox's own
+`project-not-closed` refusal stopped it. So a project is now deleted only when
+the run recorded it as created **and** it still matches: titled as the run
+named it or `New Project`, created within 45 minutes of the run, and not an
+agent project (`project_matches`). The id alone is never trusted.
+
+**Found at the same time - the sourcing rename is failing in production.** 18
+projects in the account are still called `New Project`, including Axle's
+(`AXAaleEq2JfO29jIjBXW`). And `create_project` can report a project as
+created while pointing at a different one, which means a sourcing run can set
+its search up inside an existing project. Not fixed here; it needs its own
+look at `create_project` (read the new id from `/api/projects` rather than
+from the page URL).
+
+**Fixed 2026-10-02** in `create_project`. The project ids are listed through
+`/api/projects` before "Create new project" is clicked; the one id that
+appears afterwards, titled `New Project` and not an agent, is the project
+(`new_project_id` - none, or two at once, stops the sourcing with nothing
+opened). The browser goes straight to `/project/<that id>/home` and the run
+stops if it lands anywhere else, so the rename and the JD search can only
+reach the project this click made. After the rename the list is read again:
+any other project now carrying this run's name stops the sourcing and is
+named on the row, so it can be put back. The returned URL is built from the
+id, never from the address bar. The rename failure itself is not touched.
+
+Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
+2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
+project half is proven.
+
+## The expiry that was not one (2026-10-08)
+
+A row failed with *"the session had expired and the automatic sign-in failed -
+Juicebox failed at login step 4 (fill input[type='email']): no element
+matched"*. The saved screenshot
+(`artifacts/from-server/20261008-152900-juicebox-failed.png`) shows the
+logged-in dashboard: "Hello, Marcus", the recent projects, the task list.
+
+The session check was `ready_selector: text=Sequences`, and the driver's own
+check read `document.body.innerText` for the same word. Both assume the
+sidebar is expanded. Marcus had collapsed it to icons; in that state the nav
+item is a button with `aria-label="Sequences"` and no text, so the visible-text
+check found nothing in 42 seconds, the session was declared dead, the
+unattended sign-in ran against a page with no sign-in form, and step 4 failed
+for want of an email box. The 11:30 artifact the same day shows the sidebar
+expanded and the check passing - the setting is the user's, and it persists.
+
+Fixed 2026-10-09: the recipe's `ready_selector` is now a list (`text=Sequences`,
+`[aria-label='Sequences']`, `button[aria-label='Expand sidebar']`), the
+driver's check also asks the DOM for those, and the Sequences nav click falls
+back to the aria-label. Same family as Wellfound's hidden-twin logo
+(2026-09-16): **a session check must never rest on a label the user can
+hide.**
 
 ## Unattended sign-in (2026-09-21)
 

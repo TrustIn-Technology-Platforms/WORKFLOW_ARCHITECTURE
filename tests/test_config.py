@@ -62,3 +62,9 @@ def test_keepalive_defaults_are_on_and_daily():
     assert settings.session_keepalive_hours == 24
     assert settings.session_relogin is True
     assert settings.login_check_seconds == 90
+
+
+def test_the_notion_door_is_open_by_default_and_closes_from_the_environment(monkeypatch):
+    assert Settings(_env_file=None).notion_door_enabled is True
+    monkeypatch.setenv("NOTION_DOOR_ENABLED", "false")
+    assert Settings(_env_file=None).notion_door_enabled is False

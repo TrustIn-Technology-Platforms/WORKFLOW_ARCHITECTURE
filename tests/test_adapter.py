@@ -36,6 +36,32 @@ def _emails_only() -> ParsedDocument:
     )
 
 
+def test_a_platform_whose_delete_is_not_written_says_so_without_a_browser():
+    """Wellfound (and Loxo, until its delete is mapped) must not read as
+    deleted: the row's Error names what to delete by hand."""
+    adapter = RecipeAdapter(_advert_recipe(), settings=Settings())
+
+    result = asyncio.run(adapter.delete([{"post_url": "https://wellfound.com/recruit/jobs/1"}]))
+    assert result.outcome == Outcome.FAILED and not result.ok
+    assert "not automated" in result.detail and "recruit/jobs/1" in result.detail
+
+    nothing = asyncio.run(adapter.delete([]))
+    assert nothing.outcome == Outcome.FAILED and "no record" in nothing.detail
+
+
+def test_a_dry_run_post_records_nothing_to_delete():
+    from app.platforms.engine import RunReport
+
+    report = RunReport(captures={"post_url": "https://x/1", "role_id": "r"})
+    live = RecipeAdapter(_advert_recipe(), settings=Settings(), dry_run=False)
+    assert live._records(report) == {"post_url": "https://x/1"}
+
+    from app.platforms.noon import NoonAdapter
+
+    noon = NoonAdapter(_advert_recipe(), settings=Settings(), dry_run=False)
+    assert noon._records(report) == {"post_url": "https://x/1", "role": "r"}
+
+
 def test_a_job_board_skips_an_emails_only_document():
     """Wellfound posts the advert half. A document with no advert must skip
     with a message naming the fix - not open the form and type empty strings

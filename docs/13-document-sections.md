@@ -5,7 +5,7 @@
 > that made this file necessary.
 > **Audience** Whoever writes the documents, and whoever changes the parser or
 > adds a platform.
-> **Status** **CURRENT** as of 2026-08-31. Every row is covered by a test in
+> **Status** **CURRENT** as of 2026-10-08 (Recruiter Notes row added). Every row is covered by a test in
 > [tests/test_parser.py](../tests/test_parser.py).
 > **Related** [06-document-pipeline](06-document-pipeline.md) ·
 > [12-sourcing-criteria](12-sourcing-criteria.md) ·
@@ -22,6 +22,7 @@
 | `InMail`, `In-Mail 2`, `LinkedIn InMail` | a step with `channel: inmail` | noon's InMail slot |
 | **`Wellfound`, `Wellfound Ad`, `Ad - Wellfound`, `AngelList`** | **`platform_adverts["wellfound"]`** | **Wellfound, in place of the general advert** |
 | `Subject` (heading, no number) | the shared subject for steps that state none | every sequence platform |
+| `Recruiter Notes`, `Notes`, `Notes for AI`, `Sourcing Notes`, `Research` | `notes` (+ `notes_fields` from `Company:` / `Skills:` lines) | the Claude sourcing draft only; `Skills:` fills `advert.tags` when no column did. Never posted (2026-10-08) |
 | `Client JD`, `Full JD`, `Job Spec` **at the end** | `client_jd` → `job_description` | the sourcing criteria on all three platforms |
 | Anything else | continues whatever came before it | — |
 

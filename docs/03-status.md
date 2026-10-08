@@ -3,10 +3,23 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-09-21 (server-side keepalive and re-login)
+> **Last reviewed** 2026-10-07 (the Notion door closes)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
+
+**Amended 2026-10-07: the Notion door is closed in production.** RecruitOS
+now reads the Roles board itself (`Post Status` = `Ready to Post` plus a DOCX)
+and posts each role per platform through the direct door (`POST /jobs`,
+D-025), the Trust-In careers page included. With this service's poll and
+RecruitOS both reading the same board, a row set to `Ready to Post` would have
+gone out twice, so `NOTION_DOOR_ENABLED=false` on Railway stands the poll, the
+stuck-row and trash sweeps and `/webhook` down together (D-026). The n8n
+workflow "Post ready rows to Railway" is deactivated and its JSON removed from
+this repo. Rows the Notion door posted before (Axl Insurance, FOMO, Arca
+Wealth, Reducto, Thunder Compute) stay up; taking one down is now by hand on
+the platform, or by reopening the door for one `Delete` cycle. Everything
+below describes the service with the door open.
 
 **The full chain runs in production (2026-08-28).** A Notion row set to
 `Ready to Post` is picked up by n8n, POSTed to the Railway-deployed webhook,
@@ -163,15 +176,17 @@ write endpoints have been observed.
 |---|-------|-------|----------|
 | 1 | Trigger — CLI | **BUILT** | [cli.py](../app/cli.py): `run`, `post`, `parse`, `login`, `inspect`, `platforms`, `check` |
 | 1 | Trigger — webhook service | **BUILT** | [api.py](../app/api.py): `create_app()` factory, `POST /webhook` (secret-gated, backgrounds `run_page`), `GET /health`. `Dockerfile`, `railway.json`, `.dockerignore` added 2026-08-28 |
+| 1 | Trigger — direct door (RecruitOS, no Notion row) | **BUILT 2026-09-30, NOT YET CALLED BY RECRUITOS** | [direct.py](../app/direct.py) + `POST /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/delete` in [api.py](../app/api.py) — per-platform states in `direct-jobs.json` on the volume, same pipeline and ledger as the Notion door, per-platform delete (`only_named` in [pipeline.py](../app/pipeline.py)). Stuck platforms self-release on read. [D-025](11-decisions.md#d-025--recruitos-posts-through-a-direct-door-beside-notion); tests in [tests/test_direct.py](../tests/test_direct.py) and [tests/test_api.py](../tests/test_api.py) |
 | 2 | Resolve and fetch document | **BUILT and verified live** | [sharelinks.py](../app/documents/sharelinks.py), [fetcher.py](../app/documents/fetcher.py) — a real `-my.sharepoint.com` share link from the Notion row downloaded as `.docx` anonymously on 2026-08-27 via the `sharepoint-download` strategy |
 | 3 | Read `.docx` into blocks | **BUILT** | [docx_reader.py](../app/documents/docx_reader.py) |
 | 4 | Parse into advert + emails | **BUILT, verified on real documents, multi-channel** | [parser.py](../app/documents/parser.py) — two synthetic and two real fixtures, [tests/test_parser.py](../tests/test_parser.py). Steps carry a `channel` (`email`/`linkedin`/`inmail`/`wellfound`); verified 2026-08-27 against a live SharePoint document. **`Client JD` added 2026-08-31** — the client's spec as the document's last section, on `client_jd`, with `job_description` falling back to the advert ([D-018](11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch)) |
 | 5 | Post to platforms | **BUILT — noon + Juicebox LIVE** | [platforms/](../app/platforms/) — `post noon --live` saved a five-step campaign on 2026-08-27 ([noon.yaml](../platforms/noon.yaml) `enabled: true`). `post juicebox --live` created and saved a three-email sequence the same day via a Python `driver` ([juicebox.py](../app/platforms/juicebox.py), [juicebox.yaml](../platforms/juicebox.yaml) `enabled: true`) — see [platforms/juicebox](platforms/juicebox.md) |
-| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. **Amended 2026-08-31:** the wizard now reads the document's `Client JD` rather than its advert, a `targeting_preamble` states the location/type/skills off the row above it, and `_check_preferences` reads the filters back off the role and warns when they are empty. **Amended 2026-09-22:** the preamble alone never saved the location — `generate_params` extracts but does not persist it, so a live role searched globally and reported Posted. `save_location` now writes `preferences.location` explicitly through `update_role` (the payload the Create New Role modal sends, recorded in `artifacts/live1/20-after-submit.json`), the read-back goes through `refetch_roles` instead of the cached `all_roles`, and a location that will not stick holds the search back (`initialization: true`) rather than starting an unrestricted one. The element shape of a populated `preferences.location` is still unrecorded, so the write wants one live run. See [platforms/noon](platforms/noon.md#the-search-filters-and-the-preamble-that-sets-them-2026-08-31), [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) and [12-sourcing-criteria](12-sourcing-criteria.md) |
+| 5b | noon sourcing criteria | **READ HALF LIVE, WRITE HALF UNRUN** | [noon_sourcing.py](../app/platforms/noon_sourcing.py), [noon.py](../app/platforms/noon.py) — the `Start sourcing` wizard, replayed through noon's own calls: every nice-to-have promoted to a must-have, every generated criterion kept as a non-negotiable, the strictest answer chosen for each clarifying question. Built 2026-08-31 from noon's portal bundle because the saved session had expired; unit-tested against a stand-in session ([tests/test_noon_sourcing.py](../tests/test_noon_sourcing.py)); `generate_params` confirmed against the live API the same day, the six calls that write have not been sent. `NOON_SOURCING` defaults to off. **Amended 2026-08-31:** the wizard now reads the document's `Client JD` rather than its advert, a `targeting_preamble` states the location/type/skills off the row above it, and `_check_preferences` reads the filters back off the role and warns when they are empty. **Amended 2026-09-22:** the preamble alone never saved the location — `generate_params` extracts but does not persist it, so a live role searched globally and reported Posted. `save_location` now writes `preferences.location` explicitly through `update_role` (the payload the Create New Role modal sends, recorded in `artifacts/live1/20-after-submit.json`), the read-back goes through `refetch_roles` instead of the cached `all_roles`, and a location that will not stick holds the search back (`initialization: true`) rather than starting an unrestricted one. The element shape of a populated `preferences.location` is still unrecorded, so the write wants one live run. **Amended 2026-09-28:** fed from the shared profile (5g) — the preamble now carries similar titles, both skill tiers and a company shortlist, the JD handed over is `search_jd` (Client JD, else the composed spec), and the profile's essentials stand in as must-haves when noon extracts none. See [platforms/noon](platforms/noon.md#the-search-filters-and-the-preamble-that-sets-them-2026-08-31), [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom) and [12-sourcing-criteria](12-sourcing-criteria.md) |
 | 5c | Loxo candidate criteria | **BUILT, PROVEN LIVE 2026-08-31** | [loxo_criteria.py](../app/platforms/loxo_criteria.py) parses Loxo's Skill DNA out of a job description (Dealbreaker / Baseline / Nice-to-have / Traits to avoid), promotes every nice-to-have into Dealbreaker, and renders it back with the advert prose intact; [criteria_ai.py](../app/platforms/criteria_ai.py) drafts whichever buckets came back empty from the advert via `claude-opus-5`; [loxo_sourcing.py](../app/platforms/loxo_sourcing.py) writes the result into the job's description (backup first, both Save buttons, read back through `jobDetail` GraphQL). Attaches to the `Loxo Job` column, else an exact hiring-company match, else skips. Ran from Railway on the Axle row 2026-09-02. See [platforms/loxo](platforms/loxo.md#candidate-criteria--the-skill-dna-2026-08-31) |
 | 5d | Juicebox search criteria | **DRY RUN PROVEN, LIVE WRITE UNTESTED** | [juicebox_criteria.py](../app/platforms/juicebox_criteria.py) — reads a search's ranked criteria, drafts a tighter list from its own job description, writes it back through the Criteria dialog. Dry run verified live 2026-08-31 (5 criteria read, 10 drafted); the `--live` write was stopped by a permission gate, not a failure. Backup + `--restore` in place. **Amended 2026-09-03:** runs on the search the sourcing step just built when the row names none, so the live write now happens on the next row. See [platforms/juicebox](platforms/juicebox.md#search-criteria-2026-08-31) |
 | 5e | Loxo Source filters — titles, skills, years, past companies | **TITLES + SKILLS PROVEN LIVE 2026-09-02; YEARS + COMPANIES BUILT, UNRUN** | [loxo_source.py](../app/platforms/loxo_source.py) writes the Source screen (`/jobs/<id>/source`) and saves a team-shared search; titles and skills proven on job 3658508 and again from Railway on the Axle row 2026-09-02. Years of Experience (five bands) and Past Company (exact company match, list from the client's funding stage — [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage)) added 2026-09-02 from Loxo's bundle because the session had died; unit-tested, **one `loxo-source --live --headed` run away**. Drafting in [targeting_ai.py](../app/platforms/targeting_ai.py). The Longlist Agent's own panel (`agentJobLinkIds`) is still unopened; [scripts/probe_loxo_longlist.py](../scripts/probe_loxo_longlist.py) maps it. See [platforms/loxo](platforms/loxo.md#the-source-screen---similar-titles-and-skills-2026-09-02) |
-| 5f | Juicebox sourcing — project, JD search, filters | **BUILT AND PROVEN LIVE 2026-09-02** | [juicebox_sourcing.py](../app/platforms/juicebox_sourcing.py), wired into [juicebox.py](../app/platforms/juicebox.py) after the sequence saves — creates the project (or reuses the row's `Juicebox Project`), pastes the Client JD into the Job description search, adds titles / location / skills / min–max years in the filter editor, Save Changes, Run search, reload and read back. Headed run on "ZZ TEST 3 DELETE ME": 9 titles, 12 skills, New York + Atlanta, 6–12 years, 775 matches. Runner `python -m app.cli juicebox-sourcing`; [tests](../tests/test_juicebox_sourcing.py). The first production run (Axle) died on a reserved LogRecord key — see [platforms/juicebox](platforms/juicebox.md#sourcing--project-jd-search-filters-2026-09-02). **Amended 2026-09-03:** two more filters — **Companies** (~20 same-stage companies from `draft_companies`, exact-name matched against Juicebox's autocomplete) and **Company Funding Stages** (every stage from Seed up to the client's own, on a MUI multi-select); `--search <url>` sets the filters on an existing search. See [companies and funding stages](platforms/juicebox.md#companies-and-funding-stages-2026-09-03) |
+| 5f | Juicebox sourcing — project, JD search, filters | **BUILT AND PROVEN LIVE 2026-09-02** | [juicebox_sourcing.py](../app/platforms/juicebox_sourcing.py), wired into [juicebox.py](../app/platforms/juicebox.py) after the sequence saves — creates the project (or reuses the row's `Juicebox Project`), pastes the Client JD into the Job description search, adds titles / location / skills / min–max years in the filter editor, Save Changes, Run search, reload and read back. Headed run on "ZZ TEST 3 DELETE ME": 9 titles, 12 skills, New York + Atlanta, 6–12 years, 775 matches. Runner `python -m app.cli juicebox-sourcing`; [tests](../tests/test_juicebox_sourcing.py). The first production run (Axle) died on a reserved LogRecord key — see [platforms/juicebox](platforms/juicebox.md#sourcing--project-jd-search-filters-2026-09-02). **Amended 2026-09-03:** two more filters — **Companies** (~20 same-stage companies from `draft_companies`, exact-name matched against Juicebox's autocomplete) and **Company Funding Stages** (every stage from Seed up to the client's own, on a MUI multi-select); `--search <url>` sets the filters on an existing search. **Amended 2026-09-28:** titles / skills / years / companies now come from the shared profile (5g), and the JD pasted is `search_jd` — the Client JD or the composed spec, never the raw advert. See [companies and funding stages](platforms/juicebox.md#companies-and-funding-stages-2026-09-03) |
+| 5g | Shared sourcing profile — one draft for every platform | **BUILT 2026-09-28, NOT YET RUN LIVE** | [sourcing_profile.py](../app/platforms/sourcing_profile.py), `SourcingProfile` + `ParsedDocument.search_jd` in [models.py](../app/models.py) — one Claude draft per document (role reading, similar titles, **must-have and nice-to-have skills including what the role entails unnamed**, years, candidate location, boolean search string), plus the same-stage companies through `draft_companies`; saved as JSON under `artifacts/sourcing/` and reused while the document is unchanged, so noon, Juicebox, Loxo and both CLI sourcing commands configure their searches from one answer ([D-024](11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)). A document with no `Client JD` gets a **composed spec** for the platforms' own JD boxes — the raw advert is no longer pasted as a JD (the 2026-09-28 review found a Juicebox search built from the pitch). noon's preamble now carries the whole brief and falls back to the profile's essentials when its extractor reads nothing. [tests/test_sourcing_profile.py](../tests/test_sourcing_profile.py) |
 | 6 | Write back to Notion | **BUILT** | [client.py](../app/notion/client.py) |
 | — | Orchestration | **BUILT** | [pipeline.py](../app/pipeline.py) |
 | — | Sessions / login capture | **BUILT and verified live** | [store.py](../app/sessions/store.py), `capture_login` — the saved noon profile opened `/portal` logged in, headless, on 2026-08-26 |
@@ -446,22 +461,39 @@ merge ([tests/test_pipeline.py](../tests/test_pipeline.py)).
    are already paid for; n8n can be the Notion-side trigger that calls
    `POST /webhook`, or the poller can run alone.
 
-## Retiring a posting (2026-09-08)
+## Deleting a row (2026-09-23)
 
-The reverse of posting - stop a platform's sourcing for a role and delete it -
-is being built one platform at a time, each proven on a ZZ TEST record before
-the next. Sohaib's ask: a row leaving the Notion table should take its
-sequences and campaigns with it.
+The reverse of posting: remove what a row created on every platform. Built
+2026-09-23 ([D-023](11-decisions.md)); two triggers, one code path
+([pipeline.delete_row / sweep_trashed_rows](../app/pipeline.py)):
 
-| Platform | Stop | Delete | Status |
-|---|---|---|---|
-| noon | `role_autopilot` with `enabled: false` | `delete_role` | **proven live 2026-09-08** - `retire noon` |
-| Loxo | not mapped | not mapped | next |
-| Juicebox | not mapped | not mapped | after Loxo |
-| Wellfound | not mapped | not mapped | after Juicebox |
+- **`Post Status` set to `Delete`** - picked up by the poll and the webhook
+  like `Ready to Post`, claimed as `Deleting`, written back `Deleted` or
+  `Failed` naming the platform that is left. Setting it back to `Delete`
+  finishes the job; what went stays gone and is not visited again.
+- **The row moved to Notion's trash** - Notion sends no event, so a sweep
+  (`TRASH_SWEEP_MINUTES`) asks after every row the ledger holds, and deletes
+  its posts once it has sat in the trash for `DELETE_TRASHED_AFTER_HOURS`
+  (24). Restored inside that, nothing is touched.
 
-The Notion trigger is not decided. Notion sends no event when a row is
-deleted, so the working proposal is a status value (a `Retire` on the post
-status column) that the poller picks up like `Ready to Post`, retires every
-platform the row's URLs name, and writes `Retired` back.
+What to delete comes from the **ledger** ([app/ledger.py](../app/ledger.py),
+`<SESSION_DIR>/posted-rows.json`, on the volume): every post since 2026-09-23
+records each platform's own ids there, because `Post URL` is a single-link
+column and keeps only the first platform's. A row posted before that has only
+that one link to go on.
+
+| Platform | What is deleted | Status |
+|---|---|---|
+| noon | the role: sourcing stopped (`role_autopilot` enabled:false), then `delete_role` | **proven live 2026-09-08** ([noon](platforms/noon.md#retiring-a-role-2026-09-08)); wired to rows 2026-09-23; **proven live through the adapter 2026-09-30** (`delete noon --record role=… --live`, the path rows and RecruitOS take); not yet run from a Notion row |
+| Juicebox | the sequence (`DELETE /api/sequence`), and the sourcing project **only if the run created it** and it still matches by name and creation time (close, then `DELETE /api/projects`) | **sequence delete proven live 2026-09-23** on `ZZ TEST delete me 2026-09-23`; project close+delete **built, not yet proven** ([juicebox](platforms/juicebox.md#deleting-a-row-2026-09-23)). 2026-10-02: `create_project` now opens only the id that appeared in `/api/projects` after the click (it used to open the first "New Project" row, a name 18 client projects share) - **unproven live**: the ZZ TEST post that should have exercised it skipped sourcing because the local Anthropic key has no credit |
+| Loxo | the campaign the run created (recorded from 2026-09-23) | **not mapped** - reports "delete by hand"; needs the live session |
+| Wellfound | the saved draft job | **not mapped** - reports "delete by hand"; the laptop profile is signed out |
+
+A platform that is not mapped fails the delete honestly: the row reads
+`Failed` with what to remove by hand, never `Deleted` while a campaign is
+still there.
+
+**Before it is used on real rows:** add `Delete`, `Deleting` and `Deleted` as
+options on the `Post Status` select, and prove the Juicebox project delete
+and one row end to end on a ZZ TEST row.
 

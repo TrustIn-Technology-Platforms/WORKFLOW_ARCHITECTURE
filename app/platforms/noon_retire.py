@@ -102,11 +102,21 @@ async def delete_role(session: NoonSession, role_id: str) -> bool:
 
 
 async def retire_role(
-    page: "Page", role_id: str, *, delete: bool, dry_run: bool
+    page: "Page",
+    role_id: str,
+    *,
+    delete: bool,
+    dry_run: bool,
+    session: NoonSession | None = None,
 ) -> RetireReport:
-    """Stop the role's sourcing and, when asked, delete it. A dry run only reads."""
+    """Stop the role's sourcing and, when asked, delete it. A dry run only reads.
+
+    `session` lets a caller deleting several roles capture noon's token once
+    rather than reloading the portal and sniffing the token per role - the
+    token rides every call and does not change between them.
+    """
     report = RetireReport(role_id=role_id, dry_run=dry_run)
-    session = await capture_session(page)
+    session = session or await capture_session(page)
     role = await fetch_role(session, role_id)
     report.name = str(role.get("name") or "")
     report.was_active = role.get("active") if isinstance(role.get("active"), bool) else None

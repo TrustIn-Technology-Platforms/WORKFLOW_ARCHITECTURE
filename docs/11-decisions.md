@@ -636,3 +636,197 @@ funding-stage filter, so its Past Company list is unaffected.
 **Revisit when** the Notion row carries the client's stage as a column — D-020
 already names this as its own revisit condition. A column is a stated stage,
 which makes this rule quiet: both filters would be set from fact.
+
+---
+
+## D-023 · A row is deleted from a status or from Notion's trash, out of a ledger the service keeps
+
+**Date** 2026-09-23 · **Status** Accepted · **Where** [app/pipeline.py](../app/pipeline.py) (`delete_row`, `sweep_trashed_rows`), [app/ledger.py](../app/ledger.py), [app/platforms/juicebox_delete.py](../app/platforms/juicebox_delete.py)
+
+**Context.** Sohaib's ask (2026-09-08, again 2026-09-23): a row leaving the
+Notion table should take its sequences and campaigns with it, automatically.
+Three facts shape how. Notion sends no event when a row is deleted, and a
+trashed page can no longer be written to. The row's `Post URL` is a
+single-link `url` column, so a row that posted to three platforms keeps one
+link - Axle's kept only Juicebox's. And a delete cannot be undone, which on
+2026-09-23 was nearly demonstrated: a Juicebox project id captured from the
+page URL turned out to be a real client project's.
+
+**Decision.** Every post records each platform's own ids
+(`PostResult.records`: noon's role uuid, Juicebox's sequence and - only when
+the run made it - project) in a ledger on the volume, one entry per post. Two
+triggers read it: a `Delete` value on `Post Status`, which the poll and
+webhook carry like `Ready to Post` and which writes `Deleted` or `Failed`
+back; and a sweep that finds a recorded row in Notion's trash and deletes its
+posts once it has been there 24 hours. Each platform's delete reads back what
+it removed, treats "already gone" as done, and a platform whose delete is not
+written reports "delete by hand" rather than letting the row read `Deleted`.
+Juicebox projects are deleted only when name, creation time and the absence
+of an agent all match the run that recorded them.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Status only | Not what was asked for: deleting the row is the natural act, and a trashed row silently left its campaigns running |
+| Trash only | A trashed row cannot be written back, so the recruiter never sees the outcome; and there is no retry a person can trigger |
+| Delete as soon as the row is trashed | A row deleted by mistake would take live sequences with it, and restoring the row restores nothing on the platforms |
+| Find each platform's records by name at delete time | Names collide (re-posts, "(1)" copies, `New Project`), and a wrong match deletes another client's work |
+| Keep the ids in a Notion column | Recruiters edit and delete columns; the row is exactly the thing being deleted; and the ids would sit beside the only copy of the evidence |
+
+**Trade-off.** The ledger is state the service now owns: it must live on the
+volume, a laptop push must never replace it (the push leaves it out and the
+import refuses it), and a row posted before 2026-09-23 has only its one link.
+The 24-hour wait means a trashed row's outreach keeps running for a day.
+Loxo and Wellfound are not mapped, so their rows fail the delete until they
+are.
+
+**Revisit when** Notion offers a delete webhook, or when the ledger's rows
+need to be seen by recruiters - at which point it belongs in a database
+rather than a file.
+
+
+## D-024 · One sourcing profile per document, drafted once, saved, read by every platform
+
+**Date** 2026-09-28 · **Status** Accepted · **Where** [app/platforms/sourcing_profile.py](../app/platforms/sourcing_profile.py), [app/models.py](../app/models.py) (`SourcingProfile`, `ParsedDocument.search_jd`), the noon / Juicebox / Loxo adapters and CLI sourcing commands
+
+**Context.** Sohaib's review of the live searches (2026-09-28): a noon role
+set up with little more than its title; a Juicebox search whose JD box held
+the *advert* — the pitch, not the spec — because the document had no `Client
+JD` and the advert was the documented fallback (D-018); and skills lists that
+stopped at the broad strokes, an AI-engineer search with no Python on it,
+because the prompt forbade naming anything the text did not. Underneath all
+three: each adapter drafted its own titles/skills/companies from
+`draft_targeting` + `draft_companies`, per platform, per run — three Claude
+answers to one question, none kept, none comparable, and nothing a recruiter
+could open to see what the searches had been told.
+
+**Decision.** `ensure_sourcing` builds **one `SourcingProfile` per document**
+— role reading, similar titles, *must-have and nice-to-have* skills (the
+prompt now names what a role of this kind entails even when the JD does not),
+years, candidate location, stage + same-stage companies (still through
+`draft_companies`, so D-020/D-022 hold), and a boolean search string — saves
+it as JSON under `artifacts/sourcing/`, and reuses it while the document is
+unchanged (fingerprint over JD + prompt version + list sizes + the row's
+fallback location, since the region shapes the company list). A profile with
+holes — no companies back from a rate-limited call, or no composed JD where
+one was needed — serves its own run but is never cached, so the next run
+retries instead of freezing the gap. All three
+adapters and both CLI sourcing commands read it. When the document has no
+`Client JD`, the profile also carries a **composed JD** — the role restated
+as a spec — and `ParsedDocument.search_jd` hands *that* to a platform's own
+JD box; the raw advert is pasted only when nothing was ever drafted. noon
+additionally gets the whole brief in its preamble (similar titles, both skill
+tiers, a company shortlist) and falls back to the profile's essentials as
+must-haves when its own extractor reads nothing.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep per-adapter drafting, just improve the prompt | Fixes depth, not disagreement: three calls still give three answers for one job, at triple the cost, and still leave no record |
+| Sharpen the "only what the JD states" rule instead of relaxing it | The complaint was the opposite: an unnamed essential skill silently excludes the right candidates, and a recruiter can delete a chip in a second but cannot see one that was never added |
+| Rewrite the Client JD too, for a cleaner paste | D-018's whole value is the client's words verbatim; a pasted JD stays untouched, only the *absence* of one is composed around |
+| Store the profile on the Notion row | Recruiters edit and rename columns; the JSON survives redeploys on the volume, and the row still gets the summary and the boolean string in its detail |
+| Draft in the orchestrator before platforms run | The first adapter builds it and the rest reuse `document.sourcing` anyway; a pipeline pre-step would draft even for rows whose only platform posts adverts |
+
+**Trade-off.** The profile leans on inference by design: it may name a skill
+the client would not require, and the row's detail says which stage the
+companies rest on, but a wrong entailed skill only shows up when a recruiter
+prunes the chips. The saved JSON is state under `artifacts/` that a fresh
+container starts without (first run redrafts). And noon's preamble now feeds
+its extractor a company shortlist that can become starred non-negotiables —
+deliberately tight, one click each to remove in the Control Panel.
+
+**Revisit when** a platform grows a field the shared shape cannot carry, when
+the entailed-skills policy produces prunes on most rows (tighten the prompt),
+or when profiles need recruiter editing before the run — at which point the
+profile belongs on a surface they own, not in a JSON file.
+
+
+## D-025 · RecruitOS posts through a direct door beside Notion
+
+**Date** 2026-09-30 · **Status** Accepted · **Where** [app/direct.py](../app/direct.py), `POST /jobs` / `GET /jobs/{id}` / `POST /jobs/{id}/delete` in [app/api.py](../app/api.py), `only_named` in [app/pipeline.py](../app/pipeline.py)
+
+**Context.** RecruitOS (the team's ATS) generates the posting document and
+already knows every advert field, yet to post a role it created a Notion row
+whose only job was to carry that data here and one flattened status back.
+"Wellfound failed" hid "the other three posted"; adding a platform later meant
+a second row; and taking a role off *one* platform was impossible — the
+Notion door's Delete means the whole row. RecruitOS's own migration 109 had
+rejected a direct call because the agent's claim-by-status, sweeps and ledger
+were all keyed by Notion page ids. Sohaib asked for the Notion table to stop
+being the record (2026-09-30).
+
+**Decision.** A second trigger — jobs over HTTP, secret-gated like the
+webhook — runs beside the Notion door, not instead of it. RecruitOS sends its
+posting row's UUID as `job_id`, the document URL, the platforms and the
+advert fields; per-platform states live in `direct-jobs.json` on the volume;
+the caller polls. Both doors run the same pipeline under the same row lock
+and record in the same ledger, so a job posted through either can be deleted.
+Deletes are per platform (`only_named`): "take it off noon" leaves Juicebox
+up. The ledger key (the UUID, dashes stripped) reads like a page id Notion
+answers 404 for, which the trash sweep treats as "leave it alone" by design.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep Notion as the only door (migration 109's choice) | The objections it rested on are answered by the job store; the table itself was the remaining cost — a third system carrying data both ends already hold, with one status for four platforms |
+| Replace the Notion door outright | It is the proven production path, and the old workflow (a row + n8n) must keep working while the direct one earns trust; removal is a later cleanup, not a precondition |
+| A callback from the agent to RecruitOS instead of polling | The website already polls on the cadence it wants; a callback adds a second secret, a public route on the website, and a retry story for nothing the poll does not already give |
+| One Notion row per platform to get per-platform state | Multiplies the thing being removed; delete stays row-shaped and the table stays the record |
+
+**Trade-off.** Two doors means two trigger protocols to keep true, and the
+direct door's state is one more file that must live on the volume. A job the
+store forgets (a volume wipe) can no longer be deleted from the website —
+the ledger fallback and a person remain. Per-platform delete had to change
+`delete_records`' contract (`only_named`), a shared function the Notion door
+also uses; its default keeps the old behaviour.
+
+**Revisit when** the direct door has carried every posting for a month —
+then the Notion door, the n8n workflow and their settings are the dead code
+to remove — or when a second caller besides RecruitOS appears, at which point
+`job_id` needs a namespace.
+
+## D-026 · The Notion door closes; RecruitOS drives posting
+
+**Context.** Since D-025 two doors took work: Notion rows (the poll, n8n's
+webhook call, the sweeps) and RecruitOS over `POST /jobs`. On 2026-10-07 the
+team decided that Notion stays where roles are written and RecruitOS is the
+one place roles are posted, checked and taken down, per platform, with the
+Trust-In careers page as a fifth platform. RecruitOS now reads the same Roles
+board (`Post Status = Ready to Post` with a DOCX) and creates a role per row.
+That is the problem: a row set to `Ready to Post` would be taken by this
+service's poll and shown in RecruitOS, and a recruiter pressing Post there
+would post the same role a second time. Taking the board away from this
+service also ends the fight over `Post Status`, which the corporate site's
+own Notion sync wrote too.
+
+**Decision.** One setting, `NOTION_DOOR_ENABLED` (default true), stands the
+`Ready to Post` poll, the stuck-row sweep, the trash sweep and `/webhook`
+down together; `/webhook` answers 409 after the secret check, so a
+reactivated n8n workflow cannot post. `/health` reports `notion_door`, and
+RecruitOS warns while it reads "open". Production runs with it false. The
+direct door is untouched and needs no Notion configuration. The n8n workflow
+"Post ready rows to Railway" is deactivated and its JSON removed from the
+repo; the Notion code stays.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Set `POLL_MINUTES=0` and `DELETE_TRASHED_ROWS=false` and stop there | Two variables for one intent; the stuck-row sweep kept writing `Failed` onto rows nobody here owns any more; and `/webhook` stayed open, one reactivated n8n workflow away from double posting |
+| Blank `NOTION_TOKEN` / `NOTION_DATABASE_ID` | Works, but reads as a misconfiguration in `/health` (`notion_configured: false`) and in every log line, and turns the one-off `Delete` of a legacy row into a redeploy |
+| Delete the Notion code | It is the proven fallback and the only way to take down the rows it posted; D-025 already names its removal as a later cleanup, once RecruitOS has carried a month of postings |
+
+**Trade-off.** Rows this door posted before (Axl Insurance, FOMO, Arca Wealth,
+Reducto, Thunder Compute) can no longer be deleted from Notion: a take-down
+is by hand on the platform, or the door is reopened for one `Delete` cycle
+while no row reads `Ready to Post`. The board's write-back columns
+(`Post Status`, `Post URL`, `Posted At`, `Error`) go stale from here on;
+RecruitOS is where status lives.
+
+**Revisit when** RecruitOS has carried every posting for a month — then the
+Notion door, its settings and `app/notion` are the dead code D-025 spoke of —
+or when a second board or caller appears.

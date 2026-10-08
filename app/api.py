@@ -37,6 +37,29 @@ class WebhookPayload(BaseModel):
     page_id: str
 
 
+class JobPayload(BaseModel):
+    """One direct job: a role's document, platforms and advert fields.
+
+    `job_id` is the caller's own id (RecruitOS sends its posting row's UUID);
+    repeating it with more platforms queues just the new ones. `fields` uses
+    the same column names the Notion door reads (Location, Salary, Employment
+    Type, Skills, Loxo Job, Juicebox Search, Juicebox Project).
+    """
+
+    job_id: str
+    document_url: str
+    platforms: list[str]
+    title: str = ""
+    fields: dict[str, str] = {}
+    force: bool = False
+    dry_run: bool | None = None
+
+
+class JobDeletePayload(BaseModel):
+    # None = delete everything this job may have put up.
+    platforms: list[str] | None = None
+
+
 # One row at a time on this box. Two browser contexts on one account are how a
 # platform logs both out, and the webhook and the poller below must not race
 # for the same row: whichever holds the lock re-reads the row and takes it only
@@ -55,16 +78,25 @@ def _row_lock():
 
 
 async def _run_if_ready(page_id: str, dry_run: bool | None, *, source: str) -> None:
-    """Run one row, under the lock, only while it still reads Ready to Post."""
+    """Run one row, under the lock, only while it still reads Ready to Post -
+    or Delete, which runs the row's delete instead."""
     from app.notion.client import NotionClient
-    from app.pipeline import process_row
+    from app.pipeline import delete_row, process_row
 
     settings = get_settings()
     settings.ensure_dirs()
     async with _row_lock():
         async with NotionClient(settings) as client:
             row = await client.get_row(page_id)
-            if (row.status or "").strip() != settings.status_ready:
+            status = (row.status or "").strip()
+            if status == settings.status_delete:
+                deleted = await delete_row(row, client, settings, dry_run)
+                log.info(
+                    f"{source} row delete done",
+                    extra={"page_id": page_id, "ok": deleted.ok, "detail": deleted.detail[:500]},
+                )
+                return
+            if status != settings.status_ready:
                 log.info(
                     "row skipped - not ready",
                     extra={"page_id": page_id, "status": row.status, "source": source},
@@ -95,6 +127,48 @@ async def _process(page_id: str, dry_run: bool | None) -> None:
         log.exception("webhook row crashed", extra={"page_id": page_id})
 
 
+async def _direct_post(job_id: str) -> None:
+    """Background worker for POST /jobs - the direct door's `_process`."""
+    from app import direct
+
+    try:
+        await direct.run_job(job_id, get_settings(), _row_lock())
+    except Exception:  # noqa: BLE001 - a background task must not crash the worker
+        log.exception("direct job task crashed", extra={"job_id": job_id})
+
+
+async def _direct_delete(job_id: str) -> None:
+    """Background worker for POST /jobs/{id}/delete."""
+    from app import direct
+
+    try:
+        await direct.run_delete(job_id, get_settings(), _row_lock())
+    except Exception:  # noqa: BLE001 - a background task must not crash the worker
+        log.exception("direct delete task crashed", extra={"job_id": job_id})
+
+
+# Logged once per process, not once per background task: three tasks stand
+# down on the same switch, and three identical lines would read as three faults.
+_DOOR_LOGGED = False
+
+
+def _notion_door_closed(settings) -> bool:
+    """True when NOTION_DOOR_ENABLED=false.
+
+    The poll, both sweeps and /webhook all stand down on it, and roles reach
+    the platforms through POST /jobs only. RecruitOS reads the same board
+    since 2026-10-07, so an open door beside it posts a Ready to Post row
+    twice (D-026).
+    """
+    global _DOOR_LOGGED
+    if settings.notion_door_enabled:
+        return False
+    if not _DOOR_LOGGED:
+        _DOOR_LOGGED = True
+        log.info("Notion door closed: roles are posted from RecruitOS (POST /jobs)")
+    return True
+
+
 async def _poll_ready_rows(settings) -> None:
     """Pick up `Ready to Post` rows without waiting for n8n.
 
@@ -109,6 +183,8 @@ async def _poll_ready_rows(settings) -> None:
 
     from app.notion.client import NotionClient
 
+    if _notion_door_closed(settings):
+        return
     if not settings.notion_configured or settings.poll_minutes <= 0:
         return
     if settings.dry_run:
@@ -122,6 +198,7 @@ async def _poll_ready_rows(settings) -> None:
         try:
             async with NotionClient(settings) as client:
                 rows = await client.query_ready_rows()
+                rows += await client.query_rows_by_status(settings.status_delete)
             for row in rows:
                 await _run_if_ready(row.page_id, None, source="poll")
         except Exception:  # noqa: BLE001 - the poll must never take the service down
@@ -217,7 +294,7 @@ async def _sweep_stuck_rows(settings) -> None:
     from app.notion.client import NotionClient
     from app.pipeline import recover_stuck_rows
 
-    if not settings.notion_configured:
+    if _notion_door_closed(settings) or not settings.notion_configured:
         return
     while True:
         try:
@@ -228,6 +305,50 @@ async def _sweep_stuck_rows(settings) -> None:
         except Exception:  # noqa: BLE001 - the sweep must never take the service down
             log.exception("stuck-row sweep failed")
         await asyncio.sleep(max(60, settings.stuck_sweep_minutes * 60))
+
+
+# The last trash sweep, for /health: which rows it found deleted in Notion and
+# what became of their posts.
+_TRASH_STATE: dict = {"last_run": None, "deleted": [], "error": None}
+
+
+async def _sweep_trashed_rows(settings) -> None:
+    """Delete the posts of rows deleted in Notion, on a timer.
+
+    Under the row lock, because deleting drives the same browsers and
+    accounts a posting row does. See pipeline.sweep_trashed_rows.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    from app.notion.client import NotionClient
+    from app.pipeline import sweep_trashed_rows
+
+    if _notion_door_closed(settings):
+        return
+    if not settings.notion_configured or not settings.delete_trashed_rows:
+        return
+    if settings.dry_run:
+        log.warning("trash sweep disabled: DRY_RUN would record nothing")
+        return
+    await asyncio.sleep(90)  # after the first poll, not racing it
+    while True:
+        try:
+            async with _row_lock():
+                async with NotionClient(settings) as client:
+                    reports = await sweep_trashed_rows(client, settings)
+            _TRASH_STATE.update(
+                last_run=datetime.now(timezone.utc).isoformat(),
+                error=None,
+                deleted=[
+                    {"page_id": r.page_id, "title": r.title, "ok": r.ok, "detail": r.detail[:400]}
+                    for r in reports
+                ] or _TRASH_STATE["deleted"],
+            )
+        except Exception as exc:  # noqa: BLE001 - the sweep must never take the service down
+            _TRASH_STATE["error"] = f"{exc.__class__.__name__}: {str(exc)[:200]}"
+            log.exception("trash sweep failed")
+        await asyncio.sleep(max(60, settings.trash_sweep_minutes * 60))
 
 
 def create_app() -> FastAPI:
@@ -243,6 +364,7 @@ def create_app() -> FastAPI:
             asyncio.create_task(_sweep_stuck_rows(settings)),
             asyncio.create_task(_poll_ready_rows(settings)),
             asyncio.create_task(_keepalive_sessions(settings)),
+            asyncio.create_task(_sweep_trashed_rows(settings)),
         ]
         try:
             yield
@@ -313,10 +435,32 @@ def create_app() -> FastAPI:
                 ).exists(),
             }
 
+        from app.direct import JobStore
+
+        # The direct door: jobs over HTTP (POST /jobs) beside the Notion rows,
+        # per-platform states in a store on the volume. RecruitOS reads this
+        # block to know the door exists before using it. An unreadable store is
+        # reported, never a 500 - health must always answer.
+        try:
+            direct_block: dict = {
+                "jobs_file": str(settings.direct_jobs_file),
+                "platform_states": JobStore(settings.direct_jobs_file).counts(),
+            }
+        except Exception as exc:  # noqa: BLE001 - health must always answer
+            direct_block = {"jobs_file": str(settings.direct_jobs_file), "error": str(exc)[:200]}
+
         return {
             "status": "ok",
-            "version": "1.6",  # bumped with the server-side keepalive + re-login
+            "version": "1.9",  # bumped with the Notion door switch (1.8: the direct door)
             "notion_configured": settings.notion_configured,
+            # The Notion door. Open: the poll, the sweeps and /webhook take rows
+            # from the board on their own. Closed (NOTION_DOOR_ENABLED=false):
+            # roles arrive through POST /jobs only. RecruitOS reads this to warn
+            # while both doors are open, since a Ready to Post row would then go
+            # out twice.
+            "notion_door": "open" if settings.notion_door_enabled else "closed",
+            "poll_minutes": settings.poll_minutes,
+            "direct": direct_block,
             # Which platforms can sign themselves in: stored credentials AND
             # login steps in the recipe. Booleans only - never the values.
             "credentials": settings.credentials_configured(sorted(recipes)),
@@ -325,6 +469,16 @@ def create_app() -> FastAPI:
                 "every_hours": settings.session_keepalive_hours,
                 "relogin": settings.session_relogin,
                 **_KEEPALIVE_STATE,
+            },
+            # Deleting rows: where the ledger of posted rows lives (it must be
+            # on the volume, or every deploy forgets what to delete) and what
+            # the last trash sweep found.
+            "deletes": {
+                "ledger": str(settings.ledger_file),
+                "ledger_exists": settings.ledger_file.is_file(),
+                "trashed_rows": settings.delete_trashed_rows,
+                "trash_wait_hours": settings.delete_trashed_after_hours,
+                **_TRASH_STATE,
             },
             "webhook_secret_set": bool(settings.webhook_secret),
             # False here silently costs Wellfound its Skills tags and the
@@ -362,12 +516,109 @@ def create_app() -> FastAPI:
             x_webhook_secret, settings.webhook_secret
         ):
             raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+        # After the secret check, so an unauthenticated caller learns nothing
+        # about the configuration. 409: the request is well formed, the service
+        # is up, and the Notion path is deliberately not in service.
+        if not settings.notion_door_enabled:
+            raise HTTPException(
+                409,
+                "The Notion door is closed: roles are posted from RecruitOS (POST /jobs). "
+                "Set NOTION_DOOR_ENABLED=true to take Notion rows here again.",
+            )
         if not payload.page_id.strip():
             raise HTTPException(422, "page_id is required.")
 
         background.add_task(_process, payload.page_id.strip(), None)
         log.info("webhook accepted", extra={"page_id": payload.page_id.strip()})
         return {"status": "accepted", "page_id": payload.page_id.strip()}
+
+    def _require_secret(x_webhook_secret: str | None) -> None:
+        """The webhook's gate, shared by the direct door's routes."""
+        if not settings.webhook_secret:
+            raise HTTPException(503, "WEBHOOK_SECRET is not configured on the server.")
+        # Constant-time compare so a wrong secret can't be timed byte by byte.
+        if not x_webhook_secret or not hmac.compare_digest(
+            x_webhook_secret, settings.webhook_secret
+        ):
+            raise HTTPException(401, "Bad or missing X-Webhook-Secret.")
+
+    @app.post("/jobs", status_code=202)
+    async def post_job(
+        payload: JobPayload,
+        background: BackgroundTasks,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """The direct door: take a job without a Notion row (see app/direct.py).
+
+        Repeating a job_id with more platforms queues just the new ones, so
+        RecruitOS can add Loxo to a role already up on noon. A platform already
+        posted is skipped unless `force` - posting twice makes a duplicate on
+        every platform, so it must be said on purpose.
+        """
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        job_id = payload.job_id.strip()
+        if not job_id:
+            raise HTTPException(422, "job_id is required.")
+        if not payload.document_url.strip():
+            raise HTTPException(422, "document_url is required.")
+        platforms = [p for p in payload.platforms if p.strip()]
+        if not platforms:
+            raise HTTPException(422, "platforms must name at least one platform.")
+
+        settings.ensure_dirs()
+        queued, skipped = JobStore(settings.direct_jobs_file).queue(
+            job_id,
+            title=payload.title.strip(),
+            document_url=payload.document_url.strip(),
+            fields=payload.fields,
+            platforms=platforms,
+            force=payload.force,
+            dry_run=payload.dry_run,
+        )
+        if queued:
+            background.add_task(_direct_post, job_id)
+        return {"status": "accepted", "job_id": job_id, "queued": queued, "skipped": skipped}
+
+    @app.get("/jobs/{job_id}")
+    async def get_job(
+        job_id: str,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """A job's per-platform states. Secret-gated: the summary carries
+        recruiter-facing error text, not something for the open internet."""
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        store = JobStore(settings.direct_jobs_file)
+        # The direct door's stuck sweep: a platform a dead process left mid-run
+        # is released on read, so polling self-heals the store - no extra timer.
+        store.release_stuck(settings.stuck_posting_minutes)
+        summary = store.summary(job_id)
+        if summary is None:
+            raise HTTPException(404, "No job with that id has been taken here.")
+        return summary
+
+    @app.post("/jobs/{job_id}/delete", status_code=202)
+    async def delete_job(
+        job_id: str,
+        payload: JobDeletePayload,
+        background: BackgroundTasks,
+        x_webhook_secret: str | None = Header(default=None),
+    ) -> dict:
+        """Take a job down from the named platforms - or all of them when the
+        payload names none. What exactly to remove comes from the ledger."""
+        from app.direct import JobStore
+
+        _require_secret(x_webhook_secret)
+        store = JobStore(settings.direct_jobs_file)
+        if store.get(job_id) is None:
+            raise HTTPException(404, "No job with that id has been taken here.")
+        queued, skipped = store.queue_delete(job_id, payload.platforms)
+        if queued:
+            background.add_task(_direct_delete, job_id)
+        return {"status": "accepted", "job_id": job_id, "queued": queued, "skipped": skipped}
 
     @app.post("/admin/import-sessions")
     async def import_sessions(
@@ -410,6 +661,11 @@ def create_app() -> FastAPI:
                 dest.mkdir(parents=True, exist_ok=True)
                 for item in src.iterdir():
                     target = dest / item.name
+                    # The ledger beside the sessions is the server's own record
+                    # of what it posted; an upload never replaces it.
+                    if name == "sessions" and target.resolve() == settings.ledger_file.resolve():
+                        log.warning("upload carried a ledger - ignored", extra={"file": item.name})
+                        continue
                     if item.is_dir():
                         if target.exists():
                             shutil.rmtree(target)

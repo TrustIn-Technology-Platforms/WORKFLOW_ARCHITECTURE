@@ -132,20 +132,30 @@ Five years of experience with Terraform expected.
 AXLE_JD_STATED = AXLE_JD_NO_STAGE + "\nWe are a Series A insurtech.\n"
 
 
-def _sourcing_run(monkeypatch, jd: str, *, dry_run: bool) -> tuple[list[str], dict]:
+def _sourcing_run(
+    monkeypatch, tmp_path, jd: str, *, dry_run: bool
+) -> tuple[list[str], dict]:
     """Drive the real `_set_up_sourcing` with the drafters and the page writer
-    stubbed, and return the row's warnings plus the kwargs the writer got."""
+    stubbed, and return the row's warnings plus the kwargs the writer got.
+
+    The stubs sit where the Claude calls sit now: the shared profile's own
+    draft (`sourcing_profile.draft_profile`) and the company draft it still
+    routes through `targeting_ai`. Everything between them - `build_profile`,
+    the stated-stage detection, `stage_for_filter` - runs for real.
+    """
     import asyncio
 
-    from app.config import get_settings
+    from app.config import Settings
     from app.platforms import load_recipes, resolve
     from app.platforms.engine import RunReport
     from app.platforms.juicebox_sourcing import SourcingReport
-    from app.platforms.targeting_ai import CompanyTargeting, SearchTargeting
+    from app.platforms.sourcing_profile import DraftProfile
+    from app.platforms.targeting_ai import CompanyTargeting
 
-    async def fake_targeting(*args, **kwargs):
-        return SearchTargeting(similar_titles=["Platform Engineer"], skills=["AWS"],
-                               min_years=5, candidate_location="New York")
+    async def fake_profile(*args, **kwargs):
+        return DraftProfile(similar_titles=["Platform Engineer"],
+                            must_have_skills=["AWS"],
+                            min_years=5, candidate_location="New York")
 
     async def fake_companies(*args, **kwargs):
         # What the 2026-09-22 run got back: a stage nobody wrote down.
@@ -159,11 +169,11 @@ def _sourcing_run(monkeypatch, jd: str, *, dry_run: bool) -> tuple[list[str], di
         return SourcingReport(search_url="https://app.juicebox.ai/project/p/search?search_id=S1",
                               saved=True)
 
-    monkeypatch.setattr("app.platforms.targeting_ai.draft_targeting", fake_targeting)
+    monkeypatch.setattr("app.platforms.sourcing_profile.draft_profile", fake_profile)
     monkeypatch.setattr("app.platforms.targeting_ai.draft_companies", fake_companies)
     monkeypatch.setattr("app.platforms.juicebox_sourcing.set_up_sourcing", fake_set_up)
 
-    settings = get_settings()
+    settings = Settings(artifact_dir=str(tmp_path))
     adapter = JuiceboxAdapter(
         resolve("juicebox", load_recipes(settings)), settings=settings, dry_run=dry_run
     )
@@ -178,12 +188,12 @@ def _sourcing_run(monkeypatch, jd: str, *, dry_run: bool) -> tuple[list[str], di
     return report.warnings, written
 
 
-def test_an_inferred_stage_never_reaches_the_funding_stage_filter(monkeypatch):
+def test_an_inferred_stage_never_reaches_the_funding_stage_filter(monkeypatch, tmp_path):
     """The 2026-09-22 Axle run: the document named no round, Claude inferred
     Series A, and the saved search came back with two Company Funding Stages
     chosen off that guess - under a row that said OK. The guess may still draw
     the Companies list (D-020); it may not set the select (D-022)."""
-    warnings, written = _sourcing_run(monkeypatch, AXLE_JD_NO_STAGE, dry_run=False)
+    warnings, written = _sourcing_run(monkeypatch, tmp_path, AXLE_JD_NO_STAGE, dry_run=False)
 
     assert written["stage"] is None
     # The company list is still built from the inference - that half is decided.
@@ -198,24 +208,24 @@ def test_an_inferred_stage_never_reaches_the_funding_stage_filter(monkeypatch):
     assert "Client JD" in note
 
 
-def test_a_stated_stage_does_set_the_funding_stage_filter(monkeypatch):
+def test_a_stated_stage_does_set_the_funding_stage_filter(monkeypatch, tmp_path):
     """The other half. A stage the client wrote is not a guess, so it sets the
     select - and is not reported on the row at all."""
-    warnings, written = _sourcing_run(monkeypatch, AXLE_JD_STATED, dry_run=False)
+    warnings, written = _sourcing_run(monkeypatch, tmp_path, AXLE_JD_STATED, dry_run=False)
 
     assert written["stage"] == "Series A"
     assert not [w for w in warnings if "funding" in w]
 
 
-def test_the_dry_run_says_which_stages_it_would_set(monkeypatch):
+def test_the_dry_run_says_which_stages_it_would_set(monkeypatch, tmp_path):
     """The dry run is what a supervised session reads before the live one, so
     it has to name the same two outcomes."""
-    inferred, _ = _sourcing_run(monkeypatch, AXLE_JD_NO_STAGE, dry_run=True)
+    inferred, _ = _sourcing_run(monkeypatch, tmp_path, AXLE_JD_NO_STAGE, dry_run=True)
     line = next(w for w in inferred if w.startswith("dry run"))
     assert "stages left as Juicebox set them" in line
     # The companies are still drafted at the inferred stage.
     assert "2 company(ies) at Series A" in line
 
-    stated, _ = _sourcing_run(monkeypatch, AXLE_JD_STATED, dry_run=True)
+    stated, _ = _sourcing_run(monkeypatch, tmp_path, AXLE_JD_STATED, dry_run=True)
     line = next(w for w in stated if w.startswith("dry run"))
     assert "stages seed/series_a" in line

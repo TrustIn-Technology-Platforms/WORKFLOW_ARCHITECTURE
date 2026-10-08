@@ -189,6 +189,91 @@ def test_a_row_is_run_only_while_it_still_reads_ready(monkeypatch):
     assert processed == ["ready"]
 
 
+def test_a_row_set_to_delete_runs_the_delete_not_the_post(monkeypatch):
+    """The webhook and the poll carry Delete rows the same way as Ready ones;
+    a row already claimed as Deleting is left alone like one on Posting."""
+    import asyncio
+
+    from app import api
+    from app.models import NotionRow
+
+    rows = {
+        "del": NotionRow(page_id="del", title="D", document_url="x", status="Delete"),
+        "busy": NotionRow(page_id="busy", title="B", document_url="x", status="Deleting"),
+    }
+    deleted: list[str] = []
+
+    class FakeClient:
+        def __init__(self, settings):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def get_row(self, page_id):
+            return rows[page_id]
+
+    async def fake_delete_row(row, client, settings, dry_run):
+        deleted.append(row.page_id)
+
+        class Report:
+            ok = True
+            detail = ""
+
+        return Report()
+
+    async def no_post(*a, **k):
+        raise AssertionError("a Delete row must not be posted")
+
+    monkeypatch.setattr("app.notion.client.NotionClient", FakeClient)
+    monkeypatch.setattr("app.pipeline.delete_row", fake_delete_row)
+    monkeypatch.setattr("app.pipeline.process_row", no_post)
+    monkeypatch.setattr("app.api.get_settings", lambda: __import__("app.config").config.Settings(
+        notion_token="t", notion_database_id="d"))
+
+    asyncio.run(api._run_if_ready("del", None, source="test"))
+    asyncio.run(api._run_if_ready("busy", None, source="test"))
+    assert deleted == ["del"]
+
+
+def test_a_session_upload_never_replaces_the_ledger(tmp_path, monkeypatch):
+    """The ledger sits beside the sessions on the volume and is the server's
+    own; a tarball carrying a laptop's copy must not overwrite it."""
+    import io
+    import tarfile
+
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "posted-rows.json").write_text("server", encoding="utf-8")
+    settings = Settings(session_dir=str(sessions), browser_profile_dir=str(tmp_path / "profiles"),
+                        webhook_secret="s")
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, text in (("sessions/posted-rows.json", b"laptop"),
+                           ("sessions/noon.storage_state.json", b"{}")):
+            info = tarfile.TarInfo(name)
+            info.size = len(text)
+            tar.addfile(info, io.BytesIO(text))
+
+    route = next(r.path for r in api.create_app().routes if "import" in getattr(r, "path", ""))
+    response = TestClient(api.create_app()).post(
+        route, content=buf.getvalue(), headers={"X-Webhook-Secret": "s"}
+    )
+    assert response.status_code == 200, response.text
+    assert (sessions / "posted-rows.json").read_text(encoding="utf-8") == "server"
+    assert (sessions / "noon.storage_state.json").exists()
+
+
 def test_the_poller_stands_down_in_a_dry_run(monkeypatch):
     """A dry run writes no row back, so every poll would find the same rows and
     drive the real platforms again, for ever (review, 2026-09-03)."""
@@ -280,6 +365,133 @@ def test_keepalive_timer_stands_down_when_switched_off():
     asyncio.run(asyncio.wait_for(api._keepalive_sessions(settings), timeout=5))
 
 
+# -- the direct door: jobs over HTTP beside the Notion rows ----------------------
+
+
+def _direct_app(tmp_path, monkeypatch):
+    """A client against a temp store, with the background workers stubbed so a
+    202 never starts a real fetch or browser in a test."""
+    from app import api
+    from app.config import get_settings
+
+    monkeypatch.setenv("WEBHOOK_SECRET", "s3cret")
+    monkeypatch.setenv("SESSION_DIR", str(tmp_path / "sessions"))
+    get_settings.cache_clear()
+    started: list[tuple[str, str]] = []
+
+    async def fake_post(job_id):
+        started.append(("post", job_id))
+
+    async def fake_delete(job_id):
+        started.append(("delete", job_id))
+
+    monkeypatch.setattr(api, "_direct_post", fake_post)
+    monkeypatch.setattr(api, "_direct_delete", fake_delete)
+    return TestClient(api.create_app()), started
+
+
+def test_direct_routes_are_secret_gated(tmp_path, monkeypatch):
+    """A job summary carries recruiter-facing error text and a POST posts to
+    real platforms, so every door takes the webhook's secret."""
+    from app.config import get_settings
+
+    client, _ = _direct_app(tmp_path, monkeypatch)
+    body = {"job_id": "j", "document_url": "http://x/d.docx", "platforms": ["noon"]}
+    try:
+        assert client.post("/jobs", json=body).status_code == 401
+        assert client.get("/jobs/j").status_code == 401
+        assert client.post("/jobs/j/delete", json={}).status_code == 401
+        assert client.post(
+            "/jobs", json=body, headers={"X-Webhook-Secret": "wrong"}
+        ).status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_direct_job_is_taken_queued_and_readable(tmp_path, monkeypatch):
+    from app.config import get_settings
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        taken = client.post("/jobs", json={
+            "job_id": "row-1", "document_url": "http://x/d.docx",
+            "platforms": ["noon", "Juicebox"], "title": "Axle - Eng",
+            "fields": {"Location": "London"},
+        }, headers=headers)
+        assert taken.status_code == 202, taken.text
+        assert taken.json()["queued"] == ["noon", "juicebox"]
+        assert started == [("post", "row-1")]
+
+        summary = client.get("/jobs/row-1", headers=headers).json()
+        assert summary["title"] == "Axle - Eng"
+        assert summary["platforms"]["noon"]["status"] == "queued"
+
+        assert client.get("/jobs/unknown", headers=headers).status_code == 404
+        health = client.get("/health").json()
+        assert health["direct"]["platform_states"] == {"queued": 2}
+    finally:
+        get_settings.cache_clear()
+
+
+def test_adding_a_platform_later_queues_only_the_new_one(tmp_path, monkeypatch):
+    """The user's headline flow: a role up on noon gets Loxo added later - the
+    re-ask must not re-post noon without being told to."""
+    from app.config import get_settings
+    from app.direct import JobStore
+    from app.models import Outcome, PostResult
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    body = {"job_id": "row-1", "document_url": "http://x/d.docx", "platforms": ["noon"]}
+    try:
+        client.post("/jobs", json=body, headers=headers)
+        store = JobStore(get_settings().direct_jobs_file)
+        store.claim("row-1")
+        store.record_results("row-1", [PostResult(
+            platform="noon", outcome=Outcome.POSTED, post_url="https://noon/r1",
+        )], [])
+
+        again = client.post("/jobs", json={**body, "platforms": ["noon", "loxo"]},
+                            headers=headers).json()
+        assert again["queued"] == ["loxo"]
+        assert "force" in again["skipped"]["noon"]
+        assert started == [("post", "row-1"), ("post", "row-1")]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_direct_delete_names_platforms_or_everything(tmp_path, monkeypatch):
+    from app.config import get_settings
+    from app.direct import JobStore
+    from app.models import Outcome, PostResult
+
+    client, started = _direct_app(tmp_path, monkeypatch)
+    headers = {"X-Webhook-Secret": "s3cret"}
+    try:
+        client.post("/jobs", json={
+            "job_id": "row-1", "document_url": "http://x/d.docx",
+            "platforms": ["noon", "juicebox"],
+        }, headers=headers)
+        store = JobStore(get_settings().direct_jobs_file)
+        store.claim("row-1")
+        store.record_results("row-1", [
+            PostResult(platform="noon", outcome=Outcome.POSTED, post_url="https://noon/r1"),
+            PostResult(platform="juicebox", outcome=Outcome.POSTED, post_url="https://jb/s1"),
+        ], [])
+
+        one = client.post("/jobs/row-1/delete", json={"platforms": ["noon"]}, headers=headers)
+        assert one.status_code == 202 and one.json()["queued"] == ["noon"]
+
+        everything = client.post("/jobs/row-1/delete", json={}, headers=headers).json()
+        assert set(everything["queued"]) == {"noon", "juicebox"}
+
+        assert client.post("/jobs/unknown/delete", json={}, headers=headers).status_code == 404
+        assert started[-2:] == [("delete", "row-1"), ("delete", "row-1")]
+    finally:
+        get_settings.cache_clear()
+
+
 def test_a_by_hand_round_replaces_only_the_platforms_it_visited(monkeypatch):
     import asyncio
 
@@ -300,3 +512,55 @@ def test_a_by_hand_round_replaces_only_the_platforms_it_visited(monkeypatch):
     assert sorted(r["platform"] for r in api._KEEPALIVE_STATE["results"]) == ["loxo", "noon"]
     assert api._KEEPALIVE_STATE["last_run"]
     assert api._KEEPALIVE_STATE["running"] is False
+
+
+# -- the Notion door -----------------------------------------------------------------
+
+
+def test_a_closed_notion_door_stands_every_notion_task_down(monkeypatch):
+    """NOTION_DOOR_ENABLED=false: the poll and both sweeps return without
+    building a Notion client, and /webhook refuses rows with 409 - after the
+    secret check, so a stranger learns nothing. RecruitOS reads the same board
+    since 2026-10-07, so an open door beside it posts a Ready to Post row twice
+    (D-026)."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    called: list[str] = []
+
+    class Boom:
+        def __init__(self, settings):
+            called.append("client")
+
+    monkeypatch.setattr("app.notion.client.NotionClient", Boom)
+    settings = Settings(_env_file=None, notion_token="t", notion_database_id="d",
+                        webhook_secret="s", notion_door_enabled=False)
+    for task in (api._poll_ready_rows, api._sweep_stuck_rows, api._sweep_trashed_rows):
+        asyncio.run(asyncio.wait_for(task(settings), timeout=5))
+    assert called == [], "a Notion task queried Notion through a closed door"
+
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+    client = TestClient(api.create_app())
+    refused = client.post("/webhook", json={"page_id": "abc"}, headers={"X-Webhook-Secret": "s"})
+    assert refused.status_code == 409, refused.text
+    assert "RecruitOS" in refused.json()["detail"]
+    assert client.post("/webhook", json={"page_id": "abc"}).status_code == 401
+    assert client.get("/health").json()["notion_door"] == "closed"
+
+
+def test_an_open_notion_door_is_the_default_and_health_says_so(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, webhook_secret="s")
+    assert settings.notion_door_enabled is True
+    monkeypatch.setattr("app.api.get_settings", lambda: settings)
+    health = TestClient(api.create_app()).get("/health").json()
+    assert health["notion_door"] == "open"
+    assert health["poll_minutes"] == settings.poll_minutes
