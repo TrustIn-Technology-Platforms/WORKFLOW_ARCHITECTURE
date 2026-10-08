@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # (Sohaib, 2026-09-03: "I got this error"). Add a rich-text column of this
     # name and `Error` stays empty on success.
     prop_notes: str = "Notes"
+    # Per-platform outcome, two multi-selects beside the one row status. Each
+    # platform is added to `Posted On` the moment it succeeds and to `Failed
+    # On` the moment it fails, so a row on `Failed` says which of its four
+    # destinations is the problem, and a re-run skips the ones already up. A
+    # delete removes platforms from `Posted On` one by one. Both optional:
+    # without the columns the writes are skipped and the row behaves as before.
+    prop_posted_on: str = "Posted On"
+    prop_failed_on: str = "Failed On"
     prop_title: str = "Name"
     # Advert fields that live on the row rather than in the document. The
     # recruiters' adverts are prose with no labelled Location/Salary lines, and

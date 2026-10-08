@@ -226,9 +226,14 @@ class _WriteBackClient:
         self.posting: list[str] = []
         self.posted: list[tuple] = []
         self.failed: list[tuple] = []
+        # Every (posted, failed) pair written, in order - the progress trail.
+        self.columns: list[tuple[list[str], list[str]]] = []
 
     async def mark_posting(self, page_id):
         self.posting.append(page_id)
+
+    async def set_platform_columns(self, page_id, *, posted, failed):
+        self.columns.append((sorted(set(posted)), sorted(set(failed))))
 
     async def mark_posted(self, page_id, post_url, detail=None):
         if self.fail_posted:
@@ -256,7 +261,7 @@ def _posted_report(monkeypatch, results):
     async def fake_load(url, settings=None):
         return document
 
-    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None):
+    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None, on_result=None):
         return results
 
     monkeypatch.setattr("app.pipeline.load_document", fake_load)
@@ -374,9 +379,13 @@ class _DeleteClient:
     def __init__(self, trash=None):
         self.trash = trash or {}
         self.deleting, self.deleted, self.failed = [], [], []
+        self.columns: list[tuple[list[str], list[str]]] = []
 
     async def mark_deleting(self, page_id):
         self.deleting.append(page_id)
+
+    async def set_platform_columns(self, page_id, *, posted, failed):
+        self.columns.append((sorted(set(posted)), sorted(set(failed))))
 
     async def mark_deleted(self, page_id, detail=None):
         self.deleted.append((page_id, detail))
@@ -571,3 +580,106 @@ def test_a_trashed_row_waits_out_the_grace_period_then_is_deleted(monkeypatch, t
     assert _FakeDeleteAdapter.calls == [("noon", [{"role": "trashed"}])]
     assert not ledger.get("trashed").is_open and ledger.get("live").is_open
     assert ledger.get("noaccess").trashed_seen_at is None  # Notion would not say
+
+
+def _multi(*names):
+    return {"type": "multi_select", "multi_select": [{"name": n} for n in names]}
+
+
+def test_posted_on_and_failed_on_fill_platform_by_platform(monkeypatch, tmp_path):
+    """Each platform lands in its column the moment it finishes, so a row that
+    fails on one says which one - and the trail shows the order it happened."""
+    from app.models import Outcome, PostResult
+
+    results = [
+        PostResult(platform="loxo", outcome=Outcome.POSTED, post_url="https://loxo/x",
+                   records={"campaign": "c1"}),
+        PostResult(platform="wellfound", outcome=Outcome.FAILED, detail="form timed out"),
+        PostResult(platform="noon", outcome=Outcome.POSTED, post_url="https://noon/x",
+                   records={"role": "r1"}),
+    ]
+    row, _doc, asyncio, process_row, Settings = _posted_report(monkeypatch, results)
+    row.platforms = ["loxo", "wellfound", "noon"]
+
+    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None, on_result=None):
+        for r in results:
+            await on_result(r)
+        return results
+
+    monkeypatch.setattr("app.pipeline.post_document", fake_post)
+    client = _WriteBackClient(fail_posted=False)
+    settings = Settings(ledger_path=str(tmp_path / "ledger.json"))
+    asyncio.run(process_row(row, client, settings, dry_run=False))
+
+    assert client.columns == [
+        ([], []),                                   # the run starts: Failed On cleared
+        (["loxo"], []),
+        (["loxo"], ["wellfound"]),
+        (["loxo", "noon"], ["wellfound"]),
+    ]
+    assert client.failed and "wellfound: form timed out" in client.failed[0][1]
+
+
+def test_a_rerun_posts_only_the_platforms_not_already_on_posted_on(monkeypatch, tmp_path):
+    """Setting a half-failed row back to Ready to Post must not post loxo and
+    noon a second time - only wellfound, the one that failed."""
+    from app.models import Outcome, PostResult
+
+    results = [PostResult(platform="wellfound", outcome=Outcome.POSTED,
+                          post_url="https://wf/x", records={"job": "j1"})]
+    row, _doc, asyncio, process_row, Settings = _posted_report(monkeypatch, results)
+    row.platforms = ["loxo", "wellfound", "noon"]
+    row.raw_properties = {"Posted On": _multi("loxo", "noon"), "Failed On": _multi("wellfound")}
+    asked: list[list[str]] = []
+
+    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None, on_result=None):
+        asked.append(list(platforms))
+        for r in results:
+            await on_result(r)
+        return results
+
+    monkeypatch.setattr("app.pipeline.post_document", fake_post)
+    client = _WriteBackClient(fail_posted=False)
+    settings = Settings(ledger_path=str(tmp_path / "ledger.json"))
+    asyncio.run(process_row(row, client, settings, dry_run=False))
+
+    assert asked == [["wellfound"]]
+    assert client.columns[0] == (["loxo", "noon"], [])
+    assert client.columns[-1] == (["loxo", "noon", "wellfound"], [])
+    assert client.posted and not client.failed
+
+
+def test_a_row_with_everything_already_posted_is_told_so(monkeypatch, tmp_path):
+    from app.models import Outcome, PostResult
+
+    row, _doc, asyncio, process_row, Settings = _posted_report(
+        monkeypatch, [PostResult(platform="loxo", outcome=Outcome.POSTED)])
+    row.raw_properties = {"Posted On": _multi("loxo")}
+    client = _WriteBackClient(fail_posted=False)
+    asyncio.run(process_row(row, client, Settings(ledger_path=str(tmp_path / "l.json")), dry_run=False))
+
+    assert not client.posted
+    assert "already listed under Posted On" in client.failed[0][1]
+
+
+def test_a_delete_empties_posted_on_one_platform_at_a_time(monkeypatch, tmp_path):
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import delete_row
+
+    settings = _delete_setup(monkeypatch, tmp_path, {"noon": Outcome.DELETED, "juicebox": Outcome.FAILED})
+    Ledger(settings.ledger_file).record_post("p1", "Row", {"noon": {"role": "r1"}, "juicebox": {"sequence": "s1"}})
+    row = NotionRow(page_id="p1", title="Row", document_url=None, status="Delete",
+                    platforms=["noon", "juicebox"],
+                    raw_properties={"Posted On": _multi("noon", "juicebox")})
+    client = _DeleteClient()
+    asyncio.run(delete_row(row, client, settings, dry_run=False))
+
+    assert client.columns == [
+        (["juicebox", "noon"], []),
+        (["juicebox"], []),
+        (["juicebox"], ["juicebox"]),
+    ]
+    assert client.failed

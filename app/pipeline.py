@@ -7,6 +7,7 @@ platforms cannot race three updates.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -150,6 +151,26 @@ def enrich_advert(
     return filled
 
 
+def _row_multi(row: NotionRow, column: str) -> list[str]:
+    """A multi-select column's option names, matched loosely like `_row_text`."""
+    from app.notion.schema import multi_select_names
+
+    wanted = _loose(column)
+    for name, value in (row.raw_properties or {}).items():
+        if _loose(name) == wanted:
+            return multi_select_names(value)
+    return []
+
+
+async def progress_reset(client: NotionClient, page_id: str, posted: list[str]) -> None:
+    """Clear `Failed On` as a run starts; what is already up stays listed."""
+    try:
+        await client.set_platform_columns(page_id, posted=posted, failed=[])
+    except Exception as exc:  # noqa: BLE001 - optional columns, see `progress`
+        log.warning("could not reset the platform columns",
+                    extra={"page_id": page_id, "error": str(exc)[:200]})
+
+
 def _row_text(row: NotionRow, column: str) -> str | None:
     """`property_text` with the same loose name match the Notion client uses."""
     exact = row.property_text(column)
@@ -173,8 +194,12 @@ async def post_document(
     row: NotionRow | None = None,
     settings: Settings | None = None,
     dry_run: bool | None = None,
+    on_result: Callable[[PostResult], Awaitable[None]] | None = None,
 ) -> list[PostResult]:
     """Run each platform in turn against one parsed document.
+
+    `on_result` is told about each platform as it finishes - the Notion door
+    uses it to fill `Posted On` / `Failed On` while the run is still going.
 
     Sequential on purpose: a single row should produce one coherent outcome, and
     two browser contexts driving the same account concurrently is a good way to
@@ -184,6 +209,11 @@ async def post_document(
     recipes = load_recipes(settings)
     results: list[PostResult] = []
     enrich_advert(document, row, settings)
+
+    async def report(result: PostResult) -> None:
+        results.append(result)
+        if on_result is not None:
+            await on_result(result)
     # Once per row, not once per platform: the draft costs an API call and every
     # advert-kind recipe wants the same answer.
     await ensure_skills(document, settings)
@@ -196,7 +226,7 @@ async def post_document(
             # recorded as skipped and named.
             if resolve(name, recipes) is None:
                 known = ", ".join(sorted(recipes)) or "none"
-                results.append(
+                await report(
                     PostResult(
                         platform=name,
                         outcome=Outcome.SKIPPED,
@@ -223,7 +253,7 @@ async def post_document(
                     "platform failed",
                     extra={"platform": name, "error": str(exc)},
                 )
-            results.append(result)
+            await report(result)
 
     return results
 
@@ -249,8 +279,34 @@ async def process_row(
         },
     )
 
+    # Platforms already up from an earlier run of this row. A row set back to
+    # Ready to Post after one platform failed must post only that one: until
+    # 2026-10-09 it posted all four again, which is how duplicate noon roles
+    # and Loxo campaigns came about, and why nobody dared re-run a row.
+    already = {p.lower() for p in _row_multi(row, settings.prop_posted_on)}
+    posted_on: list[str] = sorted(already)
+    failed_on: list[str] = []
+
+    async def progress(result: PostResult) -> None:
+        if result.outcome is Outcome.POSTED:
+            posted_on.append(result.platform.lower())
+        elif result.outcome is Outcome.FAILED:
+            failed_on.append(result.platform.lower())
+        else:
+            return
+        try:
+            await client.set_platform_columns(
+                row.page_id, posted=posted_on, failed=failed_on
+            )
+        except Exception as exc:  # noqa: BLE001 - a progress note must never
+            # fail a row whose posts are happening; the final write-back
+            # carries the same facts.
+            log.warning("could not update the platform columns",
+                        extra={"page_id": row.page_id, "error": str(exc)[:200]})
+
     if not dry_run:
         await client.mark_posting(row.page_id)
+        await progress_reset(client, row.page_id, posted_on)
 
     try:
         if not row.document_url:
@@ -259,6 +315,18 @@ async def process_row(
             raise PipelineError(
                 "No platforms are set on the row, so there is nowhere to post."
             )
+        to_run = [p for p in row.platforms if p.lower() not in already]
+        if not to_run:
+            raise PipelineError(
+                "Every platform on this row is already listed under "
+                f"{settings.prop_posted_on}, so there was nothing to post. To post "
+                "one again, remove it from that column first (or set the row to "
+                f"{settings.status_delete} to take everything down)."
+            )
+        if len(to_run) < len(row.platforms):
+            skipped = sorted(p for p in row.platforms if p.lower() in already)
+            log.info("platforms already posted - skipped",
+                     extra={"page_id": row.page_id, "platforms": skipped})
 
         document = await load_document(row.document_url, settings)
         report.document = document
@@ -272,7 +340,8 @@ async def process_row(
             log.warning("parse warning", extra={"page_id": row.page_id, "warning": warning})
 
         report.results = await post_document(
-            document, row.platforms, row=row, settings=settings, dry_run=dry_run
+            document, to_run, row=row, settings=settings, dry_run=dry_run,
+            on_result=None if dry_run else progress,
         )
         if not dry_run:
             _record_posts(row, report.results, settings)
@@ -414,6 +483,7 @@ async def delete_records(
     post_url: str | None = None,
     dry_run: bool = False,
     only_named: bool = False,
+    on_result: Callable[[DeleteResult], Awaitable[None]] | None = None,
 ) -> DeleteReport:
     """Delete what the row created on each platform, one platform at a time.
 
@@ -469,6 +539,8 @@ async def delete_records(
             except PipelineError as exc:
                 result = DeleteResult(platform=name, outcome=Outcome.FAILED, detail=str(exc))
             report.results.append(result)
+            if on_result is not None:
+                await on_result(result)
             log.info(
                 "platform delete",
                 extra={"page_id": page_id, "platform": name, "outcome": result.outcome.value},
@@ -502,8 +574,28 @@ async def delete_row(
         "row delete started",
         extra={"page_id": row.page_id, "title": row.title, "dry_run": dry_run},
     )
+    # `Posted On` empties platform by platform as the deletes land, so a
+    # delete that stops halfway shows exactly what is still up.
+    posted_on = sorted({p.lower() for p in _row_multi(row, settings.prop_posted_on)})
+    failed_on: list[str] = []
+
+    async def progress(result: DeleteResult) -> None:
+        name = result.platform.lower()
+        if result.outcome is Outcome.DELETED:
+            posted_on[:] = [p for p in posted_on if p != name]
+        elif not result.ok:
+            failed_on.append(name)
+        else:
+            return
+        try:
+            await client.set_platform_columns(row.page_id, posted=posted_on, failed=failed_on)
+        except Exception as exc:  # noqa: BLE001 - optional columns
+            log.warning("could not update the platform columns",
+                        extra={"page_id": row.page_id, "error": str(exc)[:200]})
+
     if not dry_run:
         await client.mark_deleting(row.page_id)
+        await progress_reset(client, row.page_id, posted_on)
     try:
         report = await delete_records(
             row.page_id,
@@ -512,6 +604,7 @@ async def delete_row(
             settings,
             post_url=_row_text(row, settings.prop_post_url),
             dry_run=dry_run,
+            on_result=None if dry_run else progress,
         )
     except Exception as exc:  # noqa: BLE001 - the row must not be left on Deleting
         log.exception("row delete crashed", extra={"page_id": row.page_id})

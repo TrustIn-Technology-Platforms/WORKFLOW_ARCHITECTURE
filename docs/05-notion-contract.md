@@ -62,6 +62,8 @@ One row is one document and one set of destinations.
 | `Post URL` | `url` or `rich_text` | Optional | Written on success. |
 | `Posted At` | `date` | Optional | Written on success. |
 | `Error` | `rich_text` | Optional but strongly advised | Written on failure. Without it, a failure is invisible in Notion. |
+| `Posted On` | `multi_select` | Optional | One option per platform. Filled platform by platform as each post succeeds; emptied platform by platform as each delete succeeds. A re-run skips what is already listed. Added 2026-10-09. |
+| `Failed On` | `multi_select` | Optional | The platforms that failed in the last run. Cleared when a run starts; `Error` says why each one failed. |
 
 Any column name can differ from the default — see [04-configuration](04-configuration.md).
 Optional columns that are absent are logged and skipped, so a missing `Posted At`
