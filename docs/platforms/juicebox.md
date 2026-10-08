@@ -12,6 +12,14 @@
 > it drops, `python -m app.cli login juicebox` re-captures it.** See
 > [the working session](#what-the-working-session-showed) and
 > [the editor mechanics](#the-sequence-editor-2026-08-27).
+> **Redesign, 2026-10-08 ("Agent 4.0"):** the sidebar is icon-only, so the
+> word "Sequences" is no longer on the page; the item is a link with
+> `aria-label="Sequences"`. Until that day's fix the session check read a
+> signed-in dashboard as expired (artifact 20261008-192400) and the
+> automatic sign-in then failed for want of a login form. The recipe's
+> `ready_selector` and the driver's own check now accept the aria-label link
+> too, and `_go_to_sequence_list` clicks it; `tests/test_adapter.py` runs the
+> shipped recipe against `mock-juicebox-home.html` and the blank signed-out page.
 > **Sourcing — project, JD search, filters — BUILT AND PROVEN LIVE 2026-09-02**,
 > see [Sourcing](#sourcing--project-jd-search-filters-2026-09-02).
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md)

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title></title>
+  <!--
+    app.juicebox.ai/project/<id>/home after the "Agent 4.0" redesign, as the
+    failure artifact 20261008-192400 captured it: the session was alive and
+    the dashboard rendered, but the sidebar is icon-only. The word "Sequences"
+    appears nowhere in the text; the nav item is a link carrying only an
+    aria-label and an SVG. The session check must read this page as signed in.
+  -->
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    nav { position: fixed; left: 0; top: 0; bottom: 0; width: 60px; border-right: 1px solid #eee; }
+    nav a { display: block; width: 40px; height: 40px; margin: 10px; }
+    main { margin-left: 60px; padding: 40px; }
+  </style>
+</head>
+<body>
+  <div class="osano-cm-window"><button aria-label="Close this consent banner"></button></div>
+  <nav aria-label="Main sidebar">
+    <button aria-label="Expand sidebar"><svg width="20" height="20"></svg></button>
+    <a aria-label="Home" href="/project/FjI9ffeHSSLPIMBASt4v/home"><svg width="20" height="20"></svg></a>
+    <a aria-label="Projects" href="/project/FjI9ffeHSSLPIMBASt4v"><svg width="20" height="20"></svg></a>
+    <a aria-label="Sequences" href="/project/FjI9ffeHSSLPIMBASt4v/sequences"><svg width="20" height="20"></svg></a>
+    <a aria-label="Contacts" href="/project/FjI9ffeHSSLPIMBASt4v/contacts"><svg width="20" height="20"></svg></a>
+    <a aria-label="Network" href="/project/FjI9ffeHSSLPIMBASt4v/network"><svg width="20" height="20"></svg></a>
+  </nav>
+  <main>
+    <span>New</span> Introducing Juicebox Agent 4.0
+    <h1>Hello, Marcus</h1>
+    <button tabindex="0">Create new</button>
+    <h2>Overview</h2>
+    <p>Quick glance at activity across projects, agents and outreach</p>
+    <h3>Your recents</h3>
+    <ul><li>Porter - Founding Engineer - NY</li><li>Slash - Platform Infra Eng - SF</li></ul>
+    <h3>Your tasks (2)</h3>
+  </main>
+</body>
+</html>
