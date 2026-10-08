@@ -556,6 +556,7 @@ class LoxoAdapter(RecipeAdapter):
         await box.click()
         await box.fill(name)
         await page.wait_for_timeout(800)
+        await self._dismiss_overlays(page)
         await page.locator(FLYOUT).get_by_text("Save", exact=True).first.click()
         await page.wait_for_timeout(3_000)
         if await page.locator(FLYOUT).count():
@@ -591,6 +592,7 @@ class LoxoAdapter(RecipeAdapter):
                 await toggle.click()
                 await page.wait_for_timeout(800)
             shared = await toggle.is_checked()
+            await self._dismiss_overlays(page)
             await page.locator(FLYOUT).get_by_text("Save", exact=True).first.click()
             await page.wait_for_timeout(3_000)
             await self._close_flyout(page)
@@ -610,6 +612,34 @@ class LoxoAdapter(RecipeAdapter):
             if await close.count():
                 await close.first.click()
                 await page.wait_for_timeout(1_200)
+
+    async def _dismiss_overlays(self, page: "Page") -> None:
+        """Hide Loxo's third-party notification widgets so they cannot cover a
+        button we are about to click.
+
+        Intercom delivers product announcements ("Did you catch everything we
+        launched in Q3?") in a fixed iframe anchored bottom-right, exactly over
+        the settings flyout's Save button (2026-10-06 failure). Its close
+        control lives inside that cross-origin iframe, so Playwright cannot
+        reach it; we drop the whole stack from the layout instead. Best-effort
+        and idempotent - it runs before every flyout Save."""
+        await page.evaluate(
+            """() => {
+              const sel = [
+                '#intercom-container',
+                '#intercom-frame',
+                '.intercom-notification-stack-frame',
+                '.intercom-lightweight-app',
+                '[id^="intercom-"]',
+              ];
+              for (const s of sel) {
+                document.querySelectorAll(s).forEach((el) => {
+                  el.style.display = 'none';
+                  el.style.pointerEvents = 'none';
+                });
+              }
+            }"""
+        )
 
     async def _name_box(self, page: "Page", name: str):
         by_label = page.get_by_label("Campaign name")

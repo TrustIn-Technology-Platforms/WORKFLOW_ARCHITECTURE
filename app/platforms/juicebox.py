@@ -174,13 +174,24 @@ class JuiceboxAdapter(RecipeAdapter):
 
         url = self.recipe.login.url or "https://app.juicebox.ai/"
         await page.goto(url, wait_until="commit", timeout=60_000)
+        # "Sequences" is visible text only while the sidebar is expanded. With
+        # it collapsed to icons (Marcus's setting, 2026-10-08) the label lives
+        # in the nav item's aria-label alone, and reading innerText declared a
+        # logged-in dashboard expired - so the DOM is asked as well.
+        probe = (
+            "(() => { const t = document.body ? document.body.innerText : '';"
+            " const nav = !!document.querySelector(\"[aria-label='Sequences'],"
+            " button[aria-label='Expand sidebar'], button[aria-label='Collapse sidebar']\");"
+            " return {text: t, nav}; })()"
+        )
         for _ in range(14):
             await page.wait_for_timeout(3_000)
             try:
-                text = await page.evaluate("document.body ? document.body.innerText : ''")
+                found = await page.evaluate(probe)
             except Exception:
                 continue
-            if "Sequences" in text:
+            text = found.get("text", "") if isinstance(found, dict) else ""
+            if "Sequences" in text or (isinstance(found, dict) and found.get("nav")):
                 return
             if "Log in" in text and "Sequences" not in text:
                 # A remembered-account / password screen. The session is gone.
@@ -673,7 +684,19 @@ class JuiceboxAdapter(RecipeAdapter):
                     "juicebox sequences goto slow; using nav instead",
                     extra={"error": _short(exc)},
                 )
-        await self._click_text(page, "Sequences")
+        # The collapsed sidebar shows the item as an icon with an aria-label and
+        # no text, so the text click is tried first and the label second.
+        try:
+            await self._click_text(page, "Sequences")
+        except PlatformError:
+            try:
+                await page.locator("[aria-label='Sequences']").first.click(
+                    timeout=12_000, no_wait_after=True
+                )
+            except Exception as exc:
+                raise PlatformError(
+                    f"could not open Sequences from the nav: {_short(exc)}"
+                ) from exc
 
     async def _add_email_step(self, page: "Page", expected_index: int) -> None:
         before = (await page.evaluate(_COUNTS))["editors"]

@@ -27,7 +27,16 @@ login:
   # never fires domcontentloaded, so the driver waits on `commit` and polls for
   # "Sequences" rather than a fixed selector timeout.
   url: https://app.juicebox.ai/
-  ready_selector: "text=Sequences"
+  # The nav item's label is text only while the sidebar is expanded. Marcus
+  # collapsed it to icons, and on 2026-10-08 `text=Sequences` matched nothing
+  # on a logged-in dashboard ("Hello, Marcus"): the session was declared
+  # expired, the unattended sign-in looked for an email box that was not
+  # there, and the row failed. The collapsed sidebar still carries the item's
+  # aria-label, so either shape counts (artifact 20261008-152900).
+  ready_selector:
+    - "text=Sequences"
+    - "[aria-label='Sequences']"
+    - "button[aria-label='Expand sidebar']"
   session_file: juicebox.storage_state.json
   # The unattended sign-in (JUICEBOX_LOGIN_USERNAME / _PASSWORD). Email and
   # password, no SSO (docs/platforms/juicebox.md). The form's markup has NOT

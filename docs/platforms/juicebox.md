@@ -591,6 +591,30 @@ Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
 2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
 project half is proven.
 
+## The expiry that was not one (2026-10-08)
+
+A row failed with *"the session had expired and the automatic sign-in failed -
+Juicebox failed at login step 4 (fill input[type='email']): no element
+matched"*. The saved screenshot
+(`artifacts/from-server/20261008-152900-juicebox-failed.png`) shows the
+logged-in dashboard: "Hello, Marcus", the recent projects, the task list.
+
+The session check was `ready_selector: text=Sequences`, and the driver's own
+check read `document.body.innerText` for the same word. Both assume the
+sidebar is expanded. Marcus had collapsed it to icons; in that state the nav
+item is a button with `aria-label="Sequences"` and no text, so the visible-text
+check found nothing in 42 seconds, the session was declared dead, the
+unattended sign-in ran against a page with no sign-in form, and step 4 failed
+for want of an email box. The 11:30 artifact the same day shows the sidebar
+expanded and the check passing - the setting is the user's, and it persists.
+
+Fixed 2026-10-09: the recipe's `ready_selector` is now a list (`text=Sequences`,
+`[aria-label='Sequences']`, `button[aria-label='Expand sidebar']`), the
+driver's check also asks the DOM for those, and the Sequences nav click falls
+back to the aria-label. Same family as Wellfound's hidden-twin logo
+(2026-09-16): **a session check must never rest on a label the user can
+hide.**
+
 ## Unattended sign-in (2026-09-21)
 
 `platforms/juicebox.yaml` carries `login.steps` for an email + password form
