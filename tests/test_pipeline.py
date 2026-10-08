@@ -169,6 +169,9 @@ class _StuckClient:
         assert status in ("Posting", "Deleting")
         return [r for r in self.rows if r.status == status]
 
+    async def query_rows_by_status_if_present(self, status, limit=None):
+        return await self.query_rows_by_status(status, limit)
+
     async def mark_failed(self, page_id, error):
         self.failed[page_id] = error
 

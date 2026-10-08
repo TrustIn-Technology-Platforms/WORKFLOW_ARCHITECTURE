@@ -69,7 +69,7 @@ to the same column even without an override.
 | `STATUS_POSTING` | `Posting` | Set on claim, so a second worker skips the row. |
 | `STATUS_POSTED` | `Posted` | Every platform on the row succeeded. |
 | `STATUS_FAILED` | `Failed` | Something failed; `PROP_ERROR` says what. |
-| `STATUS_DELETE` | `Delete` | Set by a recruiter: delete everything the row posted, on every platform. Picked up like `STATUS_READY`. |
+| `STATUS_DELETE` | `Delete` | Set by a recruiter: delete everything the row posted, on every platform. Picked up like `STATUS_READY`. Optional on the board: a `Post Status` without this option is skipped with a log line, never a failed poll (2026-10-09). |
 | `STATUS_DELETING` | `Deleting` | Set on claim of a delete. A row left here by a restart is released by the stuck-row sweep. |
 | `STATUS_DELETED` | `Deleted` | Every platform's records are gone. A partial delete is `STATUS_FAILED` instead, naming what is left. |
 

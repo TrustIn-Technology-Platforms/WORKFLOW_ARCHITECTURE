@@ -198,7 +198,11 @@ async def _poll_ready_rows(settings) -> None:
         try:
             async with NotionClient(settings) as client:
                 rows = await client.query_ready_rows()
-                rows += await client.query_rows_by_status(settings.status_delete)
+                # A board without a `Delete` option must still post. On
+                # 2026-10-09 the first poll after the delete feature shipped
+                # died on this query (Notion 400: option not found) and the
+                # Ready to Post row beside it was never run.
+                rows += await client.query_rows_by_status_if_present(settings.status_delete)
             for row in rows:
                 await _run_if_ready(row.page_id, None, source="poll")
         except Exception:  # noqa: BLE001 - the poll must never take the service down

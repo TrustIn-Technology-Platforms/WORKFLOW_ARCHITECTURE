@@ -74,3 +74,36 @@ def test_mark_failed_without_a_notes_column_writes_only_the_error(monkeypatch):
     asyncio.run(client.mark_failed("p", "boom"))
     assert written["Error"] == "boom"
     assert "Notes" not in written
+
+
+def test_a_status_option_the_board_lacks_is_an_empty_result_not_an_error(monkeypatch):
+    """The first poll after the delete feature shipped asked for `Delete` on a
+    board whose Post Status had no such option; Notion's 400 took the whole
+    poll down and the Ready to Post row beside it never ran (2026-10-09)."""
+    import asyncio
+
+    from app.config import Settings
+    from app.notion.client import NotionAPIError, NotionClient
+
+    client = NotionClient(Settings(notion_token="t", notion_database_id="d"))
+
+    async def missing(status, limit=None):
+        raise NotionAPIError(
+            400, "validation_error",
+            'select option "Delete" not found for property "Post Status". '
+            'Available options: "Ready to Post", "Posting", "Posted", "Failed".',
+        )
+
+    async def broken(status, limit=None):
+        raise NotionAPIError(401, "unauthorized", "API token is invalid.")
+
+    monkeypatch.setattr(client, "query_rows_by_status", missing)
+    assert asyncio.run(client.query_rows_by_status_if_present("Delete")) == []
+
+    monkeypatch.setattr(client, "query_rows_by_status", broken)
+    try:
+        asyncio.run(client.query_rows_by_status_if_present("Delete"))
+    except NotionAPIError as exc:
+        assert exc.status == 401
+    else:
+        raise AssertionError("a real failure must still raise")

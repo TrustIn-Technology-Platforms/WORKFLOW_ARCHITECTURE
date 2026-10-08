@@ -723,7 +723,7 @@ async def recover_stuck_rows(
     minutes = settings.stuck_posting_minutes if older_than_minutes is None else older_than_minutes
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     rows = await client.query_rows_by_status(settings.status_posting)
-    deleting = await client.query_rows_by_status(settings.status_deleting)
+    deleting = await client.query_rows_by_status_if_present(settings.status_deleting)
     stuck = [
         r for r in [*rows, *deleting]
         if r.last_edited is not None and r.last_edited <= cutoff
@@ -764,7 +764,7 @@ async def run_once(
     reports: list[RowReport] = []
     async with NotionClient(settings) as client:
         rows = await client.query_ready_rows(limit)
-        to_delete = await client.query_rows_by_status(settings.status_delete, limit)
+        to_delete = await client.query_rows_by_status_if_present(settings.status_delete, limit)
         if not rows and not to_delete:
             log.info("nothing to do")
             return reports

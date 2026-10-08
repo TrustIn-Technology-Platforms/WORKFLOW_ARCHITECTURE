@@ -185,6 +185,30 @@ class NotionClient:
             [{"property": name, ptype: {"equals": status}}], limit or 100
         )
 
+    async def query_rows_by_status_if_present(
+        self, status: str, limit: int | None = None
+    ) -> list[NotionRow]:
+        """`query_rows_by_status`, but a status the board does not offer is
+        an empty result, not an error.
+
+        Notion rejects a filter on a select option that does not exist with a
+        400 naming the options it does have. The delete statuses are optional -
+        a board that never deletes need not carry them - and the poll that
+        asks for `Delete` right after `Ready to Post` must not lose the ready
+        rows because the option is missing (2026-10-09, the first poll after
+        deploy). Logged, so an operator sees which option to add.
+        """
+        try:
+            return await self.query_rows_by_status(status, limit)
+        except NotionAPIError as exc:
+            if exc.status == 400 and "not found for property" in str(exc):
+                log.warning(
+                    "status option missing on the board - skipped",
+                    extra={"status": status, "detail": str(exc)[:200]},
+                )
+                return []
+            raise
+
     async def _query(self, filters: list[dict[str, Any]], limit: int) -> list[NotionRow]:
         s = self.settings
         payload: dict[str, Any] = {"page_size": min(limit, 100)}
