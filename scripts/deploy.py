@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -37,14 +38,25 @@ POLL_SECONDS = 20
 WAIT_MINUTES = 15
 
 
+def _tool(name: str) -> str:
+    """The executable's full path. On Windows the Railway CLI is an npm shim
+    (`railway.cmd`), which a bare name does not launch from Python; `which`
+    applies PATHEXT and finds it. Missing tools fail here, by name, rather
+    than as WinError 2 three calls in."""
+    found = shutil.which(name)
+    if not found:
+        sys.exit(f"{name!r} is not on PATH. Install it (railway: npm i -g @railway/cli) and log in.")
+    return found
+
+
 def _git(*args: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=ROOT, check=True, capture_output=True, text=True
+        [_tool("git"), *args], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
 def _railway(*args: str) -> None:
-    subprocess.run(["railway", *args], cwd=ROOT, check=True)
+    subprocess.run([_tool("railway"), *args], cwd=ROOT, check=True)
 
 
 def _live_build(url: str) -> dict:
