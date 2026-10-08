@@ -174,16 +174,6 @@ class JuiceboxAdapter(RecipeAdapter):
 
         url = self.recipe.login.url or "https://app.juicebox.ai/"
         await page.goto(url, wait_until="commit", timeout=60_000)
-        # "Sequences" is visible text only while the sidebar is expanded. With
-        # it collapsed to icons (Marcus's setting, 2026-10-08) the label lives
-        # in the nav item's aria-label alone, and reading innerText declared a
-        # logged-in dashboard expired - so the DOM is asked as well.
-        probe = (
-            "(() => { const t = document.body ? document.body.innerText : '';"
-            " const nav = !!document.querySelector(\"[aria-label='Sequences'],"
-            " button[aria-label='Expand sidebar'], button[aria-label='Collapse sidebar']\");"
-            " return {text: t, nav}; })()"
-        )
         for _ in range(14):
             await page.wait_for_timeout(3_000)
             try:
