@@ -358,3 +358,31 @@ def test_the_saved_json_is_readable_by_a_recruiter(monkeypatch, tmp_path):
     assert payload["profile"]["must_have_skills"] == ["Python", "PyTorch"]
     assert payload["profile"]["boolean_search"]
     assert profile_path(document, settings) == Path(profile.path)
+
+
+def test_recruiter_notes_go_to_the_draft_and_name_the_company(monkeypatch, tmp_path):
+    """The notes ride into the Claude call and change the fingerprint; a
+    `Company:` note replaces the filename's codename for the company list."""
+    from app.documents import parser
+    from app.models import Block
+
+    asked = _stub_drafts(monkeypatch)
+    settings = Settings(artifact_dir=str(tmp_path))
+    document = parser.parse_document([
+        Block("heading", 1, "Email 1", "<h1>Email 1</h1>"),
+        Block("body", 0, "Hi {{first_name}}.", "<p>Hi {{first_name}}.</p>"),
+        Block("heading", 1, "Recruiter Notes", "<h1>Recruiter Notes</h1>"),
+        Block("body", 0, "Company: Acme AI", "<p>Company: Acme AI</p>"),
+        Block("body", 0, "Poach from Databricks.", "<p>Poach from Databricks.</p>"),
+        Block("heading", 1, "Client JD", "<h1>Client JD</h1>"),
+        Block("body", 0, "Staff Platform Engineer, SF.", "<p>Staff Platform Engineer, SF.</p>"),
+    ])
+    document.source_name = "Project Falcon - Staff Platform Engineer - SF"
+
+    profile = asyncio.run(ensure_sourcing(document, settings))
+
+    assert profile is not None
+    assert "Poach from Databricks." in asked["notes"]
+    assert asked["jd"] == "Staff Platform Engineer, SF."
+    assert asked["companies_kwargs"]["company"] == "Acme AI"
+    assert fingerprint("x", settings) != fingerprint("x", settings, notes="y")

@@ -235,6 +235,16 @@ class ParsedDocument:
     # heading at the end of the document. Empty when nobody pasted one - which
     # is why the sourcing platforms read `job_description` below and not this.
     client_jd: str = ""
+    # What the recruiter learned about the role that no public text says -
+    # the real company name behind an anonymised advert, the stack a hiring
+    # manager named on a call, a competitor to poach from. Written under a
+    # `Recruiter Notes` heading, read by the sourcing draft and nothing else:
+    # it never reaches a platform's screen or a candidate.
+    notes: str = ""
+    # `Label: value` lines from that section. `skills` fills the adverts' tags
+    # when no column did; `company` names the real employer for the company
+    # list when the filename carries a codename.
+    notes_fields: dict[str, str] = field(default_factory=dict)
     # Adverts written for one destination, keyed by platform. A `Wellfound`
     # section carries copy shaped for Wellfound - anonymised differently, cut to
     # a different length - and posting the general advert there instead throws

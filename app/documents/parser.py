@@ -155,6 +155,19 @@ _LATE_JD_HEADING = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# The recruiter's own notes for the sourcing draft: facts learned on the
+# brief call, the real company behind a codename, skills the client stressed.
+# Internal by definition, so the section is kept apart from everything that
+# posts - `job_description` and `search_jd` never include it.
+_NOTES_HEADING = re.compile(
+    r"""^\s*(?:
+        (?:recruiter|sourcing|research|internal|ai|agent)\s*notes?
+      | notes?\s*(?:for\s+(?:the\s+)?(?:ai|agent|search|sourcing))?
+      | research
+    )\s*[:\-–]?\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
 _SUBJECT_LINE = re.compile(r"^\s*(?:subject|subject\s*line|re)\s*[:\-–]\s*(.+)$", re.I)
 _GREETING = re.compile(
     r"^\s*(?:hi|hello|hey|dear|good\s+(?:morning|afternoon|evening))\b", re.I
@@ -229,6 +242,7 @@ def _names_a_section(text: str) -> bool:
         or _ADVERT_HEADING.match(line)
         or _JD_HEADING.match(line)
         or _LATE_JD_HEADING.match(line)
+        or _NOTES_HEADING.match(line)
     )
 
 
@@ -288,6 +302,7 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
 
     advert = _build_advert(found.advert, warnings)
     client_jd = _build_job_description(found.job_description, warnings)
+    notes, notes_fields = _build_notes(found.notes)
     platform_adverts = {
         key: _build_platform_advert(key, sections_for, advert, warnings)
         for key, sections_for in found.platform_adverts.items()
@@ -331,8 +346,18 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
         emails=emails,
         warnings=warnings,
         client_jd=client_jd,
+        notes=notes,
+        notes_fields=notes_fields,
         platform_adverts=platform_adverts,
     )
+    # A `Skills:` line in the notes is the recruiter naming the stack, which
+    # beats anything drafted from the prose - the same rule the Notion column
+    # gets in enrich_advert, applied here so a document without a row has it.
+    skills = _split_list(notes_fields.get("skills", ""))
+    if skills:
+        for each in (advert, *platform_adverts.values()):
+            if each is not None and not each.tags:
+                each.tags = list(skills)
     log.info(
         "document parsed",
         extra={
@@ -340,6 +365,7 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
             "emails": len(emails),
             "has_advert": advert is not None,
             "client_jd_chars": len(client_jd),
+            "notes_chars": len(notes),
             "platform_adverts": sorted(platform_adverts),
             "warnings": len(warnings),
         },
@@ -382,6 +408,7 @@ class _Classified:
     advert: list[Section] = dc_field(default_factory=list)
     emails: list[Section] = dc_field(default_factory=list)
     job_description: list[Section] = dc_field(default_factory=list)
+    notes: list[Section] = dc_field(default_factory=list)
     platform_adverts: dict[str, list[Section]] = dc_field(default_factory=dict)
     shared_subject: str = ""
     warnings: list[str] = dc_field(default_factory=list)
@@ -391,6 +418,7 @@ def _classify(sections: list[Section]) -> _Classified:
     warnings: list[str] = []
     advert_sections: list[Section] = []
     email_sections: list[Section] = []
+    notes_sections: list[Section] = []
     platform_sections: dict[str, list[Section]] = {}
     # Which platform's advert an unlabelled section continues. A board's advert
     # carries its own sub-headings ("About the company:", "What you'll do:"),
@@ -438,6 +466,20 @@ def _classify(sections: list[Section]) -> _Classified:
         if platform is not None:
             platform_sections.setdefault(platform, []).append(section)
             current_platform = platform
+            continue
+
+        if _NOTES_HEADING.match(heading):
+            notes_sections.append(section)
+            current_platform = None
+            continue
+        if notes_sections and not (
+            _is_email_heading(heading) or _channel_of(heading)
+            or _ADVERT_HEADING.match(heading) or _AD_SECTION.match(heading)
+        ):
+            # A sub-heading inside the notes ("Competitors", "From the call")
+            # stays in the notes; it must never fall through to the last email.
+            notes_sections[-1].blocks.extend(_heading_as_block(section))
+            notes_sections[-1].blocks.extend(section.blocks)
             continue
 
         if _is_email_heading(heading) or _channel_of(heading):
@@ -500,6 +542,7 @@ def _classify(sections: list[Section]) -> _Classified:
         advert=advert_sections,
         emails=email_sections,
         job_description=tail,
+        notes=notes_sections,
         platform_adverts=platform_sections,
         shared_subject=shared_subject,
         warnings=warnings,
@@ -746,6 +789,46 @@ def _build_job_description(sections: list[Section], warnings: list[str]) -> str:
             "description under that heading."
         )
     return text
+
+
+def _build_notes(sections: list[Section]) -> tuple[str, dict[str, str]]:
+    """The recruiter's notes as text, plus any `Label: value` lines in them.
+
+    The labelled lines stay in the text too: "Company: Acme AI" is as useful to
+    the drafting model as a sentence, and pulling it out would leave a note
+    that reads as if the fact was never there.
+    """
+    if not sections:
+        return "", {}
+    parts: list[str] = []
+    fields: dict[str, str] = {}
+    for index, section in enumerate(sections):
+        heading = section.heading.strip()
+        if heading and index > 0:
+            parts.append(heading)
+        for block in section.blocks:
+            text = block.text.strip()
+            if not text:
+                continue
+            parts.append(text)
+            label, value = _field_from(block)
+            if label is not None and value:
+                fields.setdefault(label.strip().lower(), value)
+    return "\n\n".join(parts).strip(), fields
+
+
+def _split_list(text: str) -> list[str]:
+    """`Go, Kubernetes; Rust` into names. Slashes stay: "CI/CD" is one skill."""
+    working = text or ""
+    for separator in (";", "|", ","):
+        working = working.replace(separator, "\n")
+    seen: set[str] = set()
+    values: list[str] = []
+    for item in (part.strip(" -•\t") for part in working.splitlines()):
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            values.append(item)
+    return values
 
 
 # ----------------------------------------------------------------------

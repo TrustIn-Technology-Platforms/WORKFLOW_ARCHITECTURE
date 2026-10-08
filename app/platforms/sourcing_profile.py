@@ -178,7 +178,7 @@ def _slug(name: str) -> str:
     return text[:60] or "document"
 
 
-def fingerprint(jd: str, settings: Settings, *, location: str = "") -> str:
+def fingerprint(jd: str, settings: Settings, *, location: str = "", notes: str = "") -> str:
     """What the profile was drafted from. A changed JD, prompt or list size
     means the saved answer no longer answers the question.
 
@@ -197,6 +197,7 @@ def fingerprint(jd: str, settings: Settings, *, location: str = "") -> str:
         str(settings.sourcing_max_companies),
         location.strip(),
         jd.strip(),
+        notes.strip(),
     ])
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
@@ -252,12 +253,15 @@ async def draft_profile(
     *,
     role_title: str = "",
     compose_jd: bool = False,
+    notes: str = "",
     settings: Settings | None = None,
 ) -> DraftProfile | None:
     """One Claude call for everything but the companies. Never raises.
 
     `compose_jd` asks for the search-grade JD too — set when the document has
     no Client JD, so the platforms' own JD boxes get a spec, not the pitch.
+    `notes` is the recruiter's own section: it outranks the JD where the two
+    disagree, because it was written after the call that explained the JD.
     """
     settings = settings or get_settings()
     if not settings.anthropic_api_key:
@@ -286,6 +290,13 @@ async def draft_profile(
         f"{ask_jd}\n\n"
         f"<job_description>\n{jd.strip()}\n</job_description>"
     )
+    if notes.strip():
+        prompt += (
+            "\n\nThe recruiter's own notes on this role follow. They come from "
+            "the briefing call and take precedence over the job description "
+            "where the two differ. Never quote them in `job_description`.\n"
+            f"<recruiter_notes>\n{notes.strip()}\n</recruiter_notes>"
+        )
     client = AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=4)
     try:
         response = await client.messages.parse(
@@ -328,6 +339,7 @@ async def build_profile(
         jd,
         role_title=title,
         compose_jd=not bool(document.client_jd.strip()),
+        notes=document.notes,
         settings=settings,
     )
     if draft is None:
@@ -341,7 +353,13 @@ async def build_profile(
     composed = draft.job_description.strip() if not document.client_jd.strip() else ""
 
     advert_text = document.advert.body_text if document.advert else ""
-    company = (document.source_name or "").split(" - ")[0].strip()
+    # The filename's first segment, unless the notes name the real employer -
+    # the filename carries a codename when the client is confidential, and a
+    # company list built around a codename excludes nobody.
+    company = (
+        document.notes_fields.get("company", "").strip()
+        or (document.source_name or "").split(" - ")[0].strip()
+    )
     stated = targeting_ai.stage_from_text(jd, advert_text)
     candidate_location = targeting_ai.sourcing_location(draft.candidate_location)
     companies = await targeting_ai.draft_companies(
@@ -426,7 +444,7 @@ async def ensure_sourcing(
     if not jd:
         return None
 
-    stamp = fingerprint(jd, settings, location=location)
+    stamp = fingerprint(jd, settings, location=location, notes=document.notes)
     path = profile_path(document, settings)
     saved = load_profile(path, stamp=stamp)
     if saved is not None:

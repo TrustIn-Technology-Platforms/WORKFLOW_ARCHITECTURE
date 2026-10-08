@@ -948,3 +948,96 @@ def test_prose_lines_are_not_promoted_in_an_unformatted_document():
     assert len(document.emails) == 1
     body = document.emails[0].body_text
     assert "Email me at" in body and "Touch base soon." in body
+
+
+def test_the_recruiter_template_parses_cleanly():
+    """The template handed to recruiters must parse with nothing to warn about.
+
+    The template it replaced did not: its advert sat after the messages, so the
+    advert was titled "Ad · LinkedIn", emails 2 and 3 took that as their
+    subject, and a sub-heading in the advert was appended to the connection
+    note. Rebuild it with scripts/build_sequence_template.py.
+    """
+    path = Path(__file__).parent.parent / "docs" / "templates" / "sequence-document-template.docx"
+    document = parser.parse_document(read_blocks(path.read_bytes()))
+
+    assert document.warnings == []
+
+    # TrustIn's shape has no general advert: Wellfound is the only board, so
+    # the Wellfound section is the advert.
+    assert document.advert is None
+    wellfound = document.advert_for("wellfound")
+    assert wellfound.title.startswith("[Role title] / [Stage")
+    assert "Candidate Background" in wellfound.body_text
+    assert "Technical Skills" in wellfound.body_text
+
+    assert [e.channel for e in document.emails] == [
+        "linkedin", "email", "email", "email", "inmail",
+    ]
+    subjects = {e.subject for e in document.emails if e.channel in ("email", "inmail")}
+    assert len(subjects) == 1 and next(iter(subjects)).startswith("[Role title] / [Stage")
+    assert document.emails[0].subject == ""
+    assert "{ai_intro}" in document.emails[1].body_text
+
+    assert document.notes_fields.keys() == {"company", "skills"}
+    assert "Candidate Background" not in document.notes
+    assert document.client_jd.startswith("[Paste the client's job description")
+
+
+def _document_with_notes():
+    return parser.parse_document([
+        _heading("Job Advert"),
+        _block("Join a team that ships."),
+        _heading("Email 1"),
+        _block("Subject: Platform Engineer"),
+        _block("Hi {{first_name}}, we are hiring."),
+        _heading("Wellfound"),
+        _block("A stealth AI company is hiring."),
+        _heading("Recruiter Notes"),
+        _block("Company: Acme AI"),
+        _block("Skills: Go, Kubernetes; CI/CD"),
+        _block("Hiring manager wants people from Databricks or Scale."),
+        _heading("From the call", level=2),
+        _block("No sponsorship, five days on-site."),
+        _heading("Client JD"),
+        _block("Acme AI is hiring a Staff Platform Engineer."),
+    ])
+
+
+def test_recruiter_notes_reach_the_draft_and_nothing_that_posts():
+    """The notes are internal: the drafting model reads them, no screen does."""
+    document = _document_with_notes()
+
+    assert document.notes.startswith("Company: Acme AI")
+    assert "Databricks" in document.notes
+    # A sub-heading inside the notes stays in the notes, not the last email.
+    assert "From the call" in document.notes
+    assert "five days on-site" in document.notes
+    assert document.notes_fields == {
+        "company": "Acme AI", "skills": "Go, Kubernetes; CI/CD",
+    }
+    assert document.advert.tags == ["Go", "Kubernetes", "CI/CD"]
+    assert document.advert_for("wellfound").tags == ["Go", "Kubernetes", "CI/CD"]
+
+    assert "Databricks" not in document.job_description
+    assert "Databricks" not in document.search_jd
+    assert "Databricks" not in document.advert.body_text
+    assert "Databricks" not in document.advert_for("wellfound").body_text
+    assert "Databricks" not in document.emails[-1].body_text
+    assert document.client_jd == "Acme AI is hiring a Staff Platform Engineer."
+    assert document.warnings == []
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["Recruiter Notes", "Notes", "Notes for AI", "Sourcing Notes", "Research", "Internal notes"],
+)
+def test_the_notes_headings_a_recruiter_might_write(heading):
+    document = parser.parse_document([
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+        _heading(heading),
+        _block("Target Stripe alumni."),
+    ])
+    assert document.notes == "Target Stripe alumni."
+    assert document.emails[0].body_text == "Hi {{first_name}}."
