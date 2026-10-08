@@ -133,9 +133,16 @@ class JuiceboxAdapter(RecipeAdapter):
             await page.wait_for_timeout(3_000)
             try:
                 text = await page.evaluate("document.body ? document.body.innerText : ''")
+                # The redesign of 2026-10-08 draws the sidebar icon-only: the
+                # Sequences item is still there, as a link with an aria-label,
+                # but the word is no longer on the page. Reading only the text
+                # called a signed-in dashboard expired (artifact 20261008-192400).
+                nav = await page.evaluate(
+                    "!!document.querySelector(\"a[aria-label='Sequences']\")"
+                )
             except Exception:
                 continue
-            if "Sequences" in text:
+            if "Sequences" in text or nav:
                 return
             if "Log in" in text and "Sequences" not in text:
                 # A remembered-account / password screen. The session is gone.
@@ -607,6 +614,16 @@ class JuiceboxAdapter(RecipeAdapter):
                     "juicebox sequences goto slow; using nav instead",
                     extra={"error": _short(exc)},
                 )
+        # The icon-only sidebar (2026-10-08) has no "Sequences" text to click;
+        # its link still carries the aria-label. The text click stays as the
+        # fallback for the older layout.
+        try:
+            await page.locator("a[aria-label='Sequences']").first.click(
+                timeout=8_000, no_wait_after=True
+            )
+            return
+        except Exception:
+            pass
         await self._click_text(page, "Sequences")
 
     async def _add_email_step(self, page: "Page", expected_index: int) -> None:

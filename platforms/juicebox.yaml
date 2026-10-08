@@ -25,9 +25,18 @@ login:
   # redirects to /project/<id>/home; the "Sequences" nav item only the logged-in
   # shell renders is the session check. The app paints blank for ~20-30s and
   # never fires domcontentloaded, so the driver waits on `commit` and polls for
-  # "Sequences" rather than a fixed selector timeout.
+  # it rather than a fixed selector timeout.
+  #
+  # Juicebox's redesign ("Agent 4.0", seen 2026-10-08) made the sidebar
+  # icon-only: the item is still there, as a link with aria-label="Sequences",
+  # but the word is no longer rendered. With only `text=Sequences` the check
+  # read a signed-in dashboard as expired and then ran the sign-in steps
+  # against a page with no login form (failure artifact 20261008-192400).
+  # Either shape counts; nothing on the signed-out blank page matches.
   url: https://app.juicebox.ai/
-  ready_selector: "text=Sequences"
+  ready_selector:
+    - "a[aria-label='Sequences']"
+    - "text=Sequences"
   session_file: juicebox.storage_state.json
   # The unattended sign-in (JUICEBOX_LOGIN_USERNAME / _PASSWORD). Email and
   # password, no SSO (docs/platforms/juicebox.md). The form's markup has NOT

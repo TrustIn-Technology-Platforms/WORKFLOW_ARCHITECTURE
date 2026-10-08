@@ -227,3 +227,93 @@ def test_the_ready_selector_alone_still_calls_a_signed_out_page_dead(page_url, t
 
     assert alive is False
     assert "not logged in" in message
+
+
+# -- Juicebox after its redesign ------------------------------------------------
+#
+# On 2026-10-08 the keepalive and then a posting run both called the Juicebox
+# session expired, and the automatic sign-in failed at the email field. The
+# failure artifact (20261008-192400) shows a signed-in dashboard: "Hello,
+# Marcus", the projects, the tasks. Juicebox's "Agent 4.0" redesign had made
+# the sidebar icon-only, so the word "Sequences" the check polled for was no
+# longer on the page; the nav item is now a link with aria-label="Sequences".
+# As with Wellfound above, these run the shipped platforms/juicebox.yaml.
+
+JUICEBOX_YAML = Path(__file__).resolve().parents[1] / "platforms" / "juicebox.yaml"
+
+
+def _juicebox(page_url: str, page_name: str, **overrides) -> Recipe:
+    recipe = load_recipe(JUICEBOX_YAML)
+    recipe.login.url = page_url.replace("mock-sequence.html", page_name)
+    for field, value in overrides.items():
+        setattr(recipe.login, field, value)
+    return recipe
+
+
+def _juicebox_settings(tmp_path: Path, seconds: int) -> Settings:
+    return Settings(
+        _env_file=None,
+        session_dir=tmp_path / "sessions",
+        browser_profile_dir=tmp_path / "profiles",
+        artifact_dir=tmp_path / "artifacts",
+        headless=True,
+        login_check_seconds=seconds,
+        juicebox_login_username="",
+    )
+
+
+def test_the_icon_only_juicebox_dashboard_is_a_live_session(page_url, tmp_path):
+    """The 2026-10-08 screen: signed in, sidebar drawn as icons, the word
+    "Sequences" nowhere in the text. It must read as logged in, and quickly."""
+    recipe = _juicebox(page_url, "mock-juicebox-home.html")
+    assert "aria-label='Sequences'" in " ".join(recipe.login.ready_selector), (
+        "the shipped recipe must accept the icon-only sidebar"
+    )
+
+    alive, seconds, message = _session_check(recipe, _juicebox_settings(tmp_path, 8))
+
+    assert alive is True, f"a live session was called expired after {seconds:.1f}s: {message}"
+    assert seconds < 4
+
+
+def test_text_sequences_alone_misses_the_icon_only_dashboard(page_url, tmp_path):
+    """Keeps the fixture honest: the selector the recipe carried until
+    2026-10-08 reproduces the false alarm on the same page."""
+    recipe = _juicebox(page_url, "mock-juicebox-home.html", ready_selector="text=Sequences")
+
+    alive, _seconds, message = _session_check(recipe, _juicebox_settings(tmp_path, 4))
+
+    assert alive is False
+    assert "not logged in" in message
+
+
+def test_the_blank_signed_out_juicebox_page_is_still_dead(page_url, tmp_path):
+    """Juicebox shows a stranger nothing at all; the new selector must not
+    find anything on that page either."""
+    recipe = _juicebox(page_url, "mock-juicebox-signedout.html")
+
+    alive, _seconds, message = _session_check(recipe, _juicebox_settings(tmp_path, 4))
+
+    assert alive is False
+    assert "not logged in" in message
+
+
+def test_the_juicebox_driver_reads_the_icon_only_dashboard_as_logged_in(page_url, tmp_path):
+    """The driver has its own check (it polls innerText because the app never
+    fires domcontentloaded); it must accept the aria-label link too."""
+    from app.platforms.juicebox import JuiceboxAdapter
+
+    recipe = _juicebox(page_url, "mock-juicebox-home.html")
+    settings = _juicebox_settings(tmp_path, 8)
+
+    async def run() -> str:
+        async with BrowserRunner(settings, headless=True) as runner:
+            async with runner.context() as (_context, page):
+                adapter = JuiceboxAdapter(recipe, settings=settings)
+                try:
+                    await adapter._assert_logged_in(page)
+                    return "alive"
+                except AuthenticationRequired as exc:
+                    return str(exc)
+
+    assert asyncio.run(run()) == "alive"
