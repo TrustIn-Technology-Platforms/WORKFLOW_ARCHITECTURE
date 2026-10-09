@@ -89,9 +89,9 @@ both platforms sign in through SSO:
    so a noon post is now role → wizard → campaign, the wizard writes the whole
    search spec, and sourcing cannot be switched off for noon
    ([D-028](docs/11-decisions.md), [docs/platforms/noon.md](docs/platforms/noon.md#the-sourcing-wizard)).
-   Every production noon post since the redesign had failed; the fix is on
-   this branch, undeployed. Three `ZZ TEST` noon roles from the proof are
-   waiting for `delete noon --record role=<id> --live` (listed in
+   Every production noon post since the redesign had failed; the fix is
+   deployed (`a892ce6`, 2026-10-09). Three `ZZ TEST` noon roles from the
+   proof are waiting for `delete noon --record role=<id> --live` (listed in
    [docs/platforms/noon.md](docs/platforms/noon.md#open-questions)).
 2. **One read-only Loxo probe.** `python scripts/probe_loxo_longlist.py --job
    <id>` maps the Longlist Agent's similar titles and skills, the last surface

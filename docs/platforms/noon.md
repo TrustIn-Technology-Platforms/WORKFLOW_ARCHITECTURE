@@ -619,10 +619,11 @@ TEST inmail subject - delete me` and read it back gone. The one test role
 Both halves are done and proven on 2026-10-09: `python -m app.cli post noon
 --doc <file> --live` creates the role, sets its sourcing up (criteria, filters,
 example companies, ratings, agent on) and saves the campaign; a recruiter then
-reviews the campaign and presses `Contact N candidates`. The change is on the
-`release/2026-10-09` branch, **not yet deployed** — every production noon post
-since the portal redesign failed at the campaign wait, so deploying it is the
-next step, then deleting the test roles listed above.
+reviews the campaign and presses `Contact N candidates`. **Deployed as
+`a892ce6` on 2026-10-09 (evening)**, with the service's noon session confirmed
+signed in by its keepalive straight after — every production noon post
+between the portal redesign and this deploy had failed at the campaign wait.
+Next: delete the test roles listed above, and watch the first production row.
 
 Two things to watch on the first production rows: the `NOON_ROLE_WAIT_SECONDS`
 log line ("role appeared in noon") — it should never fire now that the role is
