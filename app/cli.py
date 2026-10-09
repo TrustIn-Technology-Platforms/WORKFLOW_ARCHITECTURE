@@ -594,6 +594,12 @@ def source(
         console.print(f"  titles     {', '.join(report.titles)}")
     else:
         console.print("  titles     [yellow]none[/yellow]")
+    if report.years:
+        console.print(f"  years      {report.years[0]}-{report.years[1]}")
+    if report.example_companies:
+        console.print(f"  companies  {', '.join(report.example_companies)}")
+    if report.rated_companies:
+        console.print(f"  rated      {report.rated_companies} target company(ies) noon proposed")
 
     console.print(f"\n[bold]Must-haves[/bold] ({len(report.must_haves)})")
     for line in report.must_haves:
@@ -849,12 +855,14 @@ def delete_row_command(
 
 @app.command("delete")
 def delete_command(
-    platform: str = typer.Argument(..., help="Recipe key: noon, juicebox."),
+    platform: str = typer.Argument(..., help="Recipe key: noon, juicebox, loxo, wellfound."),
     record: list[str] = typer.Option(
         ..., "--record",
         help="KEY=VALUE, as the ledger holds them: role=<uuid> on noon; "
              "sequence=<id>, project=<id>, project_name=<name>, "
-             "project_created_at=<ISO time> on Juicebox. Repeat for each.",
+             "project_created_at=<ISO time> on Juicebox; campaign=<url or id>, "
+             "campaign_created=yes, campaign_name=<name> on Loxo; job=<url or id>, "
+             "job_title=<title> on Wellfound. Repeat for each.",
     ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--live", help="A dry run finds each record and changes nothing."
@@ -1528,7 +1536,8 @@ async def _source(
     from app.platforms import BrowserRunner, SessionStore, load_recipes, resolve
     from app.platforms.engine import _role_name
     from app.models import Advert
-    from app.platforms.noon_sourcing import set_up_sourcing, targeting_preamble
+    from app.platforms.noon import wizard_inputs
+    from app.platforms.noon_sourcing import set_up_sourcing
     from app.platforms.skills import ensure_skills
 
     role_id = _role_uuid(role)
@@ -1543,73 +1552,39 @@ async def _source(
     drafted = await ensure_skills(document, settings)
     if drafted:
         console.print(f"[dim]skills drafted: {', '.join(drafted)}[/dim]")
-    advert = document.advert
-    jd = document.job_description
-    if not jd:
+
+    # Exactly what the noon adapter hands the wizard on a posting run - one
+    # builder, so the CLI and the row cannot drift apart again.
+    inputs = await wizard_inputs(document, settings)
+    if inputs is None:
         raise PipelineError(
             f"{doc} has neither a Client JD section nor an advert, so there is no "
             "job description to give noon. Sourcing criteria come from those, not "
             "from the emails."
         )
+    for note in inputs.notes:
+        console.print(f"[dim]{note}[/dim]")
 
     emails = [e for e in document.emails if e.is_email]
     # A Client JD is enough on its own, so the advert may be absent entirely.
-    advert = advert or Advert(title="", body_text="", body_html="")
+    advert = document.advert or Advert(title="", body_text="", body_html="")
     role_name = name or _role_name(document.source_name, None, advert, emails)
-    # The shared profile (D-024), exactly as the noon adapter builds it: the
-    # advert's title only - `role_name` is the filename, whose leading segment
-    # is the company rather than the role.
-    from app.platforms.sourcing_profile import ensure_sourcing
-    from app.platforms.targeting_ai import sourcing_location
-
-    profile = await ensure_sourcing(
-        document,
-        settings,
-        role_title=advert.title,
-        location=advert.location or "",
+    console.print(
+        f"[dim]job description: {len(inputs.job_description)} chars from the "
+        f"{inputs.origin} in {doc}[/dim]"
     )
-    fallback_must_haves: list[str] | None = None
-    if profile is None:
-        console.print(
-            "[yellow]no sourcing profile could be drafted (is ANTHROPIC_API_KEY "
-            "set?), so noon gets the document's facts alone[/yellow]"
-        )
-        targeting = targeting_preamble(
-            title=advert.title,
-            location=advert.location or "",
-            employment_type=advert.employment_type or "",
-            skills=advert.tags,
-        )
-    else:
-        targeting = targeting_preamble(
-            title=advert.title,
-            similar_titles=profile.similar_titles,
-            location=sourcing_location(profile.candidate_location, advert.location),
-            employment_type=advert.employment_type or "",
-            skills=profile.must_have_skills[:12] or advert.tags,
-            nice_to_have=profile.nice_to_have_skills[:12],
-            companies=profile.companies[:12],
-        )
-        fallback_must_haves = profile.as_must_haves()
-        jd = document.search_jd or jd
-        console.print(f"[dim]profile: {profile.summary}[/dim]")
-        if profile.boolean_search:
-            console.print(f"[dim]boolean: {profile.boolean_search}[/dim]")
-        if profile.path:
-            console.print(f"[dim]profile saved: {profile.path}[/dim]")
-    origin = (
-        "Client JD" if document.client_jd
-        else "composed spec" if profile is not None and profile.drafted_jd
-        else "advert"
-    )
-    console.print(f"[dim]job description: {len(jd)} chars from the {origin} in {doc}[/dim]")
-    if targeting:
-        console.print(f"[dim]targeting:\n{targeting}[/dim]")
+    if inputs.targeting:
+        console.print(f"[dim]targeting:\n{inputs.targeting}[/dim]")
     else:
         console.print(
             "[yellow]no location, type or skills on this document, so noon will "
             "search globally[/yellow]"
         )
+    brief = inputs.brief
+    if brief.example_companies:
+        console.print(f"[dim]example companies: {', '.join(brief.example_companies)}[/dim]")
+    if brief.client_description:
+        console.print(f"[dim]client: {brief.client_description}[/dim]")
 
     recipe = resolve("noon", load_recipes(settings))
     if recipe is None:
@@ -1638,12 +1613,16 @@ async def _source(
                     page,
                     role_id,
                     role_name,
-                    jd,
+                    inputs.job_description,
                     source=settings.noon_sourcing_source,
                     start_sourcing=start,
                     dry_run=dry_run,
-                    targeting=targeting,
-                    fallback_must_haves=fallback_must_haves,
+                    targeting=inputs.targeting,
+                    fallback_must_haves=inputs.fallback_must_haves,
+                    brief=brief,
+                    # An existing role: noon has had time to list it. A miss
+                    # here means it is gone, and waiting would only delay saying so.
+                    role_wait_seconds=0.0,
                 )
             except PipelineError:
                 await save_failure(context, page, "noon-sourcing-failed", settings)

@@ -1,29 +1,31 @@
 """noon's sourcing wizard, replayed through the calls its own front end makes.
 
 Stage 1 of a noon role — "Sourcing · Find candidates" — is a seven-step wizard:
-paste the job description, pick a candidate pool, confirm the criteria noon
-extracted from it, select the non-negotiables, rank them, answer a few
-clarifying questions. The recruiter's habit is to make the result as tight as
-the wizard allows: every nice-to-have promoted into the must-haves, every
-generated criterion kept as a non-negotiable, the strictest answer chosen for
-each question. That is what this module does, in that order.
+paste the job description, pick a candidate pool, confirm the search criteria
+noon extracted (titles, years, location, must-haves, nice-to-haves, example
+companies, the client, visa), rate the target companies it proposes, star the
+non-negotiables, rank them, answer a few clarifying questions. The recruiter's
+habit is to make the result as tight as the wizard allows: every nice-to-have
+promoted into the must-haves, every generated criterion kept as a
+non-negotiable, the strictest answer chosen for each question. That is what
+this module does, in that order.
 
 **Why the API and not the page.** The wizard is a single component with timed
-stage transitions (up to seven seconds), two drag-and-drop lists, star toggles
-whose legality depends on the wording of the item being starred, and a
-one-question-at-a-time screen — while the state it produces travels in four
-JSON calls. Driving the DOM would mean racing animations to reproduce a payload
-we can simply send, so this sends it. The endpoints, their payloads and the
-shapes below were read out of noon's own portal bundle
-(`_next/static/chunks`, deployment `dpl_6zHVEuHXq88mMiCcX1CJpgeRD8XJ`) rather
-than guessed; `docs/platforms/noon.md#the-sourcing-wizard` records the mapping
-from each wizard step to its call.
+stage transitions, chip inputs, a two-thumb slider, an autocomplete that only
+opens on real keystrokes, star toggles and a one-question-at-a-time screen —
+while the state it produces travels in a handful of JSON calls. Driving the DOM
+would mean racing animations to reproduce a payload we can simply send, so this
+sends it. Every call here is one the portal makes itself, in the same order,
+with the same fields — a replay, not an extension — and a changed payload shape
+shows up as a `PlatformError` naming the call that failed. The mapping was
+first read out of noon's portal bundle (2026-08-31) and then **watched being
+made by the live wizard on 2026-10-09**, which is where the step-3 write
+(`prepare_role_preferences`, the full `update_role`) and the target-company
+rating step come from; `docs/platforms/noon.md#the-sourcing-wizard` records
+each screen against its call.
 
 That makes this an undocumented interface: noon has not published it and could
-change it. Every call here is one the portal makes itself, in the same order,
-with the same fields — a replay, not an extension — and a changed payload shape
-shows up as a `PlatformError` naming the call that failed. Ask noon
-(support@noon.ai) before treating it as stable.
+change it. Ask noon (support@noon.ai) before treating it as stable.
 
 The auth token is Firebase's, re-minted per page load and sent in the JSON body
 rather than a header, so it cannot be replayed from a session file. It is
@@ -38,7 +40,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 from app.logging_conf import get_logger
 from app.models import AuthenticationRequired, PlatformError
@@ -59,6 +61,19 @@ SKIP = "SKIP"
 # the account sources from; the others exist so a caller can override.
 SOURCES = ("public", "ats", "inbound")
 
+# How often `fetch_role` asks again for a role noon has not listed yet.
+ROLE_POLL_SECONDS = 10.0
+
+# Step 3 summarises the job description server-side; the portal polls for it
+# while the screen is open. Bounded here because a slow summary is not a
+# reason to leave the role half-configured.
+JD_SUMMARY_POLL_SECONDS = 2.0
+JD_SUMMARY_WAIT_SECONDS = 30.0
+
+# The most example companies handed to noon. Each one is a search call, and
+# the shared profile's list is already a shortlist.
+MAX_EXAMPLE_COMPANIES = 12
+
 # LLM-written answer options, so these are markers rather than an enumeration.
 # Loose ones are stripped from the text before the strict ones are counted, so
 # that "not required" does not also score as "required".
@@ -68,11 +83,12 @@ _LOOSE_MARKERS = (
     "optional", "open to", "flexible", "no preference", "no strong preference",
     "does not matter", "doesn't matter", "willing to consider", "would consider",
     "either is fine", "either works", "bonus", "plus, not", "no requirement",
+    "is fine", "is sufficient", "acceptable", "strong plus", "a plus",
 )
 _STRICT_MARKERS = (
     "required", "must have", "must be", "non-negotiable", "nonnegotiable",
     "mandatory", "essential", "strictly", "only candidates", "only from",
-    "exclusively", "hard requirement", "dealbreaker", "deal-breaker",
+    "exclusively", "hard requirement", "hard filter", "dealbreaker", "deal-breaker",
 )
 
 # A question that offers to widen the search ("would you consider…") is
@@ -129,6 +145,14 @@ class SourcingReport:
     # worth saying out loud even on a run that otherwise succeeded.
     location: str = ""
     titles: list[str] = field(default_factory=list)
+    years: tuple[int, int] | None = None
+    # Step 3's company half: the example companies that resolved to a noon
+    # company record, the ones that did not, and how many of noon's proposed
+    # target companies were rated in step 4.
+    example_companies: list[str] = field(default_factory=list)
+    unresolved_companies: list[str] = field(default_factory=list)
+    rated_companies: int = 0
+    client_description: str = ""
 
     @property
     def summary(self) -> str:
@@ -141,8 +165,32 @@ class SourcingReport:
         parts.append(f"location {self.location}" if self.location else "no location")
         if self.titles:
             parts.append(f"{len(self.titles)} title(s)")
+        if self.years:
+            parts.append(f"{self.years[0]}-{self.years[1]} years")
+        if self.example_companies:
+            parts.append(f"{len(self.example_companies)} example company(ies)")
+        if self.rated_companies:
+            parts.append(f"{self.rated_companies} target company(ies) rated")
         parts.append("sourcing started" if self.started_sourcing else "not started")
         return ", ".join(parts)
+
+
+@dataclass(slots=True)
+class WizardBrief:
+    """What the caller knows about the role beyond the job description.
+
+    Everything here fills a gap noon's own extractor may leave: the shared
+    sourcing profile's titles, years and target companies (D-024), the row's
+    location, and a one-line description of the client for noon's calibration.
+    noon's reading of the text wins where it has one; these are the fallbacks
+    and the additions, never an override.
+    """
+
+    example_companies: list[str] = field(default_factory=list)
+    client_description: str = ""
+    titles: list[str] = field(default_factory=list)
+    years: tuple[int, int] | None = None
+    location: list[str] = field(default_factory=list)
 
 
 # ----------------------------------------------------------------------
@@ -162,9 +210,9 @@ def role_title(title: str) -> str:
     """Just the role, out of a decorated title.
 
     This is what goes into the preamble's `Job title:` line, and noon turns it
-    into `preferences.titles` — the list of titles it searches for. Handed the
-    whole decorated string it reads "NYC" and "Series A" as job titles and looks
-    for people who hold them, which is worse than telling it nothing: a wrong
+    into the title list it searches for (`preferences.type`). Handed the whole
+    decorated string it reads "NYC" and "Series A" as job titles and looks for
+    people who hold them, which is worse than telling it nothing: a wrong
     filter excludes the right people silently.
 
     Only the leading segment is trusted, so anything that does not parse into
@@ -190,10 +238,10 @@ def targeting_preamble(
 
     noon's `generate_params` *extracts* the role's search parameters — the
     location, the titles and the years of experience that decide which profiles
-    the agent looks at in the first place. (It was long believed to save them
-    too; it does not save the location, which is what `save_location` is for.)
-    It reads what it can out of the text it is given, and the text it was given was
-    the advert, which is marketing copy: TrustIn's adverts do not state the
+    the agent looks at in the first place — and since 2026-10-09 the replay
+    writes what it extracted onto the role itself (`build_preferences`). It
+    reads what it can out of the text it is given, and the text it was given
+    was the advert, which is marketing copy: TrustIn's adverts do not state the
     location in prose, because the location is a Notion column. So the location
     came back empty on every role and the agent searched globally
     (docs/12-sourcing-criteria.md, gap 1).
@@ -203,13 +251,11 @@ def targeting_preamble(
     so noon's own extractor picks them up. `Location:` and `Job title:` are the
     forms the portal's placeholder text uses.
 
-    The filter facts (`Job title:`, `Location:`, `Employment type:`) are what
-    noon keeps as `preferences`. Salary is deliberately left out even though
-    the row carries it — noon has no compensation preference, so the only thing
-    it could become is a criterion, and every criterion here is promoted to a
-    non-negotiable and starred. "Will accept £35-45k" is not a thing a profile
-    can satisfy, so it would narrow the search to nobody while looking like
-    diligence.
+    Salary is deliberately left out even though the row carries it — noon has
+    no compensation preference, so the only thing it could become is a
+    criterion, and every criterion here is promoted to a non-negotiable and
+    starred. "Will accept £35-45k" is not a thing a profile can satisfy, so it
+    would narrow the search to nobody while looking like diligence.
 
     The list lines beyond the filters — similar titles, the two skill tiers,
     the target companies — come from the shared sourcing profile (D-024) and
@@ -220,9 +266,9 @@ def targeting_preamble(
     recruiter deletes a criterion in noon in one click, where a search missing
     Python never says so.
 
-    Whether it worked is not assumed — `run_wizard` reads `preferences.location`
-    back off the role afterwards, and refuses to start the search if it is still
-    empty rather than letting it run unrestricted.
+    Whether it worked is not assumed — `run_wizard` reads the role back
+    afterwards, and refuses to start the search if the location is still empty
+    rather than letting it run unrestricted.
     """
     lines: list[str] = []
     role = role_title(title)
@@ -295,6 +341,24 @@ def as_lines(value: Any) -> list[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return [line for line in lines if line.strip()]
+
+
+def as_years(value: Any) -> tuple[int, int] | None:
+    """`yoe` as noon returns it (`[5, 12]`), or None when it is not a band.
+
+    The slider on step 3 runs 0 to 40; anything outside that, reversed, or not
+    a pair of numbers is treated as "noon said nothing" rather than written
+    onto the role, where it would silently filter everyone out.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        low, high = int(value[0]), int(value[1])
+    except (TypeError, ValueError):
+        return None
+    if low < 0 or high > 60 or low > high:
+        return None
+    return low, high
 
 
 def tighten(must_haves: Any, nice_to_haves: Any) -> tuple[list[str], list[str]]:
@@ -398,21 +462,248 @@ def strictest_answer(question: str, options: list[str]) -> tuple[str, str]:
 
 
 # ----------------------------------------------------------------------
+# step 3 — the search criteria, as the role stores them
+# ----------------------------------------------------------------------
+
+
+# Defaults the portal adds to a role's `preferences` block the first time step
+# 3 is confirmed (recorded 2026-10-09). Written with setdefault so a role that
+# already carries a recruiter's choice keeps it.
+_STEP3_DEFAULTS: dict[str, Any] = {
+    "location_distance": 0,
+    "onlySourceFromTheseCompanies": False,
+    "ban_past_candidates": True,
+    "ban_ats_candidates": False,
+    "past_candidates_cooldown_days": 30,
+    "ats_candidates_cooldown_days": 30,
+}
+
+
+def build_preferences(
+    existing: Any,
+    params: dict[str, Any],
+    *,
+    brief: WizardBrief | None = None,
+    example_company_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """The role's `preferences` block with step 3 filled in.
+
+    This is what the wizard's "Confirm the search criteria" screen writes, and
+    until 2026-10-09 it was the one screen the replay skipped — so every role
+    kept the empty block its creation modal wrote and searched the whole world
+    on criteria alone. The keys are the portal's, as recorded from a live
+    role: the title list is `type` (not `titles`), the years band is
+    `experience`, the company-type chips are `companySpecs`, the example
+    companies are `required_companies_to_source_from` (noon company ids).
+
+    noon's own extraction wins where it has one; the brief fills the gaps. The
+    existing block is amended rather than rebuilt, so keys this code has never
+    heard of (`companyBlacklist`, `recruiters`, `managementExp`) travel
+    untouched - a partial block would silently clear them.
+    """
+    preferences = dict(existing) if isinstance(existing, dict) else {}
+    brief = brief or WizardBrief()
+
+    titles = [t for t in as_lines(params.get("titles")) if t] or list(brief.titles)
+    if titles:
+        preferences["type"] = titles
+
+    years = as_years(params.get("yoe")) or brief.years
+    if years:
+        preferences["experience"] = [years[0], years[1]]
+
+    location = as_list(params.get("location")) or as_list(brief.location)
+    if location:
+        preferences["location"] = location
+
+    specs = [s for s in as_lines(params.get("company_specs")) if s]
+    if specs:
+        preferences["companySpecs"] = specs
+
+    ids = [str(i).strip() for i in example_company_ids if str(i).strip()]
+    if ids:
+        already = [str(i) for i in (preferences.get("required_companies_to_source_from") or [])]
+        preferences["required_companies_to_source_from"] = list(
+            dict.fromkeys([*already, *ids])
+        )
+
+    for key, value in _STEP3_DEFAULTS.items():
+        preferences.setdefault(key, value)
+    return preferences
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_EMPLOYER_WORDS = (
+    "startup", "start-up", "scale-up", "scaleup", "company", "client", "we are",
+    "we're", "is hiring", "are hiring", "our ", "business", "firm", "team of",
+    "backed", "funded", "series", "seed", "founded",
+)
+
+
+def client_description(job_description: str, *, stage: str = "") -> str:
+    """One line about the employer, for noon's "Describe the client company" box.
+
+    Step 3 will not continue without the client named or described, and noon
+    uses the description to calibrate the caliber of candidate it proposes
+    ("Fortune 500 retailer headquartered in NYC with 10,000+ employees" is its
+    own example). TrustIn does not name the client in a JD, so the description
+    is the sentence of the JD that introduces the employer - the first one
+    that talks about the company rather than the job - with the profile's
+    funding stage in front when the sentence does not already say it.
+    """
+    text = (job_description or "").replace("\r", "")
+    candidates: list[str] = []
+    for paragraph in text.split("\n"):
+        line = paragraph.strip()
+        # Headings and bullet fragments are not sentences about anybody.
+        if len(line) < 40 or (len(line.split()) <= 6 and not line.endswith(".")):
+            continue
+        candidates.extend(s.strip() for s in _SENTENCE_END.split(line) if len(s.strip()) >= 40)
+
+    chosen = next(
+        (s for s in candidates if any(w in s.lower() for w in _EMPLOYER_WORDS)),
+        candidates[0] if candidates else "",
+    )
+    chosen = chosen[:240].rstrip(" ,;:")
+    stage = (stage or "").strip()
+    if stage and stage.lower() not in chosen.lower():
+        chosen = f"{stage} stage. {chosen}".strip()
+    return chosen
+
+
+def match_company(name: str, results: Any) -> dict[str, Any] | None:
+    """The one search result that *is* the named company, or None.
+
+    `company_search_by_name` answers a prefix search - "Vercel" also returns
+    Vercelli and a Vercel LLC - so only a result whose name matches, ignoring
+    case and punctuation, is taken, and the first such result wins (noon lists
+    the best-known first). A near miss is skipped rather than guessed at: an
+    example company tells noon what kind of place to look in, and the wrong
+    company of the same name points it at the wrong kind.
+    """
+    wanted = _company_key(name)
+    if not wanted or not isinstance(results, list):
+        return None
+    for result in results:
+        if isinstance(result, dict) and _company_key(str(result.get("name", ""))) == wanted:
+            return result
+    return None
+
+
+def _company_key(name: str) -> str:
+    key = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    # "Vercel Inc" and "Vercel" are one company; the suffix is not identity.
+    return re.sub(r"\s+(inc|llc|ltd|limited|corp|corporation|co|plc|gmbh|ag|sa)$", "", key).strip()
+
+
+def rate_company_cards(
+    cards: Any,
+    *,
+    wanted: Iterable[str] = (),
+    employees: tuple[int | None, int | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Great / Okay / No for each target company noon proposes (step 4).
+
+    noon shows the cards when the written criteria are ambiguous ("startups"
+    and "SaaS" are, it says) and labels each with how it came to propose it:
+    `anchor_yes` is a company it expects to fit, `anchor_no` one it expects
+    not to, and `boundary` a probe along one dimension (`size_stage`,
+    `caliber_high_outside`, `criterion:saas`…). The recruiter answers from
+    taste; this answers from what the brief already says:
+
+    - a company the shared profile named as a target is **great**, whatever
+      noon thought of it - that is the one place the brief is explicit;
+    - noon's own anchors are taken at their word (`anchor_yes` great,
+      `anchor_no` no);
+    - a boundary probe is judged on size against the band noon itself derived
+      for the client (`company_json.employees_min/max_number` on the step-3
+      save): inside the band **okay**, outside it **no**. Unknown size, or no
+      band, is **okay** - the neutral answer, which teaches noon nothing and
+      costs nothing.
+
+    Every card gets a rating because the screen does not continue otherwise,
+    and a rating noon can act on carries the card's own `group` and
+    `dimension` back, exactly as the portal sends them.
+    """
+    targets = {_company_key(w) for w in wanted if _company_key(w)}
+    low, high = employees if employees else (None, None)
+    ratings: list[dict[str, Any]] = []
+    if not isinstance(cards, list):
+        return ratings
+    for card in cards:
+        if not isinstance(card, dict) or not card.get("company_id"):
+            continue
+        group = card.get("group")
+        name = str(card.get("name") or "")
+        size = card.get("employees")
+        if _company_key(name) in targets:
+            rating = "great"
+        elif group == "anchor_yes":
+            rating = "great"
+        elif group == "anchor_no":
+            rating = "no"
+        elif isinstance(size, (int, float)) and (low is not None or high is not None):
+            inside = (low is None or size >= low) and (high is None or size <= high)
+            rating = "ok" if inside else "no"
+        else:
+            rating = "ok"
+        ratings.append(
+            {
+                "company_id": str(card["company_id"]),
+                "rating": rating,
+                "group": group,
+                "dimension": card.get("dimension"),
+            }
+        )
+    return ratings
+
+
+def employee_band(update_role_response: Any) -> tuple[int | None, int | None] | None:
+    """The client-size band noon derived on the step-3 save, if it sent one."""
+    if not isinstance(update_role_response, dict):
+        return None
+    company = update_role_response.get("company_json")
+    if not isinstance(company, dict):
+        return None
+    low = company.get("employees_min_number")
+    high = company.get("employees_max_number")
+    if low is None and high is None:
+        return None
+    try:
+        return (int(low) if low is not None else None, int(high) if high is not None else None)
+    except (TypeError, ValueError):
+        return None
+
+
+# ----------------------------------------------------------------------
 # the session behind the portal
 # ----------------------------------------------------------------------
 
 
 @dataclass(slots=True)
 class NoonSession:
-    """One page, its Firebase token and the company the account belongs to."""
+    """One page, its Firebase token, the company the account belongs to and
+    the signed-in user's id - the portal sends the last two alongside the
+    token on most calls, and `update_role` wants the user."""
 
     page: "Page"
     token: str
     company: str = ""
+    user: str = ""
+    # The signed-in address. `refetch_roles` answers nothing without it
+    # (2026-10-09): the role list is the user's, not the company's.
+    email: str = ""
     timeout_seconds: float = 120.0
 
-    async def post(self, path: str, payload: dict[str, Any]) -> Any:
-        """One call, made from inside the tab so it carries the real origin."""
+    async def post(
+        self, path: str, payload: dict[str, Any], *, forbidden_ok: bool = False
+    ) -> Any:
+        """One call, made from inside the tab so it carries the real origin.
+
+        `forbidden_ok` returns None on a 403 instead of declaring the session
+        dead: `poll_role_params` answers Forbidden for a role id noon does not
+        know, which is a fact about the role, not about the login.
+        """
         url = f"{API}/{path.lstrip('/')}"
         try:
             result = await asyncio.wait_for(
@@ -428,6 +719,8 @@ class NoonSession:
 
         status = int(result.get("status") or 0)
         data = result.get("data")
+        if status == 403 and forbidden_ok:
+            return None
         if status == 401 or status == 403:
             raise AuthenticationRequired(
                 "noon rejected the session while setting up sourcing. Run: "
@@ -466,12 +759,10 @@ async def capture_session(
             return
         if not isinstance(payload, dict):
             return
-        token = payload.get("token")
-        if isinstance(token, str) and token and "token" not in found:
-            found["token"] = token
-        company = payload.get("company")
-        if isinstance(company, str) and company and "company" not in found:
-            found["company"] = company
+        for key in ("token", "company", "user", "email"):
+            value = payload.get(key)
+            if isinstance(value, str) and value and key not in found:
+                found[key] = value
 
     page.on("request", on_request)
     try:
@@ -479,7 +770,8 @@ async def capture_session(
         waited = 0
         # Keep waiting a little past the token for the company id: it rides on
         # most calls but not the first one, and gpt_stream wants it.
-        while waited < timeout_ms and not (found.get("token") and found.get("company")):
+        wanted = ("token", "company", "email")
+        while waited < timeout_ms and not all(found.get(key) for key in wanted):
             await page.wait_for_timeout(500)
             waited += 500
             if found.get("token") and waited > 12_000:
@@ -499,9 +791,20 @@ async def capture_session(
 
     log.info(
         "noon session captured",
-        extra={"company": found.get("company", ""), "url": page.url},
+        extra={
+            "company": found.get("company", ""),
+            "user": found.get("user", ""),
+            "email": found.get("email", ""),
+            "url": page.url,
+        },
     )
-    return NoonSession(page=page, token=found["token"], company=found.get("company", ""))
+    return NoonSession(
+        page=page,
+        token=found["token"],
+        company=found.get("company", ""),
+        user=found.get("user", ""),
+        email=found.get("email", ""),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -528,22 +831,24 @@ class SourcingWizard:
         self.start_sourcing = start_sourcing
         self.report = SourcingReport(role_id=role_id)
 
+    def _with_token(self, **payload: Any) -> dict[str, Any]:
+        return {"token": self.session.token, **payload}
+
     # -- step 1: the job description ------------------------------------
     async def read_job_description(self, jd: str, *, save: bool = True) -> dict[str, Any]:
-        """Hand noon the advert and take back what it extracted.
+        """Hand noon the job description and take back what it extracted.
 
-        `dont_save` keeps the call a pure read, which is what a dry run wants.
-        Without it noon caches the job description against the role — but *not*
-        the location: that was assumed from this flag's name until a role read
-        back with `preferences.location` still `[]` on 2026-09-22, having been
-        handed a location it quoted back correctly. `save_location` writes it.
+        `dont_save` keeps the call a pure read, which is what a dry run wants
+        (the portal itself sends the call twice: once with the flag to preview,
+        once without to save). Without it noon caches the job description
+        against the role — and nothing else: the location, titles and years it
+        returns are written by step 3, not by this call (a role read back with
+        `preferences.location` still `[]` on 2026-09-22 having been handed a
+        location it quoted back correctly).
         """
-        payload: dict[str, Any] = {
-            "token": self.session.token,
-            "jd": jd,
-            "role": self.role_id,
-            "role_name": self.role_name,
-        }
+        payload: dict[str, Any] = self._with_token(
+            jd=jd, role=self.role_id, role_name=self.role_name
+        )
         if not save:
             payload["dont_save"] = True
         params = await self.session.post("generate_params", payload)
@@ -555,87 +860,139 @@ class SourcingWizard:
             "noon read the job description",
             extra={
                 "role": self.role_id,
-                "titles": len(params.get("titles") or []),
+                "titles": len(as_lines(params.get("titles"))),
                 "must_haves": len(as_lines(params.get("must_haves"))),
                 "nice_to_haves": len(as_lines(params.get("nice_to_haves"))),
+                "location": as_text(params.get("location")),
+                "yoe": as_text(params.get("yoe")),
+                "company_specs": len(as_lines(params.get("company_specs"))),
             },
         )
         return params
-
-    # -- step 3: confirm the criteria noon extracted ----------------------
-    async def save_location(
-        self, role: dict[str, Any], location: list[str]
-    ) -> None:
-        """Write the location onto the role, because nothing else does.
-
-        The wizard's step 3 is "Confirm the search criteria" — the screen where
-        a human accepts the location noon extracted — and it is the one step of
-        the seven whose call was never mapped. So the replay skipped it, and
-        `preferences.location` stayed `[]` from the moment the Create New Role
-        modal wrote it: every role was born searching globally and the run said
-        "Posted" (the 2026-09-22 row).
-
-        `update_role` is the write the modal's own Submit makes, recorded whole
-        in `artifacts/live1/20-after-submit.json` — same four fields, same flat
-        `preferences` block. The block is sent back amended rather than rebuilt,
-        so the keys this code has never heard of (`companyBlacklist`,
-        `managementExp`, the recruiter list) travel untouched; sending a partial
-        block would silently clear them.
-
-        **What is not proven:** no artifact in this repo holds a *populated*
-        `preferences.location`, so whether noon wants the plain strings
-        `generate_params` returns or values resolved through its own location
-        picker is a guess from the empty case. That is why the caller reads the
-        role back and refuses to start the search rather than trusting this.
-        """
-        preferences = role.get("preferences")
-        preferences = dict(preferences) if isinstance(preferences, dict) else {}
-        preferences["location"] = location
-        await self.session.post(
-            "update_role",
-            {
-                "token": self.session.token,
-                "role": self.role_id,
-                # noon's own Submit sends the name alongside; omitting it on a
-                # call that replaces the role's record is not worth the risk.
-                "name": self.role_name,
-                "preferences": preferences,
-            },
-        )
 
     # -- step 2: where to source from -----------------------------------
     async def set_candidate_pool(self) -> None:
         await self.session.post(
             "set_candidate_source",
-            {"token": self.session.token, "role": self.role_id, "source": self.source},
+            self._with_token(role=self.role_id, source=self.source),
         )
 
-    # -- step 3: the criteria, tightened --------------------------------
-    async def generate_criteria(self, must_haves: list[str]) -> list[str]:
-        """Turn the must-haves into the criteria list the next step selects from.
+    # -- step 3: confirm the search criteria ------------------------------
+    async def resolve_companies(self, names: Iterable[str]) -> list[str]:
+        """Example companies, by name, to the noon company ids the role stores.
 
-        The portal warms this up with `setup_clarifying_questions` before asking
-        `gpt_stream` for the criteria, and the answer is one `*` bullet each.
+        One `company_search_by_name` per name - the autocomplete behind the
+        "Example companies" box. A name that does not match a result exactly is
+        reported and left out (`match_company`).
+        """
+        ids: list[str] = []
+        for name in list(dict.fromkeys(n.strip() for n in names if n.strip()))[:MAX_EXAMPLE_COMPANIES]:
+            results = await self.session.post(
+                "company_search_by_name", self._with_token(query=name)
+            )
+            hit = match_company(name, results)
+            if hit is None:
+                self.report.unresolved_companies.append(name)
+                continue
+            ids.append(str(hit.get("id")))
+            self.report.example_companies.append(str(hit.get("name") or name))
+        if self.report.unresolved_companies:
+            self.report.warnings.append(
+                "noon has no company record matching: "
+                + ", ".join(self.report.unresolved_companies)
+                + " - add them by hand in the role's Control Panel if they matter"
+            )
+        return ids
+
+    async def prepare_criteria(self, preferences: dict[str, Any], must_haves: list[str]) -> None:
+        """What the portal sends on arriving at step 3, then on every edit.
+
+        It stages the draft server-side and starts the job-description summary
+        the step-3 save builds on; the summary is polled, bounded, and a slow
+        one is logged rather than fatal.
         """
         await self.session.post(
-            "setup_clarifying_questions",
-            {
-                "token": self.session.token,
-                "role": self.role_id,
-                "must_haves": "\n".join(must_haves),
-            },
+            "prepare_role_preferences",
+            self._with_token(
+                role=self.role_id,
+                preferences=preferences,
+                must_haves="\n".join(must_haves),
+                nice_to_haves="",
+            ),
         )
-        message = "<must_haves>\n{}\n</must_haves>".format("\n".join(must_haves))
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        while loop.time() - started < JD_SUMMARY_WAIT_SECONDS:
+            status = await self.session.post(
+                "role_summarized_jd_finished", self._with_token(role=self.role_id)
+            )
+            if isinstance(status, dict) and status.get("finished"):
+                return
+            await asyncio.sleep(JD_SUMMARY_POLL_SECONDS)
+        log.warning(
+            "noon's job description summary did not finish in time",
+            extra={"role": self.role_id, "waited_seconds": JD_SUMMARY_WAIT_SECONDS},
+        )
+
+    async def confirm_criteria(
+        self,
+        preferences: dict[str, Any],
+        must_haves: list[str],
+        *,
+        client_description: str,
+        requires_visa_sponsorship: Any,
+    ) -> Any:
+        """Step 3's Continue: the whole screen, in the two calls it makes.
+
+        `update_role` is the write that was missing until 2026-10-09. The
+        portal sends the role's name alongside, the preferences block whole,
+        the must-haves (and the emptied nice-to-haves) twice - once as the
+        lists and once as `feedback` - the client's description or name, and
+        noon's own visa reading passed straight back. Its answer carries the
+        client-size band (`company_json`) the rating step is judged against.
+        """
+        joined = "\n".join(must_haves)
+        await self.session.post(
+            "setup_clarifying_questions",
+            self._with_token(role=self.role_id, must_haves=joined),
+        )
+        payload: dict[str, Any] = self._with_token(
+            role=self.role_id,
+            name=self.role_name,
+            preferences=preferences,
+            must_haves=joined,
+            nice_to_haves="",
+            feedback=joined,
+            client_description=client_description or None,
+            client_name=None,
+            client_linkedin_alt=None,
+            requires_visa_sponsorship=requires_visa_sponsorship,
+        )
+        if self.session.user:
+            payload["user"] = self.session.user
+        return await self.session.post("update_role", payload)
+
+    async def generate_criteria(self, must_haves: list[str]) -> list[str]:
+        """Turn the must-haves into the criteria list step 5 selects from.
+
+        The answer is one `*` bullet each. The portal sends the must-haves both
+        inside the `<must_haves>` message and as fields since 2026-10-09;
+        `rerun_prep: false` says step 3's preparation already ran.
+        """
+        joined = "\n".join(must_haves)
         feedback = await self.session.post(
             "gpt_stream",
             {
                 "newdemo": True,
-                "msg": message,
+                "msg": f"<must_haves>\n{joined}\n</must_haves>",
                 "prompt": None,
                 "role": self.role_id,
                 "company": self.session.company,
                 "source": self.source,
                 "v2": True,
+                "rerun_prep": False,
+                "must_haves": joined,
+                "nice_to_haves": "",
             },
         )
         # The portal reads `response.data` straight as text; a JSON wrapper is
@@ -651,9 +1008,60 @@ class SourcingWizard:
             )
         return criteria
 
-    # -- steps 4 and 5: select every criterion, then rank it -------------
+    # -- step 4: the target companies noon proposes -----------------------
+    async def rate_target_companies(
+        self,
+        preferences: dict[str, Any],
+        *,
+        client_description: str,
+        wanted: Iterable[str],
+        employees: tuple[int | None, int | None] | None,
+    ) -> Any:
+        """Rate noon's proposed companies when it asks; None when it does not.
+
+        Returns what `save_company_ratings` answered, which the portal then
+        carries on the autopilot block as `company_ratings`.
+        """
+        cards = await self.session.post(
+            "company_rating_cards",
+            self._with_token(
+                role=self.role_id,
+                preferences=preferences,
+                client_name=None,
+                client_description=client_description or None,
+                client_linkedin_alt=None,
+            ),
+        )
+        if not isinstance(cards, dict) or not cards.get("show") or not cards.get("cards"):
+            return None
+        ratings = rate_company_cards(cards["cards"], wanted=wanted, employees=employees)
+        if not ratings:
+            return None
+        saved = await self.session.post(
+            "save_company_ratings", self._with_token(role=self.role_id, ratings=ratings)
+        )
+        self.report.rated_companies = len(ratings)
+        log.info(
+            "noon target companies rated",
+            extra={
+                "role": self.role_id,
+                "rated": len(ratings),
+                "great": sum(1 for r in ratings if r["rating"] == "great"),
+                "no": sum(1 for r in ratings if r["rating"] == "no"),
+                "reason": str(cards.get("reason") or "")[:120],
+            },
+        )
+        return saved
+
+    # -- step 5: select every criterion ----------------------------------
     async def select_non_negotiables(
-        self, autopilot: dict[str, Any], criteria: list[str]
+        self,
+        autopilot: dict[str, Any],
+        criteria: list[str],
+        *,
+        preferences: dict[str, Any],
+        must_haves: list[str],
+        company_ratings: Any,
     ) -> dict[str, Any]:
         """Star all of them. An unstarred criterion is not applied to anybody.
 
@@ -662,8 +1070,31 @@ class SourcingWizard:
         exists to apply, and it is the reason a run can come back with very few
         candidates. Loosening is a matter of removing criteria in the Control
         Panel afterwards.
+
+        The block also carries, as the portal's does, the step-3 facts the
+        agent reads from here rather than from `preferences`: the company-type
+        chips, the pool, the must-haves, the example companies and the ratings.
+        `enabled` is the agent's on switch - the portal turns it on the moment
+        `Start sourcing` is pressed; held back here when the caller wants the
+        role saved but idle.
         """
+        autopilot["enabled"] = bool(self.start_sourcing)
         autopilot["feedback"] = format_feedback(criteria)
+        autopilot["source"] = self.source
+        autopilot.setdefault("sourcing_type", "recruiting")
+        autopilot["must_haves"] = "\n".join(must_haves)
+        # Emptied rather than dropped: the nice-to-haves are now must-haves, and
+        # leaving the originals behind would have noon score them a second time
+        # as preferences.
+        autopilot["nice_to_haves"] = ""
+        if preferences.get("companySpecs") is not None:
+            autopilot["companySpecs"] = list(preferences.get("companySpecs") or [])
+        autopilot["required_companies_to_source_from"] = list(
+            preferences.get("required_companies_to_source_from") or []
+        )
+        autopilot.setdefault("examples", [""])
+        if company_ratings is not None:
+            autopilot["company_ratings"] = company_ratings
         autopilot.setdefault("calibration_stage", "calibrating")
         autopilot["pending_non_negotiables"] = [
             {"id": f"criterion-{index}", "text": text}
@@ -671,9 +1102,22 @@ class SourcingWizard:
         ]
         await self.session.post(
             "role_autopilot",
-            {"token": self.session.token, "id": self.role_id, "autopilot": autopilot},
+            self._with_token(id=self.role_id, autopilot=autopilot),
         )
         return autopilot
+
+    # -- steps 6 and 7: rank, then the clarifying questions ----------------
+    async def fetch_questions(self, criteria: list[str]) -> dict[str, list[str]]:
+        questions = await self.session.post(
+            "clarifying_questions",
+            self._with_token(role=self.role_id, non_negotiables=list(criteria)),
+        )
+        if not isinstance(questions, dict):
+            return {}
+        return {
+            str(question): [str(option) for option in options] if isinstance(options, list) else []
+            for question, options in questions.items()
+        }
 
     async def rank(self, autopilot: dict[str, Any], criteria: list[str]) -> dict[str, Any]:
         """Order is the ranking: #1 is the criterion noon weighs most heavily.
@@ -683,62 +1127,39 @@ class SourcingWizard:
         """
         autopilot["non_negotiables"] = list(criteria)
         autopilot["use_ordering"] = True
-        await self.session.post(
-            "rank_non_negotiables",
-            {
-                "token": self.session.token,
-                "id": self.role_id,
-                "non_negotiables": list(criteria),
-            },
-        )
         # No token on this one: the portal's save-autopilot call carries only the
         # role and the block, and it is copied as it is rather than improved.
         await self.session.post(
             "role_autopilot",
             {"id": self.role_id, "autopilot": autopilot, "initialization": True},
         )
+        await self.session.post(
+            "rank_non_negotiables",
+            self._with_token(id=self.role_id, non_negotiables=list(criteria)),
+        )
         return autopilot
 
-    # -- step 6: the clarifying questions --------------------------------
-    async def answer_questions(self, criteria: list[str]) -> dict[str, str]:
+    async def answer_questions(self, questions: dict[str, list[str]]) -> dict[str, str]:
         """One strictest-available answer per question; unanswered when unclear."""
-        questions = await self.session.post(
-            "clarifying_questions",
-            {
-                "token": self.session.token,
-                "role": self.role_id,
-                "non_negotiables": list(criteria),
-            },
-        )
-        if not isinstance(questions, dict) or not questions:
-            return {}
-
         answers: dict[str, str] = {}
-        for question, options in questions.items():
-            choices = [str(option) for option in options] if isinstance(options, list) else []
-            answer, why = strictest_answer(str(question), choices)
-            answers[str(question)] = answer
+        for question, choices in questions.items():
+            answer, why = strictest_answer(question, choices)
+            answers[question] = answer
             await self.session.post(
                 "mark_clarifying_question",
-                {
-                    "token": self.session.token,
-                    "role": self.role_id,
-                    "question": question,
-                    "answer": answer,
-                },
+                self._with_token(role=self.role_id, question=question, answer=answer),
             )
             log.info(
                 "clarifying question answered",
                 extra={
                     "role": self.role_id,
-                    "question": str(question)[:90],
+                    "question": question[:90],
                     "answer": answer[:60],
                     "why": why,
                 },
             )
         return answers
 
-    # -- step 7: hand the role to the agent ------------------------------
     async def finish(self, autopilot: dict[str, Any], answers: dict[str, str]) -> None:
         """The call that sets noon searching. Everything before it only saves.
 
@@ -748,6 +1169,7 @@ class SourcingWizard:
         "go", and repeating `true` saves the answers and leaves the role idle.
         """
         autopilot["clarifying_answers"] = answers
+        autopilot["enabled"] = bool(self.start_sourcing)
         await self.session.post(
             "role_autopilot",
             {
@@ -768,22 +1190,64 @@ class RoleMissing(PlatformError):
 
 
 async def fetch_role(
-    session: NoonSession, role_id: str, *, fresh: bool = False
+    session: NoonSession,
+    role_id: str,
+    *,
+    fresh: bool = False,
+    wait_seconds: float = 0.0,
+    poll_seconds: float | None = None,
 ) -> dict[str, Any]:
-    """The role as noon holds it — its autopilot block is what we amend.
+    """The role as noon holds it — its autopilot and preferences are what we amend.
 
-    Scoped by company, and retried through `refetch_roles`: `all_roles` answers
-    from a cache that a role created seconds ago is not in yet, which is exactly
-    the case when the campaign flow has just made one (seen 2026-08-31).
+    Two reads, because neither alone says enough (both recorded 2026-10-09):
 
-    `fresh` reverses that order, for reading back a value we have just written.
-    The cache is only retried *past* here when the role is missing entirely, so
-    a role that is present but stale answers from the cache every time — which
-    made the old read-back unable to tell a failed save from a slow one, and had
-    it report a location as unsaved seconds after saving it.
+    - `poll_role_params {token, role}` is the direct read of one role - its
+      `autopilot` and `preferences` as they are now, from the moment it is
+      created. It is what the portal's own role page polls. It answers 403 for
+      an id noon does not know, and it still answers for a *deleted* role.
+    - `refetch_roles {token, email, company}` is the user's role list. A new
+      role takes minutes to appear in it (every posting run on 2026-10-08
+      missed its own role there; hours later all were listed), but it is the
+      only read that says a role was deleted: the record stays, as a tombstone
+      with `obsolete: true` and nothing else on it. `all_roles` is not asked
+      any more - it answered `[]` for the whole account on 2026-10-08 and again
+      on 2026-10-09.
+
+    So: the direct read is the record; the list is consulted for a tombstone,
+    which raises `RoleMissing` (a delete's read-back). `fresh` is the direct
+    read alone - for reading back a value just written, where the list would
+    only add a scan of 200 roles. `wait_seconds` keeps asking for a role
+    neither read knows yet, polling every `poll_seconds`; the posting run
+    passes NOON_ROLE_WAIT_SECONDS, a delete or a read-back passes nothing and
+    a miss means gone.
     """
+    listing: dict[str, Any] = {"token": session.token}
+    if session.company:
+        listing["company"] = session.company
+    if session.email:
+        listing["email"] = session.email
 
-    def _find(payload: Any) -> dict[str, Any] | None:
+    async def direct() -> dict[str, Any] | None:
+        data = await session.post(
+            "poll_role_params",
+            {"token": session.token, "role": role_id, "check_exhausts": False, "inbound": False},
+            forbidden_ok=True,
+        )
+        if not isinstance(data, dict):
+            return None
+        autopilot, preferences = data.get("autopilot"), data.get("preferences")
+        if not isinstance(autopilot, dict) and not isinstance(preferences, dict):
+            return None
+        preferences = preferences if isinstance(preferences, dict) else {}
+        return {
+            "id": role_id,
+            "name": str(preferences.get("name") or ""),
+            "autopilot": autopilot if isinstance(autopilot, dict) else {},
+            "preferences": preferences,
+        }
+
+    async def listed() -> dict[str, Any] | None:
+        payload = await session.post("refetch_roles", listing)
         roles = payload.get("roles") if isinstance(payload, dict) else payload
         if not isinstance(roles, list):
             return None
@@ -792,21 +1256,52 @@ async def fetch_role(
                 return role
         return None
 
-    body: dict[str, Any] = {"token": session.token}
-    if session.company:
-        body["company"] = session.company
+    def merged(record: dict[str, Any] | None, row: dict[str, Any] | None) -> dict[str, Any]:
+        # The list row carries the name, the creator and the flags; the direct
+        # read carries the blocks as they are now. The blocks win.
+        if row is None:
+            return record or {}
+        if record is None:
+            return row
+        return {**row, "autopilot": record["autopilot"], "preferences": record["preferences"]}
 
-    routes = ("refetch_roles", "all_roles") if fresh else ("all_roles", "refetch_roles")
-    for route in routes:
-        found = _find(await session.post(route, body))
-        if found is not None:
-            return found
-        log.info("role not in list yet", extra={"route": route, "role": role_id})
+    record = await direct()
+    if fresh and record is not None:
+        return record
 
+    row = await listed()
+    if row is not None and row.get("obsolete"):
+        raise RoleMissing(
+            f"noon role {role_id!r} has been deleted (it is listed as obsolete)."
+        )
+    if record is not None or row is not None:
+        return merged(record, row)
+    log.info("role not readable yet", extra={"role": role_id})
+
+    poll = ROLE_POLL_SECONDS if poll_seconds is None else poll_seconds
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while loop.time() - started < wait_seconds:
+        await asyncio.sleep(poll)
+        record = await direct()
+        row = await listed()
+        if row is not None and row.get("obsolete"):
+            raise RoleMissing(
+                f"noon role {role_id!r} has been deleted (it is listed as obsolete)."
+            )
+        if record is not None or row is not None:
+            # The lag is not documented anywhere; the log is how it gets measured.
+            log.info(
+                "role appeared in noon",
+                extra={"role": role_id, "waited_seconds": round(loop.time() - started)},
+            )
+            return merged(record, row)
+
+    waited = f" after waiting {wait_seconds:.0f}s" if wait_seconds else ""
     raise RoleMissing(
-        f"noon has no role {role_id!r} on this account. If it was just created, "
-        "noon's role list had not caught up; run `source --role` again in a "
-        "moment. Otherwise it may have been deleted."
+        f"noon has no role {role_id!r} on this account{waited}. If it was just "
+        "created, noon had not caught up; run `source --role` again in a "
+        "moment. Otherwise it has been deleted."
     )
 
 
@@ -834,7 +1329,9 @@ def _check_preferences(role: dict[str, Any], report: SourcingReport) -> bool:
     Extraction succeeding and the save succeeding are two different things, and
     only the second one decides who gets searched for — so this reads the role
     rather than trusting the write, and its answer is what decides whether the
-    search is allowed to start.
+    search is allowed to start. The title list is `preferences.type` on a real
+    role (recorded 2026-10-09); `titles` is what `generate_params` calls the
+    same thing on the way in.
     """
     preferences = role.get("preferences")
     if not isinstance(preferences, dict):
@@ -848,9 +1345,12 @@ def _check_preferences(role: dict[str, Any], report: SourcingReport) -> bool:
     if saved:
         report.location = saved
 
-    titles = [t for t in as_lines(preferences.get("titles")) if t]
+    titles = [t for t in as_lines(preferences.get("type")) if t]
     if titles:
         report.titles = titles
+    years = as_years(preferences.get("experience"))
+    if years:
+        report.years = years
     # Read off the role rather than off the extraction: a role that already
     # carries titles from an earlier run is not matching on criteria alone,
     # whatever this document's text happened to yield.
@@ -864,6 +1364,7 @@ def _check_preferences(role: dict[str, Any], report: SourcingReport) -> bool:
             "location": report.location,
             "titles": len(report.titles),
             "experience": as_text(preferences.get("experience")),
+            "example_companies": len(preferences.get("required_companies_to_source_from") or []),
         },
     )
     return bool(saved)
@@ -880,6 +1381,8 @@ async def set_up_sourcing(
     dry_run: bool = False,
     targeting: str = "",
     fallback_must_haves: list[str] | None = None,
+    brief: WizardBrief | None = None,
+    role_wait_seconds: float = 0.0,
 ) -> SourcingReport:
     """Take the token off the live portal, then run the wizard."""
     session = await capture_session(page)
@@ -893,6 +1396,8 @@ async def set_up_sourcing(
         dry_run=dry_run,
         targeting=targeting,
         fallback_must_haves=fallback_must_haves,
+        brief=brief,
+        role_wait_seconds=role_wait_seconds,
     )
 
 
@@ -907,6 +1412,8 @@ async def run_wizard(
     dry_run: bool = False,
     targeting: str = "",
     fallback_must_haves: list[str] | None = None,
+    brief: WizardBrief | None = None,
+    role_wait_seconds: float = 0.0,
 ) -> SourcingReport:
     """Run the whole wizard for one role and report what it was told.
 
@@ -924,6 +1431,13 @@ async def run_wizard(
     skills, phrased as requirements by the caller. Before it existed such a
     role failed the whole criteria stage and was left with nothing but its
     title (the 2026-09-28 review).
+
+    `brief` is the rest of what the caller knows (`WizardBrief`): the example
+    companies and client description step 3 asks for, and fallback titles,
+    years and location for when noon extracts none.
+
+    `role_wait_seconds` is how long to wait for a just-created role to appear
+    in noon's role list - see `fetch_role`.
     """
     jd = (job_description or "").strip()
     if not jd:
@@ -933,23 +1447,23 @@ async def run_wizard(
         )
     if targeting.strip():
         jd = f"{targeting.strip()}\n\n{jd}"
+    brief = brief or WizardBrief()
 
     wizard = SourcingWizard(
         session, role_id, role_name, source=source, start_sourcing=start_sourcing
     )
     report = wizard.report
 
+    # -- step 1 --------------------------------------------------------------
     params = await wizard.read_job_description(jd, save=not dry_run)
     must_haves, promoted = tighten(
         params.get("must_haves"), params.get("nice_to_haves")
     )
     report.must_haves = must_haves
     report.promoted = promoted
-    # Kept in the list shape `preferences` stores, because this is what gets
-    # written back — `report.location` is the same value flattened for reading.
-    extracted_location = as_list(params.get("location"))
-    report.location = as_text(params.get("location"))
-    report.titles = [t for t in as_lines(params.get("titles")) if t]
+    report.location = as_text(params.get("location")) or as_text(brief.location)
+    report.titles = [t for t in as_lines(params.get("titles")) if t] or list(brief.titles)
+    report.years = as_years(params.get("yoe")) or brief.years
 
     if not must_haves and fallback_must_haves:
         # noon read nothing out of the text, but the shared profile knows what
@@ -979,8 +1493,9 @@ async def run_wizard(
             _warn_no_titles(report)
         report.warnings.append(
             f"dry run: would set {len(must_haves)} must-have(s) "
-            f"({len(promoted)} promoted from nice-to-haves) and let noon generate "
-            "non-negotiables from them"
+            f"({len(promoted)} promoted from nice-to-haves), "
+            f"{len(brief.example_companies)} example company(ies), and let noon "
+            "generate non-negotiables from them"
         )
         log.info(
             "noon sourcing dry run",
@@ -988,48 +1503,54 @@ async def run_wizard(
         )
         return report
 
-    role = await fetch_role(session, role_id)
+    role = await fetch_role(session, role_id, wait_seconds=role_wait_seconds)
 
-    # The location, written and then read back. Nothing in the wizard's own
-    # calls puts it on the role — the step that would have is the one screen
-    # never mapped — so without this the role keeps the empty location its
-    # creation modal wrote and searches the whole world.
-    if extracted_location:
-        await wizard.save_location(role, extracted_location)
-        # Fresh: `all_roles` serves the copy from before the write, which would
-        # make a save that worked look like one that failed.
-        role = await fetch_role(session, role_id, fresh=True)
+    # -- step 2 --------------------------------------------------------------
+    await wizard.set_candidate_pool()
 
+    # -- step 3 --------------------------------------------------------------
+    # The whole "Confirm the search criteria" screen: noon's extraction where
+    # it has one, the brief where it has not, the example companies resolved to
+    # noon's own company records, then the one write that puts it all on the
+    # role. Until 2026-10-09 this screen was skipped and roles searched the
+    # world on criteria alone.
+    company_ids = await wizard.resolve_companies(brief.example_companies)
+    preferences = build_preferences(
+        role.get("preferences"), params, brief=brief, example_company_ids=company_ids
+    )
+    extracted_location = list(preferences.get("location") or [])
+    description = brief.client_description.strip()
+    report.client_description = description
+
+    await wizard.prepare_criteria(preferences, must_haves)
+    confirmed = await wizard.confirm_criteria(
+        preferences,
+        must_haves,
+        client_description=description,
+        requires_visa_sponsorship=params.get("requires_visa_sponsorship"),
+    )
+
+    # Read back, fresh: `all_roles` would serve the copy from before the write,
+    # which would make a save that worked look like one that failed.
+    role = await fetch_role(session, role_id, fresh=True)
     located = _check_preferences(role, report)
-    # Only when there was nothing to save. A location that was extracted and
-    # would not stick is a different failure, and gets its own louder line
-    # below rather than one claiming noon never read one.
     if not located and not extracted_location:
         _warn_no_location(report, targeting=targeting)
-    autopilot = role.get("autopilot")
-    autopilot = dict(autopilot) if isinstance(autopilot, dict) else {}
-    autopilot["source"] = wizard.source
-    autopilot["must_haves"] = "\n".join(must_haves)
-    # Emptied rather than dropped: the nice-to-haves are now must-haves, and
-    # leaving the originals behind would have noon score them a second time as
-    # preferences.
-    autopilot["nice_to_haves"] = ""
 
-    await wizard.set_candidate_pool()
     criteria = await wizard.generate_criteria(must_haves)
     report.non_negotiables = criteria
 
-    autopilot = await wizard.select_non_negotiables(autopilot, criteria)
-    autopilot = await wizard.rank(autopilot, criteria)
+    # -- step 4 --------------------------------------------------------------
+    company_ratings = await wizard.rate_target_companies(
+        preferences,
+        client_description=description,
+        wanted=brief.example_companies,
+        employees=employee_band(confirmed),
+    )
 
-    answers = await wizard.answer_questions(criteria)
-    report.answers = answers
-    skipped = [q for q, a in answers.items() if a == SKIP]
-    if skipped:
-        report.warnings.append(
-            f"{len(skipped)} clarifying question(s) left unanswered - no option "
-            "was clearly the stricter one; answer them in noon if they matter"
-        )
+    # -- steps 5 to 7 --------------------------------------------------------
+    autopilot = role.get("autopilot")
+    autopilot = dict(autopilot) if isinstance(autopilot, dict) else {}
 
     # A search with no location is not a footnote on a successful run: every
     # candidate it returns comes from the wrong pool, and a shortlist that looks
@@ -1047,6 +1568,25 @@ async def run_wizard(
             "noon, set the location in the Control Panel, and press Start."
         )
 
+    autopilot = await wizard.select_non_negotiables(
+        autopilot,
+        criteria,
+        preferences=preferences,
+        must_haves=must_haves,
+        company_ratings=company_ratings,
+    )
+    questions = await wizard.fetch_questions(criteria)
+    autopilot = await wizard.rank(autopilot, criteria)
+
+    answers = await wizard.answer_questions(questions)
+    report.answers = answers
+    skipped = [q for q, a in answers.items() if a == SKIP]
+    if skipped:
+        report.warnings.append(
+            f"{len(skipped)} clarifying question(s) left unanswered - no option "
+            "was clearly the stricter one; answer them in noon if they matter"
+        )
+
     await wizard.finish(autopilot, answers)
     report.started_sourcing = wizard.start_sourcing
 
@@ -1058,7 +1598,9 @@ async def run_wizard(
             "promoted": len(promoted),
             "non_negotiables": len(criteria),
             "questions": len(answers),
-            "started": start_sourcing,
+            "example_companies": len(report.example_companies),
+            "rated": report.rated_companies,
+            "started": report.started_sourcing,
         },
     )
     return report

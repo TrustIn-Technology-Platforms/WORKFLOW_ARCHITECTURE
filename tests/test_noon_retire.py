@@ -28,20 +28,25 @@ def test_the_summary_says_what_happened():
 class _Session:
     token = "tok"
     company = "co"
+    email = "me@x"
 
     def __init__(self, role):
         self.role = role
         self.calls: list[tuple[str, dict]] = []
         self.deleted = False
 
-    async def post(self, path, payload):
+    async def post(self, path, payload, *, forbidden_ok=False):
         self.calls.append((path, payload))
         if path == "role_autopilot":
             self.role["autopilot"] = dict(payload["autopilot"])
         if path == "delete_role":
             self.deleted = True
-        if path in ("all_roles", "refetch_roles"):
-            return [] if self.deleted else [self.role]
+        if path == "poll_role_params":
+            # The direct read keeps answering for a deleted role (2026-10-09);
+            # only the list says it is gone, as a tombstone.
+            return {"autopilot": dict(self.role["autopilot"]), "preferences": {}}
+        if path == "refetch_roles":
+            return [{"obsolete": True, "id": self.role["id"]}] if self.deleted else [self.role]
         return {}
 
 
@@ -56,7 +61,7 @@ def test_retire_stops_then_deletes_through_the_portals_own_calls(monkeypatch):
     report = asyncio.run(retire_role(object(), "r1", delete=True, dry_run=False))
 
     paths = [c[0] for c in session.calls]
-    assert paths[:1] == ["all_roles"]
+    assert paths[:2] == ["poll_role_params", "refetch_roles"]
     stop = next(c for c in session.calls if c[0] == "role_autopilot")
     assert stop[1] == {"id": "r1", "autopilot": {"enabled": False, "feedback": ""}}
     assert "token" not in stop[1]
@@ -74,5 +79,5 @@ def test_a_dry_run_only_reads(monkeypatch):
 
     monkeypatch.setattr("app.platforms.noon_retire.capture_session", fake_capture)
     report = asyncio.run(retire_role(object(), "r1", delete=True, dry_run=True))
-    assert {c[0] for c in session.calls} <= {"all_roles", "refetch_roles"}
+    assert {c[0] for c in session.calls} <= {"poll_role_params", "refetch_roles"}
     assert report.sourcing_was_enabled is False and not report.deleted

@@ -13,6 +13,9 @@
 #     So the only place a dry run can stop is before the role is created -
 #     which is where `submit: true` sits. A dry run therefore proves login,
 #     navigation and the modal, nothing more.
+#   - A fresh role has NO campaign card until its sourcing wizard is done
+#     (noon's 2026-10 redesign). The driver runs that wizard between the
+#     role_id capture and the "Review & Contact" wait below.
 #   - The document's emails are mapped onto FIXED slots in Nicholas's template
 #     (connection request -> email -> email same-thread -> InMail -> email
 #     same-thread), not one step per email. A document with fewer than three
@@ -25,9 +28,11 @@ key: noon
 label: noon.ai
 kind: email_sequence
 enabled: true           # proven: `post noon --live` reproduced the hand-driven campaign on a throwaway role, 2026-08-27
-# The steps below still run exactly as they did; the driver adds the second
-# half of a role - its sourcing criteria - after them, when NOON_SOURCING is on.
-# See app/platforms/noon.py and docs/platforms/noon.md#the-sourcing-wizard.
+# The driver runs these steps with one interruption: once the role's id has
+# been captured it sets the role's sourcing criteria through noon's API, then
+# the steps resume on the campaign. The order is noon's - the campaign editor
+# is only reachable once sourcing is set up (2026-10-09). See
+# app/platforms/noon.py and docs/platforms/noon.md#the-sourcing-wizard.
 driver: noon
 
 login:
@@ -98,6 +103,24 @@ steps:
     selector: "[placeholder^='Search existing ATS roles']"
     value: "{{ role_name }}"
 
+  - action: wait_for
+    description: >-
+      the ATS lookup behind the name box has settled. The modal loads Loxo's
+      roles (`get_role_names`, ~5s) when it opens and filters them as you type;
+      a Submit clicked while that is still loading leaves the modal on
+      "Creating role..." for ever and never sends create_role - both live
+      runs on 2026-10-09 died that way, where a hand-driven run that paused
+      before Submit went through. Settled looks like "No matching ATS roles"
+      (with its "Refresh list"), or a list of ATS roles ("Opened <month>").
+    selector:
+      - "text='No matching ATS roles'"
+      - "text='Refresh list'"
+      - "button:has-text('Opened')"
+    timeout_ms: 45000
+
+  - action: wait
+    ms: 1500
+
   - action: dismiss
     description: >-
       the "Chrome extension not detected" toast. It sits over the bottom of the
@@ -109,7 +132,15 @@ steps:
       Scoped to the toast on purpose. A bare [aria-label='Close'] closes the
       Create New Role modal instead - it carries one too, earlier in the DOM,
       and action_dismiss swallows whatever it hits.
+
+      The toast's close control is a bare svg at its top-right corner
+      (`svg.absolute.cursor-pointer`, read off the live markup 2026-10-09);
+      its only button-like thing is the "Download" div, which is not a
+      <button> either, so the two older candidates match nothing and the
+      step was a no-op. Harmless in practice - the toast sits bottom-right,
+      the modal's Submit in the middle - but the svg is what actually closes it.
     selector:
+      - "[direction=up] >> svg.cursor-pointer"
       - "[direction=up] button"
       - "div:has-text('Chrome extension not detected') >> nth=-1 >> button"
 
@@ -155,10 +186,16 @@ steps:
     # tests/test_noon_role_modal.py holds both halves of that measurement.
     submit: true
 
-  - action: wait_for
-    description: the role page - no wizard, it lands straight here
-    selector: "text='Review & Contact'"
-    timeout_ms: 40000
+  - action: wait_for_url
+    description: >-
+      the role's own page, /portal/sourcing?role=<uuid>. Since noon's 2026-10
+      redesign a fresh role shows nothing but "Start sourcing" - the stage
+      cards, "Review & Contact" among them, only render once the sourcing
+      wizard has been completed - so the URL is what says the role exists.
+      Creation is four server writes behind a "Creating role..." spinner, and
+      on 2026-10-09 the first live run sat on that spinner for over 40s.
+    pattern: "role=[0-9a-fA-F-]{36}"
+    timeout_ms: 120000
 
   - action: capture_url
     description: /portal/sourcing?role=<uuid>
@@ -169,12 +206,25 @@ steps:
       the role's own uuid. The final capture_url overwrites post_url with the
       project page, and the sourcing wizard is keyed on the role, so keep it
       separately here while it is still on screen.
+
+      THE DRIVER PAUSES HERE. app/platforms/noon.py runs the sourcing wizard
+      through noon's API as soon as this capture lands (RecipeEngine.run's
+      `after_capture="role_id"`), then reloads the role page - which is what
+      makes the card the next step waits for appear.
     as: role_id
     pattern: "(?<=role=)[0-9a-fA-F-]{36}"
 
   # -------------------------------------------------------------------------
   # 2. Open the campaign editor and import the shared template
   # -------------------------------------------------------------------------
+  - action: wait_for
+    description: >-
+      the stage cards, which exist only once sourcing is set up. A miss here
+      means the wizard did not complete; the driver raises before this step
+      in that case, so this is the belt to its braces.
+    selector: "text='Review & Contact'"
+    timeout_ms: 60000
+
   - action: click
     selector: "text='Review & Contact'"
 

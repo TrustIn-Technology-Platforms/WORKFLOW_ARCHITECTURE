@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from app.config import Settings, get_settings
 from app.logging_conf import get_logger
@@ -178,12 +178,29 @@ class RecipeEngine:
         self.report = RunReport()
 
     async def run(
-        self, document: ParsedDocument, row: NotionRow | None = None
+        self,
+        document: ParsedDocument,
+        row: NotionRow | None = None,
+        *,
+        after_capture: str | None = None,
+        interlude: Callable[[RunReport], Awaitable[None]] | None = None,
     ) -> RunReport:
+        """Run the recipe. `interlude` runs right after the `capture_url` step
+        that stores `after_capture`, in whichever phase it sits, before the
+        step that follows it.
+
+        A driver uses it for work the page cannot express as steps but that
+        has to happen in the middle of them: noon's sourcing wizard sits
+        between creating the role and opening its campaign editor, because
+        the editor's card only renders once sourcing is set up (2026-10-09).
+        A dry run never reaches it - it stops at the submit step before.
+        """
         context = build_context(document, row, self.recipe.defaults, self.recipe.key)
 
         try:
-            await self._run_phase(self.recipe.steps, context)
+            await self._run_phase(
+                self.recipe.steps, context, after_capture=after_capture, interlude=interlude
+            )
 
             if self.recipe.kind == "email_sequence":
                 emails = sorted(document.emails, key=lambda e: e.order)
@@ -194,7 +211,10 @@ class RecipeEngine:
                     )
                 for email in emails:
                     await self._run_phase(
-                        self.recipe.per_email, {**context, "email": email.as_context()}
+                        self.recipe.per_email,
+                        {**context, "email": email.as_context()},
+                        after_capture=after_capture,
+                        interlude=interlude,
                     )
                     self.report.emails_written += 1
                     log.info(
@@ -206,7 +226,9 @@ class RecipeEngine:
                         },
                     )
 
-            await self._run_phase(self.recipe.finalise, context)
+            await self._run_phase(
+                self.recipe.finalise, context, after_capture=after_capture, interlude=interlude
+            )
         except _StopRun:
             # A dry run stopped at the submit. Everything after it exists to
             # confirm or read back a post that was never made, so running those
@@ -231,9 +253,24 @@ class RecipeEngine:
             await self._run_step(step, context() if callable(context) else context)
         return self.report
 
-    async def _run_phase(self, steps: list[Step], context: dict[str, Any]) -> None:
+    async def _run_phase(
+        self,
+        steps: list[Step],
+        context: dict[str, Any],
+        *,
+        after_capture: str | None = None,
+        interlude: Callable[[RunReport], Awaitable[None]] | None = None,
+    ) -> None:
         for step in steps:
             await self._run_step(step, context)
+            if (
+                interlude is not None
+                and step.action == "capture_url"
+                and after_capture
+                and step.params.get("as") == after_capture
+                and after_capture in self.report.captures
+            ):
+                await interlude(self.report)
 
     async def _run_step(self, step: Step, context: dict[str, Any]) -> None:
         spec = ACTIONS[step.action]

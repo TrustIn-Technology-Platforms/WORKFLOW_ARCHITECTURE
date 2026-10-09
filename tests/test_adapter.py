@@ -37,8 +37,8 @@ def _emails_only() -> ParsedDocument:
 
 
 def test_a_platform_whose_delete_is_not_written_says_so_without_a_browser():
-    """Wellfound (and Loxo, until its delete is mapped) must not read as
-    deleted: the row's Error names what to delete by hand."""
+    """A recipe with no driver has no delete (every delete is a driver's) and
+    must not read as deleted: the row's Error names what to delete by hand."""
     adapter = RecipeAdapter(_advert_recipe(), settings=Settings())
 
     result = asyncio.run(adapter.delete([{"post_url": "https://wellfound.com/recruit/jobs/1"}]))

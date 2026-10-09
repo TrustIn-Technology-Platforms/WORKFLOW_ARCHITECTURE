@@ -19,6 +19,10 @@ key: wellfound
 label: Wellfound
 kind: advert
 enabled: true
+# The steps below still post. The driver (app/platforms/wellfound.py) runs
+# them unchanged and adds what YAML cannot say: the records a delete needs,
+# and the delete itself (DestroyJobListing, 2026-10-09).
+driver: wellfound
 
 login:
   # The recruiter Jobs page, not /login. Logged out it bounces to

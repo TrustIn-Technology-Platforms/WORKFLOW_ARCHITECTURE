@@ -235,10 +235,17 @@ python -m app.cli ledger --open                          # what each row created
 python -m app.cli delete-row --page <notion url>         # dry run: finds, changes nothing
 python -m app.cli delete-row --page <notion url> --live --headed
 python -m app.cli delete juicebox --record sequence=<id> --live   # one platform, no row
+python -m app.cli delete loxo --record campaign=<url> --record campaign_created=yes \
+    --record "campaign_name=<name>"                              # dry run reads the name back; add --live
+python -m app.cli delete wellfound --record job=<url> --record "job_title=<title>"   # same, for a draft
 ```
 
-Loxo and Wellfound deletes are not mapped yet; a row that posted there reads
-`Failed` with the link to remove by hand.
+Every platform's delete is now written (2026-10-09). Two are not yet proven
+live: Loxo's `destroyCampaign` call has never been sent, and Wellfound's
+`DestroyJobListing` was mapped from the app's bundle with no session to open
+the screen - prove each on a ZZ TEST record first
+([loxo](platforms/loxo.md#deleting-a-row-2026-10-09),
+[wellfound](platforms/wellfound.md#deleting-a-row-2026-10-09)).
 
 ## Deployment (Railway)
 

@@ -47,10 +47,11 @@ decide the pool.
 
 | | Written | Proven live | Notes |
 |---|---|---|---|
-| noon must-haves (nice-to-haves promoted) | yes | 2026-08-31 | role `ZZ TEST - Senior Recruitment Consultant` |
-| noon non-negotiables, all starred and ranked | yes | 2026-08-31 | deliberately tighter than noon's "3 or fewer" advice |
-| noon clarifying answers, strictest option | yes | 2026-08-31 | unclear ones left on noon's `SKIP` |
-| noon location / titles / seniority | **yes** | not yet | **gap 1 — reopened 2026-09-22** (the preamble alone never saved the location); explicit `update_role` write + guard built, one live run away from proven |
+| noon must-haves (nice-to-haves promoted) | yes | 2026-08-31, again 2026-10-09 | role `61916844-…` (`ZZ TEST - Founding Platform Engineer - SF`): 15 must-haves, 12 promoted |
+| noon non-negotiables, all starred and ranked | yes | 2026-08-31, again 2026-10-09 | deliberately tighter than noon's "3 or fewer" advice |
+| noon clarifying answers, strictest option | yes | 2026-08-31, again 2026-10-09 | unclear ones left on noon's `SKIP`; noon's "hard filter / strong plus" wording now recognised |
+| noon location / titles / years / company chips | **yes** | **2026-10-09** | **gap 1 — closed.** The full step-3 `update_role` writes `location`, `type` (titles), `experience`, `companySpecs`; read back through `poll_role_params` as San Francisco, 7 titles, 5–20 years |
+| noon example companies + target-company ratings | **yes** | **2026-10-09** | the profile's companies resolved to noon ids (`required_companies_to_source_from`, 11 of 12 matched), noon's 9 proposed companies rated great / okay / no — [platforms/noon](platforms/noon.md#the-seven-screens-2026-10-09) |
 | Loxo Skill DNA, nice-to-haves promoted | yes | 2026-08-31 | job 3640874, read back through `jobDetail` |
 | Loxo empty buckets drafted from the advert | yes | 2026-08-31 | `criteria_ai.py`, Claude Opus 5 |
 | Loxo Source titles / skills | yes | 2026-09-02 | job 3658508, saved search reloaded chip-for-chip; again from Railway on the Axle row |
@@ -168,14 +169,15 @@ therefore searched globally and the criteria did the geography badly, if at all.
    quieter, not louder: `noon.py` catches one into a warning and the row still
    reads Posted, having already started the search.
 
-**Still to do.** The element shape of a *populated* `preferences.location` has
-never been recorded — every noon artifact here shows `[]` — so whether
-`update_role` accepts the plain strings `generate_params` returns or wants
-values resolved through noon's own location picker is a guess from the empty
-case. One Control Panel probe with the network tab recording settles it, and one
-`source --live --headed` run on a throwaway role proves the write sticks. The
-guard in (3) is what makes a wrong guess safe in the meantime: the failure is a
-role that did not start, not a shortlist from the wrong continent.
+**Closed 2026-10-09.** The live wizard was recorded: `update_role` takes the
+plain strings `generate_params` returns (`"location": ["San Francisco"]`), and
+the same call carries the titles (as `type`, not `titles`), the years band
+(`experience`), the company-type chips (`companySpecs`) and the example
+companies (`required_companies_to_source_from`) — the whole of the wizard's
+third screen, which the replay had been skipping. `post noon --live --headed`
+on the ZZ TEST document wrote them and read them back through
+`poll_role_params`. The guard in (3) stands and has not fired since. See
+[platforms/noon](platforms/noon.md#the-sourcing-wizard).
 
 ### 2. Loxo's Longlist Agent has no titles and no skills
 
@@ -444,7 +446,7 @@ platform.
 |---|------|-------|
 | 1 | `Client JD` in the parser, `job_description` on `ParsedDocument`, fallback to the advert | **done** — `parser.py`, 11 tests |
 | 2 | Point noon, Loxo and Juicebox criteria at `job_description` | **done** — `noon.py`, `loxo.py`, `juicebox.py`, and the three CLI commands |
-| 3 | Set noon's location from the row, and check it landed | **done in code** — `targeting_preamble`, `_check_preferences`; needs one live run |
+| 3 | Set noon's location from the row, and check it landed | **done, proven live 2026-10-09** — the full step-3 `update_role` (location, titles, years, chips, example companies) and a direct read-back through `poll_role_params` |
 | 4 | Probe Loxo's Longlist Agent panel; write similar titles and skills | **probe written**, needs a live session; writer unbuilt |
 | 5 | Map Wellfound's Skills field | **done** — `skills.py`, `wellfound.yaml`; drafting proven live 2026-09-01 |
 | 6 | One shared sourcing profile: deep two-tier skills, composed JD, boolean string, saved and reused | **done in code 2026-09-28** — `sourcing_profile.py`, D-024; needs the same live runs as 3 |
@@ -457,9 +459,12 @@ now proves the key and the model before a run depends on them.
 So what is left is not code but two live sessions at a keyboard, both of which
 need a person because both platforms sign in through SSO:
 
-1. `python -m app.cli source --role <uuid> --doc <file> --live --headed`
-   `--set 'Location=<city>'` on a throwaway noon role, to confirm the preamble
-   sets `preferences.location`. The `--set` matters: run from a file alone
-   there is no row to read the location off, and the run proves nothing.
+1. ~~One supervised noon run.~~ **Done 2026-10-09**: `post noon --doc "ZZ TEST
+   - Founding Platform Engineer - SF.docx" --live --headed --set
+   "Location=San Francisco"` created the role, ran the wizard and saved the
+   campaign; everything read back. What it also found: noon's redesigned
+   portal gates the campaign editor behind the wizard, so the order is now
+   role → wizard → campaign, and the wizard's third screen is the whole
+   search spec ([D-028](11-decisions.md#d-028--noons-sourcing-wizard-runs-before-its-campaign-and-cannot-be-skipped)).
 2. `python scripts/probe_loxo_longlist.py --job <id>` on a real Loxo job, to
    map the Longlist Agent. Read-only — it saves nothing.

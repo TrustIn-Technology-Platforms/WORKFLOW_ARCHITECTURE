@@ -84,15 +84,15 @@ The posting half runs in production. The sourcing half is now code-complete
 except for one surface, and what is left needs a person at a keyboard because
 both platforms sign in through SSO:
 
-1. **One supervised noon run.** `python -m app.cli source --role <uuid> --doc
-   <file> --live --headed --set 'Location=<city>'` on a throwaway role, to
-   confirm the targeting preamble sets `preferences.location`. Since
-   2026-09-07 the location is drafted from the Client JD (where the candidate
-   must be) and the row's `Location` only fills the gap, so keep the `--set`
-   for a document whose JD names no place. Read
-   [docs/platforms/noon.md](docs/platforms/noon.md#the-live-run-2026-08-27)
-   first — the editor autosaves, so there is no harmless dry run past role
-   creation.
+1. ~~One supervised noon run.~~ **Done 2026-10-09.** noon's redesigned
+   portal only shows the campaign editor once the sourcing wizard is complete,
+   so a noon post is now role → wizard → campaign, the wizard writes the whole
+   search spec, and sourcing cannot be switched off for noon
+   ([D-028](docs/11-decisions.md), [docs/platforms/noon.md](docs/platforms/noon.md#the-sourcing-wizard)).
+   Every production noon post since the redesign had failed; the fix is on
+   this branch, undeployed. Three `ZZ TEST` noon roles from the proof are
+   waiting for `delete noon --record role=<id> --live` (listed in
+   [docs/platforms/noon.md](docs/platforms/noon.md#open-questions)).
 2. **One read-only Loxo probe.** `python scripts/probe_loxo_longlist.py --job
    <id>` maps the Longlist Agent's similar titles and skills, the last surface
    the automation has never opened. It saves nothing. Record what it finds in

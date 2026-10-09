@@ -177,6 +177,12 @@ class Settings(BaseSettings):
     # Send the wizard's final call, the one that sets the agent searching. Off
     # leaves the criteria saved and the role idle for a recruiter to start.
     noon_start_sourcing: bool = True
+    # How long the sourcing step keeps asking noon for the role the campaign
+    # flow has just created. noon lists a new role late: on 2026-10-08 every
+    # posting run looked for its role about a minute after creating it, found
+    # nothing, and left the criteria unset - yet all six were listed hours
+    # later. Zero means one look at each list and no waiting.
+    noon_role_wait_seconds: float = 240.0
 
     # --- criteria drafting --------------------------------------------------
     # A platform's own generator (Loxo's "Write with AI") does not always fill

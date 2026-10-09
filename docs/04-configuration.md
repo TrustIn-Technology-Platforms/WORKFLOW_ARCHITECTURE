@@ -107,9 +107,10 @@ everywhere, so a Notion row that posts also gets its sourcing set up.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `CRITERIA_ENABLED` | `true` | Set each platform's sourcing criteria from the advert as part of posting. `post <platform> --no-sourcing` turns it off for one run. |
+| `CRITERIA_ENABLED` | `true` | Set each platform's sourcing criteria from the advert as part of posting. `post <platform> --no-sourcing` turns it off for one run — except for noon, whose campaign editor only opens once its sourcing wizard is done, so a noon post with it off is refused with a message saying why ([D-028](11-decisions.md#d-028--noons-sourcing-wizard-runs-before-its-campaign-and-cannot-be-skipped)). |
 | `NOON_SOURCING_SOURCE` | `public` | Which pool noon searches: `public` (Entire Internet), `ats`, or `inbound`. |
 | `NOON_START_SOURCING` | `true` | Send noon's final call — the one that sets its agent searching. `false` leaves the criteria saved and the role idle. |
+| `NOON_ROLE_WAIT_SECONDS` | `240` | How long the sourcing step keeps asking noon for the role the campaign flow has just created. noon lists a new role late; on 2026-10-08 a minute was not enough on any run, and the criteria were left unset. Raise it if rows still say "noon has no role … after waiting". |
 
 ## Criteria drafting
 

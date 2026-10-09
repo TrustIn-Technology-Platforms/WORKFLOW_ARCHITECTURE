@@ -28,7 +28,7 @@ instead of `steps`. `get_adapter` then hands the recipe to that named driver, a
 subclass of `RecipeAdapter` that overrides `_drive` (and, if the app is
 awkward about it, `_assert_logged_in`) while inheriting all the session, login
 and failure-artifact handling. Load-time validation skips the step-shape rules
-for a driver recipe, since the flow lives in Python. Three exist:
+for a driver recipe, since the flow lives in Python. Four exist:
 
 - **Juicebox** ([juicebox.py](../app/platforms/juicebox.py)) — its editor is
   TinyMCE inside an iframe, driven through its own JS API.
@@ -36,15 +36,28 @@ for a driver recipe, since the flow lives in Python. Three exist:
 - **Loxo** ([loxo.py](../app/platforms/loxo.py)) — stages are grown one modal at
   a time, and threading is a per-stage toggle set only once a stage exists.
   [platforms/loxo](platforms/loxo.md)
-- **noon** ([noon.py](../app/platforms/noon.py)) — the only one that keeps its
-  YAML steps. The driver runs them for the campaign exactly as before, then adds
-  the role's sourcing criteria, which are set through noon's API rather than its
-  wizard. [platforms/noon](platforms/noon.md#the-sourcing-wizard),
-  [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom)
+- **noon** ([noon.py](../app/platforms/noon.py)) — keeps its YAML steps and
+  interrupts them once: as soon as the step that captures the new role's id
+  has run, the driver sets the role's sourcing criteria through noon's API
+  (the `Start sourcing` wizard, replayed), reloads the page, and the steps
+  resume on the campaign — noon's portal only shows the campaign editor once
+  the wizard is done. [platforms/noon](platforms/noon.md#the-sourcing-wizard),
+  [D-017](11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom),
+  [D-028](11-decisions.md#d-028--noons-sourcing-wizard-runs-before-its-campaign-and-cannot-be-skipped)
+- **Wellfound** ([wellfound.py](../app/platforms/wellfound.py)) — also keeps
+  its YAML steps, which post the draft exactly as before; the driver only adds
+  the records a delete needs and the delete itself (`DestroyJobListing`,
+  2026-10-09). [platforms/wellfound](platforms/wellfound.md#deleting-a-row-2026-10-09)
 
 A driver that keeps its `steps` is worth calling out: `_drive` can run
 `RecipeEngine` itself and add work around it, so a proven recipe does not have to
-be rewritten in Python to gain one extra stage.
+be rewritten in Python to gain one extra stage. Work that has to happen *in the
+middle* of the steps goes through `RecipeEngine.run(document, row,
+after_capture="<name>", interlude=<coroutine>)`: the engine awaits the
+coroutine with the `RunReport` right after the `capture_url` step that stored
+`<name>`, in whichever phase it sits, then carries on with the next step. A dry
+run never reaches it, because the capture sits past the submit step where a
+dry run stops. noon is the one user (2026-10-09).
 
 ## File layout
 

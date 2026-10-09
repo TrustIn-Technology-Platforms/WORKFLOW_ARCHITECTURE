@@ -113,6 +113,49 @@ _JOB_ROWS = r"""(company) => {
 class LoxoAdapter(RecipeAdapter):
     """Create (or update) a Loxo Outreach campaign from a document's emails."""
 
+    supports_delete = True
+
+    # ------------------------------------------------------------------
+    # delete
+    # ------------------------------------------------------------------
+    async def _delete(
+        self, page: "Page", records: list[dict[str, str]], *, row_title: str
+    ) -> tuple[bool, list[str]]:
+        """Delete each post's campaign through Loxo's own `destroyCampaign`
+        (loxo_delete), after reading it back and checking the run made it.
+
+        The job's Skill DNA and Source search are not touched: both were
+        written onto a job the recruiters made, which the row never owned.
+        """
+        from app.platforms.loxo_delete import campaign_id_from, capture_session, delete_campaign
+
+        agency_id = str(self.recipe.defaults.get("agency_id", "28356"))
+        done, notes = True, []
+        # Once for the whole delete: the CSRF token is the page's and does not
+        # change between campaigns.
+        session = await capture_session(page, agency_id=agency_id)
+        for record in records:
+            if not campaign_id_from(record.get("campaign") or record.get("post_url")):
+                done = False
+                notes.append(
+                    "a post left no campaign id to delete by - find the campaign in "
+                    f"Loxo's Outreach list and delete it by hand ({record.get('post_url') or 'no link'})"
+                )
+                continue
+            report = await delete_campaign(
+                page, record, agency_id=agency_id, dry_run=self.dry_run, session=session
+            )
+            notes.append(report.summary)
+            # Every warning, live runs included: "already gone" is the one
+            # correction a recruiter must see beside a summary that reads as
+            # though this run deleted something a person had removed by hand.
+            notes.extend(report.warnings)
+            if not self.dry_run and not report.complete:
+                done = False
+            elif self.dry_run and report.refused:
+                done = False
+        return done, notes
+
     # ------------------------------------------------------------------
     # login
     # ------------------------------------------------------------------
@@ -411,9 +454,12 @@ class LoxoAdapter(RecipeAdapter):
 
         report.captures["post_url"] = campaign_url or _clean_campaign_url(page.url)
         # For deleting the row later. Whether this run made the campaign is
-        # kept too: one found by name may be a recruiter's own.
+        # kept too: one found by name may be a recruiter's own, and the delete
+        # leaves it alone. The name lets the delete read the campaign back and
+        # refuse an id that no longer points at what was posted.
         report.records["campaign"] = report.captures["post_url"]
         report.records["campaign_created"] = "no" if existing else "yes"
+        report.records["campaign_name"] = name
 
         # Guard: never edit a campaign whose title is not the one we intend. The
         # header renders the name as text once the editor is loaded.

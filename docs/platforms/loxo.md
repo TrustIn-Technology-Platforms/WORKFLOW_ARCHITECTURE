@@ -2,7 +2,7 @@
 
 > **Purpose** What Loxo offers as a posting target, and which half needs a browser.
 > **Audience** Whoever writes the Loxo adapter and finishes `platforms/loxo.yaml`.
-> **Status** **LIVE — driver built and verified 2026-08-28.** [app/platforms/loxo.py](../../app/platforms/loxo.py) (`LoxoAdapter`) drives the outreach half end to end via the saved profile: `post loxo --doc <file> --live` does create-or-find → rename → three stages → No delay / 3 day / 3 day → reply-in-thread on the follow-ups → signature appended, leaving the campaign OFF with 0 prospects. `platforms/loxo.yaml` is `enabled: true`, `driver: loxo`. The earlier scratch scripts (see [The live run](#the-live-run-2026-08-27)) were ported into this driver. Known limit: re-posting an already-populated campaign is **skipped, not replaced**. The **job** half (Open API) is still unbuilt — needs a key.
+> **Status** **LIVE — driver built and verified 2026-08-28.** [app/platforms/loxo.py](../../app/platforms/loxo.py) (`LoxoAdapter`) drives the outreach half end to end via the saved profile: `post loxo --doc <file> --live` does create-or-find → rename → three stages → No delay / 3 day / 3 day → reply-in-thread on the follow-ups → signature appended, leaving the campaign OFF with 0 prospects. `platforms/loxo.yaml` is `enabled: true`, `driver: loxo`. The earlier scratch scripts (see [The live run](#the-live-run-2026-08-27)) were ported into this driver. Known limit: re-posting an already-populated campaign is **skipped, not replaced**. The **job** half (Open API) is still unbuilt — needs a key. **Delete built 2026-10-09** ([Deleting a row](#deleting-a-row-2026-10-09)): the list read-back is proven live, the `destroyCampaign` call still wants one ZZ TEST run.
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md) · [11-decisions](../11-decisions.md)
 
 | | |
@@ -584,6 +584,7 @@ Two things the run settled that the docs did not know:
 - [ ] What does *Browse templates* offer, and does *Save as template...* on 693495 give the recruiter the template they want?
 - [ ] **Which GraphQL mutation saves the Longlist Agent's similar titles and skills, and are those fields free text or taxonomy lookups?** `scripts/probe_loxo_longlist.py` answers this in one session.
 - [ ] Does Loxo bind a session to one device, or rotate the id on each use? Either explains the 2026-09-02 logout; only a deliberate two-machine test tells them apart.
+- [ ] How long is "deleted shortly" after `destroyCampaign`, and does a campaign with prospects stop sending at once? The read-back waits two minutes; the first live delete says whether that is enough.
 
 ## Next
 
@@ -599,6 +600,53 @@ Two things the run settled that the docs did not know:
    `python -m app.cli loxo-source --job 3658508 --doc <file> --location "New
    York" --live --headed`. Correct the bundle-derived section above from what
    the screen shows, and push the fresh session to Railway afterwards.
+6. **Prove the delete on a ZZ TEST campaign** (see
+   [Deleting a row](#deleting-a-row-2026-10-09)): post the ZZ TEST document,
+   dry-run `delete loxo` on the records the post prints, read the name back,
+   then `--live`. Record how long Loxo took to drop it from the list.
+
+## Deleting a row (2026-10-09)
+
+> **Status** **BUILT; read-back PROVEN LIVE; the delete call NOT YET SENT.**
+> [app/platforms/loxo_delete.py](../../app/platforms/loxo_delete.py), wired
+> into `LoxoAdapter._delete` (`supports_delete = True`). On 2026-10-09 a dry
+> run - `python -m app.cli delete loxo --record campaign=<url> --record
+> campaign_created=yes --dry-run` - read campaign 693936 back by name through
+> the app's own list query and changed nothing. `destroyCampaign` has only
+> been sent to a stand-in ([tests/test_loxo_delete.py](../../tests/test_loxo_delete.py)).
+> One ZZ TEST campaign proves it: `post loxo --doc "ZZ TEST - ….docx" --live`,
+> then the `delete loxo … --dry-run` line the post prints, read the name back,
+> then the same with `--live`.
+
+Mapped on 2026-10-09 with
+[scripts/probe_loxo_campaign_delete.py](../../scripts/probe_loxo_campaign_delete.py)
+(read-only: it records the list's API calls, opens the row menu on a
+`testzz` / `ZZ TEST` campaign only, cancels any confirmation, and greps the
+app bundle for the route) and the bundle it fetched
+(`authenticated-4091fec4….js`). No test campaign existed that day - 693495 is
+gone - so the menu and dialog are read from the bundle, not a screen.
+
+| What | How |
+|---|---|
+| The list | GraphQL `campaigns(agencyId: 28356, query: "", page: 1, perPage: 25, sortByField: "created_at", sortDesc: true, filters: {onlyShared:false,onlyPaused:false,onlyActive:false,userIds:[],workflowStageIds:[],jobIds:[]})` → `totalResults`, `campaigns { id: _id name paused stageCount shared createdAt recipientAggs { idCount … } … }`. The `Search Campaigns...` box sets `query`. 91 campaigns on 2026-10-09. |
+| Transport | `POST /graphql`, JSON `{"query": …}`, the cookie session (`credentials: include`, as the app's own `rawFetch` sends it) and `X-CSRF-Token` from `meta[name=csrf-token]`. Made from inside the tab, like noon's and Juicebox's deletes. |
+| Row menu | every row ends in a `more_horiz` button → *Duplicate* (`createCampaignFromTemplate`, named "<name> - Duplicate") and *Delete* (glyph + label, `deleteDelete`, like the stage menu's `editEdit`). |
+| Confirmation | dialog **Delete campaign** - *"Are you sure you want to delete this campaign?"* - *Cancel* / red *Delete*. |
+| Delete | `mutation { destroyCampaign(id: <id>) { id: _id } }` (the app wraps a bare selection as `mutation { … }`), then the toast **"This campaign will be deleted shortly"**. A background job: the campaign can still be listed for a moment after the call. |
+| Read-back | the list again, every 5s for up to 120s, until the id is gone. Still listed after that: the row reads NOT deleted with a note to ask again in a few minutes; the retry finds it gone and says "already gone". |
+| Also in the bundle | `destroyCampaignStage($campaignStageId)`, `destroyCampaignRecipients($campaignRecipientIds)`, `setCampaignRecipientsPaused` - per stage and per prospect. Not used. |
+
+**What is deleted, and what is refused.** A Loxo post's ledger record is
+`campaign` (the URL), `campaign_created` (`yes` when `Start new` made it,
+`no` when the poster found a campaign by name and filled it) and, from
+2026-10-09, `campaign_name`. Only a `yes` is deleted: the id was read off the
+URL of the campaign the run had just created, which is sound. A `no` may be a
+recruiter's own campaign and is **left alone and named on the row**; a record
+without the flag (a row posted before 2026-09-23, link only) is refused the
+same way. When a name is recorded the campaign is read back first and a
+different name refuses the delete. Prospects on a deleted campaign are counted
+on the row. The job's Skill DNA and saved Source search are not touched - both
+sit on a job the recruiters made, which the row never owned.
 
 ## Unattended sign-in (2026-09-21)
 

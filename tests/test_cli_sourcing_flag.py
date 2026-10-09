@@ -31,6 +31,8 @@ def _capture(monkeypatch) -> dict:
             post_url = None
             detail = None
             artifacts: list = []
+            # `post` prints a delete hint from the records a live post leaves.
+            records: dict = {}
 
         return _Result()
 

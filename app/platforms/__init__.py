@@ -70,7 +70,11 @@ def _driver(name: str) -> type[RecipeAdapter]:
         from app.platforms.noon import NoonAdapter
 
         return NoonAdapter
+    if name == "wellfound":
+        from app.platforms.wellfound import WellfoundAdapter
+
+        return WellfoundAdapter
     raise PlatformError(
         f"Recipe names driver {name!r}, but no such driver is registered. "
-        f"Known drivers: juicebox, loxo, noon."
+        f"Known drivers: juicebox, loxo, noon, wellfound."
     )

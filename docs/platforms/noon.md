@@ -12,9 +12,9 @@
 | **URL** | `https://www.noon.ai/portal` → `/portal/sourcing` when logged in. Next.js, client-rendered |
 | **Account** | TrustIn LTD company account (`trial: true`). Recruiters: sohaib@; admins: marcus@, nicholas@ |
 | **Login** | Microsoft SSO (Entra ID) → Firebase. Captured profile in `.profiles/noon`, verified working headless 2026-08-26 |
-| **Status** | Campaign: live and proven. Sourcing criteria: **written, not yet run against a live role** — see [The sourcing wizard](#the-sourcing-wizard) |
+| **Status** | Campaign: live and proven. Sourcing criteria: **proven live end to end 2026-10-09**, and run *before* the campaign because the portal gates the editor behind the wizard — see [The sourcing wizard](#the-sourcing-wizard) |
 | **Owner** | Sohaib |
-| **Last verified** | 2026-08-26 (read-only) |
+| **Last verified** | 2026-10-09 — `post noon --live --headed` on the ZZ TEST document: role, wizard, campaign, all read back |
 
 ## What noon actually is
 
@@ -246,211 +246,245 @@ saving.
 
 ## The sourcing wizard
 
-> **Status** **PROVEN LIVE 2026-08-31** end to end on a throwaway role
-> (`ZZ TEST - Senior Recruitment Consultant - 20260831`): JD read, criteria
-> generated, four non-negotiables selected and ranked, two clarifying questions
-> answered with the stricter option, sourcing started. Originally built from
-> noon's own portal bundle, then `source --role <uuid> --doc <file>` (a dry run)
-> captured the token off the portal, called `generate_params` against the real
-> API and got back 3 must-haves and 9 nice-to-haves from a real advert, which
-> the tightening merged into 12 must-haves. **The write half — steps 2 to 7 —
-> has still never run**; those payloads are read-from-source until a `--live`
-> run or `python scripts/probe_noon_sourcing.py` confirms them.
+> **Status** **PROVEN LIVE END TO END 2026-10-09**, twice the same evening.
+> First the live wizard was walked screen by screen in a headed browser on a
+> throwaway role (`ZZ TEST wizard probe 20261009 - delete me`, role
+> `f7814e44-…`) while every call its front end made was recorded; then
+> `python -m app.cli post noon --doc "ZZ TEST - Founding Platform Engineer - SF.docx"
+> --live --headed --set "Location=San Francisco"` created role `61916844-…`,
+> replayed the wizard through the API and saved the campaign in one run. Read
+> back afterwards through `poll_role_params` and the outreach editor: 7 titles,
+> 5–20 years, San Francisco, 8 company-type chips, 11 example companies, 15
+> must-haves (12 promoted), 15 starred and ranked non-negotiables, 3 clarifying
+> answers (1 skipped), 9 target companies rated, sourcing on — and the campaign
+> carrying the document's five steps with nothing of noon's own draft left.
+> The map below **replaces the 2026-08-31 one**, which was read out of the
+> portal bundle and missed two screens.
 
-Stage 1 of a role — the `Start sourcing` button on a fresh role page — is a
-seven-step wizard, and it is where the criteria that decide *who noon finds*
-are set. Until now it was only ever done by hand.
+**The order is noon's, not ours.** Since the portal's 2026-10 redesign a fresh
+role shows nothing but `Start sourcing`. The stage cards — `Review & Contact`
+among them, which is where the campaign editor lives — render only once the
+wizard has been completed. Every production run between the redesign and
+2026-10-09 died waiting for that card: the five `Decart - Senior Software
+Engineer, Inference - SF` roles created on 2026-10-08 are the evidence, each
+sitting at wizard step 2 with no campaign. So the driver now runs the wizard
+*between* creating the role and opening the editor (`RecipeEngine.run`'s
+`after_capture="role_id"` hook, [D-028](../11-decisions.md#d-028--noons-sourcing-wizard-runs-before-its-campaign-and-cannot-be-skipped)),
+and a wizard that does not finish fails the platform with the bare role's URL
+rather than reporting Posted. `CRITERIA_ENABLED=false` / `--no-sourcing` is
+therefore refused for noon with a message saying so.
 
-| Step | Screen | What it asks |
-|------|--------|--------------|
-| 1 | Job description | "Paste the job description below … Noon will read it and pre-fill your search." `Submit` / `Skip` |
-| 2 | Candidate pool | "Where should we source from?" — Entire Internet, Internal ATS, Inbound |
-| — | *(optional)* | "In your own words, what are the must-haves?" |
-| 3 | Search criteria | "Confirm the search criteria." Two drag-and-drop lists: **Must-haves** and **Nice-to-haves** |
-| 4 | ATS events | Only on Ashby/Loxo-linked companies. Not ours |
-| 5 | Non-negotiables | "Click a box to star the true must-haves… Best results come from 3 or fewer" |
-| 6 | Ranking | "Drag to reorder your non-negotiables — #1 is the most important" |
-| 7 | Clarifying questions | One generated question at a time, each with generated answer options |
+### The seven screens (2026-10-09)
 
-### What the automation does with it
+| Step | Screen | What it asks | What the automation does |
+|------|--------|--------------|--------------------------|
+| 1 | Job description | "Paste the job description below — or import it from a link or file." `Submit` / `Skip` | pastes the targeting preamble above `search_jd` |
+| 2 | Candidate pool | Entire Internet · Inbound Applicants · Internal ATS, then `Continue` | Entire Internet (`NOON_SOURCING_SOURCE=public`) |
+| 3 | Search criteria | **the whole search spec**: Role Title(s) chips · Years of experience slider · Location chips + distance · Must-haves · Nice-to-haves · *Companies to source from* (Example companies autocomplete, "Only source candidates from these example companies" toggle, Company criteria chips) · *Client Company* (search, or "Prefer not to name the client" + a description box — `Continue` is blocked until one of them is filled) · *Visa sponsorship* (Yes / No / Don't know) · *Candidate History* (hide people sourced before, cooldown days) | every nice-to-have moved into the must-haves; noon's titles, years, location and chips kept, the shared profile fills what it left empty; the profile's target companies resolved to noon's company records as example companies; the client described from the JD's own sentence about the employer; visa = noon's own reading of the text passed back |
+| 4 | Target companies *(new, conditional)* | "How do these companies look?" — up to nine cards, each `Great` / `Okay` / `No`, every one required | a company the profile named is **great**; noon's `anchor_yes` great, `anchor_no` no; a `boundary` probe is **okay** inside the client-size band noon derived and **no** outside it |
+| 5 | Non-negotiables | "Click a box to star the true must-haves … Best results come from 3 or fewer" | all of them starred |
+| 6 | Ranking | "Drag to reorder — #1 is the most important" | noon's order kept (it follows the JD) |
+| 7 | Clarifying questions | one generated question at a time, options A / B, `Skip this question` | the strictest option; noon's `SKIP` when neither is clearly stricter |
 
-The recruiter's habit, now in code
-([noon_sourcing.py](../../app/platforms/noon_sourcing.py)):
-
-1. Paste the document's advert as the job description.
-2. **Promote every nice-to-have into the must-haves**, deduplicated. A
-   preference filters nobody out; the point of the exercise is that everything
-   noon read out of the advert is applied.
-3. **Keep every generated criterion as a non-negotiable**, in the order noon
-   generated them — that order follows the advert, which is the only stated view
-   of what matters most. This is deliberately tighter than noon's own advice of
-   "3 or fewer", and it is why a role can come back with few candidates;
-   loosening is a matter of removing criteria in the Control Panel afterwards.
-4. **Answer each clarifying question with the strictest option offered** — a
-   question offering to widen the search ("would you consider…") is answered
-   *no*, one asking whether something is demanded ("is X required?") is answered
-   *yes*, and one where neither reading is clear is left unanswered with noon's
-   own `SKIP` sentinel rather than guessed at.
-5. Send the final call, which sets the agent searching.
-
-```bash
-python -m app.cli source --role <uuid|url> --doc advert.docx            # rehearsal
-python -m app.cli source --role <uuid|url> --doc advert.docx --live
-python -m app.cli source --role <uuid> --doc advert.docx --live --no-start   # criteria only
-
-# The search filters live on the row, not in the document. Running from a
-# file alone, hand them over with --set or the role is searched globally:
-python -m app.cli source --role <uuid> --doc advert.docx --live --headed \
-    --set 'Location=Manchester' --set 'Employment Type=Permanent'
-python -m app.cli post noon --doc advert.docx --live --sourcing         # campaign + criteria
-```
-
-A dry run sends `generate_params` with `dont_save`, so noon reads the advert and
-hands back the criteria it *would* use while writing nothing. That is as far as
-a rehearsal can go: every step after it saves on arrival, exactly like the
-campaign editor.
+Step 4 only appears when noon finds the written criteria ambiguous
+(`company_rating_cards.show`; its stated reason on the ZZ TEST role: *"Startups"
+and "SaaS" are ambiguous; candidate companies could reveal preferences beyond
+the written criteria*). Step 3 grew from the two-list confirm screen of August
+into the whole search spec — and it is the screen the old replay skipped
+entirely, which is why every role before 2026-10-09 searched the world on
+criteria alone.
 
 ### The calls behind each step
 
 Driven through the API rather than the DOM — see
 [D-017](../11-decisions.md#d-017--noons-sourcing-wizard-is-driven-through-its-api-not-its-dom).
-Every call below is one the portal makes itself, in this order:
+Every call below is one the portal made itself on 2026-10-09, in this order,
+and [`noon_sourcing.py`](../../app/platforms/noon_sourcing.py) sends the same:
 
-| Step | Call | Payload | Returns |
-|------|------|---------|---------|
-| 1 | `generate_params` | `{token, jd, role, role_name}` (+`dont_save` to rehearse) | `{must_haves, nice_to_haves, titles, location, yoe, company_specs, client_name_in_jd, requires_visa_sponsorship}` — extraction only; it caches the JD but does **not** save the location (corrected 2026-09-22) |
-| 3 | `update_role` | `{token, role, name, preferences}` with `preferences.location` set, the rest of the block carried through | — (the location write; read back through `refetch_roles`) |
-| 2 | `set_candidate_source` | `{token, role, source}` | — |
-| 5 | `setup_clarifying_questions` | `{token, role, must_haves}` | — (warms the questions up) |
-| 5 | `gpt_stream` | `{newdemo: true, msg, prompt: null, role, company, source, v2: true}` | the criteria, one `*` bullet each |
-| 5 | `role_autopilot` | `{token, id, autopilot}` with `feedback` + `pending_non_negotiables: [{id, text}]` | — |
-| 6 | `rank_non_negotiables` | `{token, id, non_negotiables: [text, …]}` | — |
-| 6 | `role_autopilot` | `{id, autopilot, initialization: true}` | — |
-| 7 | `clarifying_questions` | `{token, role, non_negotiables}` | `{question: [option, …]}` |
-| 7 | `mark_clarifying_question` | `{token, role, question, answer}` | — |
-| 7 | `role_autopilot` | `{id, autopilot, initialization: false}` | **starts the search** |
+| Step | Call | Payload | Returns / notes |
+|------|------|---------|-----------------|
+| 1 | `generate_params` | `{token, jd, role, role_name}` (`+dont_save` rehearses; the portal sends both, preview then save) | `{must_haves, nice_to_haves, titles, location, yoe, company_specs, competitors, mentioned_companies, client_name_in_jd, requires_visa_sponsorship}`. Saves the JD against the role and **nothing else** |
+| — | `poll_role_params` | `{token, role, check_exhausts: false, inbound: false}` | `{autopilot, preferences, pinned}` — the direct read of one role, see *Reading a role* |
+| 2 | `set_candidate_source` | `{token, role, source}` | `{success}` |
+| 3 | `company_search_by_name` | `{token, query}` per example company | `[{id, name, description, website, employees, logo_url}, …]`, a prefix search — only an exact name match is taken |
+| 3 | `prepare_role_preferences` | `{token, role, preferences, must_haves, nice_to_haves}` | `true`. Sent on arriving at the screen and on every edit; stages the draft and starts the JD summary |
+| 3 | `role_summarized_jd_finished` | `{token, role}` | `{finished, client_name_exists}` — polled, bounded |
+| 3 | `setup_clarifying_questions` | `{token, role, must_haves}` | `true` |
+| 3 | **`update_role`** | `{token, role, name, preferences, user, must_haves, nice_to_haves, feedback, client_description, client_name, client_linkedin_alt, requires_visa_sponsorship}` | `{company_json: {employees_min_number, employees_max_number, company_industries, specific_companies, tangential_companies, startup_filter, …}, search_tier, refresh}` — **the write the replay used to skip**; `preferences` is sent whole |
+| 3 | `gpt_stream` | `{newdemo: true, msg: "<must_haves>…</must_haves>", prompt: null, role, company, source, v2: true, rerun_prep: false, must_haves, nice_to_haves}` | the criteria, one `*` bullet each |
+| 4 | `company_rating_cards` | `{token, role, preferences, client_name, client_description, client_linkedin_alt}` | `{show, reason, cards: [{company_id, name, description, employees, group, dimension, rater}]}` |
+| 4 | `save_company_ratings` | `{token, role, ratings: [{company_id, rating: great\|ok\|no, group, dimension}]}` | `{company_ratings: {<id>: {name, group, rating, rated_at, rated_by, dimension}}}` |
+| 5 | `role_autopilot` | `{token, id, autopilot}` with `enabled`, `feedback` (the criteria), `source`, `sourcing_type: "recruiting"`, `must_haves`, `nice_to_haves: ""`, `companySpecs`, `required_companies_to_source_from`, `examples`, `company_ratings`, `calibration_stage: "calibrating"`, `pending_non_negotiables: [{id, text}]` | `true` |
+| 6 | `clarifying_questions` | `{token, role, non_negotiables}` | `{question: [option, …]}` — fetched *before* the ranking save |
+| 6 | `role_autopilot` | `{id, autopilot, initialization: true}` with `non_negotiables`, `use_ordering: true` | `true` |
+| 6 | `rank_non_negotiables` | `{token, id, non_negotiables}` | `{success}` |
+| 7 | `mark_clarifying_question` | `{token, role, question, answer}` per question | `{success}` |
+| 7 | `role_autopilot` | `{id, autopilot, initialization: false}` with `clarifying_answers` | **starts the search**; the portal then polls `calibration_candidates` |
 
 `initialization` reads backwards: `true` means "still setting up", and the
-`false` at the end is the go signal. `--no-start` repeats `true`, which saves
-the answers and leaves the role idle.
+`false` at the end is the go signal. `--no-start` (`NOON_START_SOURCING=false`)
+repeats `true` and sends `enabled: false`, which saves everything and leaves
+the role idle — the same shape the portal shows as "paused".
 
-**`all_roles` answers from a cache.** A role created seconds earlier is not in
-it, so the campaign flow's own new role looks deleted — `post noon --sourcing`
-failed exactly this way on 2026-08-31. The call is scoped by `company` and
-retried through `refetch_roles`, which does see it.
+Pressing `Start sourcing` itself fires `role_autopilot {…, enabled: true,
+trigger: true}` then `{…, trigger: false}`; the replay does not send those two
+— `enabled` is set on the step-5 save instead, which is where the agent's
+switch ends up in either case.
 
-Must-haves and nice-to-haves are newline-joined strings on
-`role.autopilot`, not arrays — a trailing blank line is dropped, which
-`as_lines` mirrors. The autopilot block is read back with `all_roles`, amended,
-and posted whole; anything else on it (the campaign ids, auto-contact settings)
-travels untouched.
+### Where it lands on the role
 
-### Where the JD ends up
+`poll_role_params` after the run, on role `61916844-…`:
 
-`preferences.jd` is empty on all 125 roles because nothing writes it. The text
-goes in through `generate_params`, and noon keeps it as the role's cached job
-description (`cached_job_description`, `get_role_jd`). What it extracts was
-believed to land on `preferences.location`, `preferences.type`,
-`preferences.experience` and `preferences.companySpecs` — **not the location**,
-as a live role proved on 2026-09-22; `save_location` writes that one. The other
-three have not been re-checked and should not be trusted either until they are.
+| Block | Key | Held |
+|-------|-----|------|
+| `preferences` | `type` | the title list (`["Platform Engineer", "Infrastructure Engineer", …]`) — **not `titles`**, which is only what `generate_params` calls it on the way in |
+| | `experience` | `[5, 20]` — the years band |
+| | `location`, `location_distance` | `["San Francisco"]`, `0` |
+| | `companySpecs` | the company-criteria chips (`startups`, `saas`, `not big tech`, …) |
+| | `required_companies_to_source_from` | the example companies, as noon company ids |
+| | `onlySourceFromTheseCompanies`, `ban_past_candidates`, `ban_ats_candidates`, `past_candidates_cooldown_days`, `ats_candidates_cooldown_days` | the portal's step-3 defaults (`false`, `true`, `false`, `30`, `30`), written with setdefault so a recruiter's choice survives |
+| `autopilot` | `enabled`, `source`, `sourcing_type`, `calibration_stage` | `true`, `public`, `recruiting`, `calibrating` |
+| | `must_haves`, `nice_to_haves`, `feedback` | newline-joined strings; the nice-to-haves emptied, the feedback the `*` criteria |
+| | `non_negotiables`, `use_ordering`, `pending_non_negotiables`, `clarifying_answers`, `company_ratings` | as sent |
+
+The client description and the visa flag travel on `update_role`'s top level
+and land nowhere readable; noon uses them for calibration.
+
+### Reading a role
+
+Three reads, none of them what the August map assumed:
+
+- **`poll_role_params {token, role, check_exhausts, inbound}`** is the direct
+  read of one role — `autopilot` and `preferences` as they are now, from the
+  moment the role exists. It answers `403 Forbidden` for an id noon does not
+  know, and it **still answers for a deleted role**. `fetch_role` uses it first.
+- **`refetch_roles {token, email, company}`** is the user's role list, 1.4 MB
+  for this account. A new role takes **minutes** to appear in it — every
+  posting run on 2026-10-08 missed its own role there about a minute after
+  creating it, and on 2026-10-09 a role created at 17:34 was still missing at
+  17:40 and present an hour later. It is, however, the only read that says a
+  role was deleted: the record stays, as a tombstone — `{obsolete: true, id,
+  name, creator}` and nothing else (96 of the account's 220 records are
+  tombstones). `fetch_role` consults it for that tombstone and raises
+  `RoleMissing` on one; otherwise a role the list has not caught up with is
+  not missing.
+- **`all_roles {token, company}`** answers `[]` for the whole account
+  (2026-10-08 and again 2026-10-09). It is not asked any more.
+
+`NOON_ROLE_WAIT_SECONDS` (default 240) is how long a posting run keeps asking
+when *neither* read knows a role seconds after creating it. In practice
+`poll_role_params` knew the fresh role immediately.
+
+### What the 2026-08-31 and 2026-09-22 notes got right, and wrong
+
+- **The preamble stays.** noon's extractor reads the `Location:` / `Job
+  title:` lines and the profile's lists out of the text ([the preamble](#the-search-filters-and-the-preamble-that-sets-them-2026-08-31)
+  below, kept for the record), and on the ZZ TEST role it came back with the
+  right city and seven titles. But it is no longer load-bearing for the write:
+  the location, titles, years and chips are *written* by `update_role` from
+  what noon extracted, with the brief's own values when noon extracted none.
+- **`preferences.titles` never existed** on a role; the key is `type`. The
+  old `_check_preferences` read the wrong key and warned about missing titles
+  on roles that had them.
+- **The "role list lag" of 2026-10-08 was real** for `refetch_roles` but was
+  never the right read; `poll_role_params` sees a role the moment it exists.
+- **The location guard stands.** A location that was extracted but did not
+  stick still holds the search back (`initialization: true`, `enabled:
+  false`) with a loud warning, as designed on 2026-09-22; it has not fired
+  since the write became the full step-3 one.
+
+### The policy, in one place
+
+The recruiter's habit, now in code ([noon_sourcing.py](../../app/platforms/noon_sourcing.py)):
+
+1. **Paste the whole brief as the job description** — the targeting preamble
+   (facts off the row, the profile's titles, skill tiers and companies) above
+   `search_jd` (the Client JD verbatim, else the profile's composed spec,
+   never the raw advert while a spec exists — [D-024](../11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)).
+2. **Promote every nice-to-have into the must-haves**, deduplicated. A
+   preference filters nobody out.
+3. **Keep noon's titles, years, location and company chips**; fill from the
+   brief only what noon left empty (`build_preferences`).
+4. **Add the profile's target companies as example companies**, each resolved
+   by `company_search_by_name` and taken only on an exact name match
+   (`match_company`); misses are named on the row.
+5. **Describe the client** from the JD's own sentence about the employer, the
+   profile's funding stage in front (`client_description`) — TrustIn does not
+   name the client, and the screen will not continue without one or the other.
+6. **Rate the target companies** as above (`rate_company_cards`).
+7. **Keep every generated criterion as a non-negotiable**, in noon's order.
+   Deliberately tighter than noon's "3 or fewer"; a role can come back with
+   few candidates, and loosening is one click per criterion in the Control
+   Panel.
+8. **Answer each clarifying question with the strictest option**; leave it on
+   noon's `SKIP` when neither reading is clearly stricter (one of three was,
+   on the ZZ TEST role: "hard filter or strong plus" — now recognised).
+9. Send the final call.
+
+```bash
+python -m app.cli post noon --doc advert.docx --live --headed --set 'Location=<city>'   # role → wizard → campaign
+python -m app.cli source --role <uuid|url> --doc advert.docx                           # rehearsal on an existing role
+python -m app.cli source --role <uuid|url> --doc advert.docx --live --headed
+python -m app.cli source --role <uuid> --doc advert.docx --live --no-start             # criteria only, role idle
+```
+
+A dry run sends `generate_params` with `dont_save`, so noon reads the text and
+hands back the criteria it *would* use while writing nothing. That is as far
+as a rehearsal can go: every step after it saves on arrival, exactly like the
+campaign editor.
+
+| Warning on the row | Means |
+|--------------------|-------|
+| `noon extracted no location from this job description` | nothing stated one and the row had none — fill the row's `Location` column |
+| `noon would not keep the location (X) … has NOT been started` | the write did not stick; the role is saved and idle — set the location in the Control Panel and press Start |
+| `noon extracted no job titles` | the role is matching on criteria alone — check the Control Panel |
+| `noon has no company record matching: …` | an example company did not resolve by exact name (Arcade.dev on the ZZ TEST run) — add it by hand if it matters |
+| `N clarifying question(s) left unanswered` | neither option was clearly stricter — answer them in noon if they matter |
 
 ### The search filters, and the preamble that sets them (2026-08-31)
 
+> Kept for the record. The preamble is still sent (noon reads it); the write
+> it was invented to provoke is now made explicitly by `update_role` — see
+> above.
+
 Criteria rank the pool; `preferences` decides the pool. On every role built
-before this, `preferences.location` was **empty** and noon searched globally —
-because the text it was given was the document's advert, and TrustIn's adverts
-state the location nowhere: the location is a Notion column.
+before 2026-08-31, `preferences.location` was **empty** and noon searched
+globally — because the text it was given was the document's advert, and
+TrustIn's adverts state the location nowhere: the location is a Notion column.
 
-Two changes, neither of which needs an endpoint we have not seen:
+`targeting_preamble()` states the facts above the JD, in the form the wizard's
+own placeholders use, so noon's extractor picks them up:
 
-1. **noon reads the document's `Client JD`**, not its advert. The advert is
-   marketing copy and softens exactly what a search filters on — see
-   [D-018](../11-decisions.md#d-018--the-document-carries-the-clients-jd-the-advert-is-only-the-pitch).
-2. **`targeting_preamble()` states the facts above that JD**, in the form the
-   wizard's own placeholders use, so noon's extractor picks them up:
+```
+Job title: Senior Recruitment Consultant
+Also matching job titles: Talent Partner, Recruiter
+Location: Manchester (hybrid)
+Employment type: Permanent
+Key skills: Kubernetes, Terraform
+Nice-to-have skills: Go
+Ideal past companies: Vercel, Render
 
-   ```
-   Job title: Senior Recruitment Consultant
-   Location: Manchester (hybrid)
-   Employment type: Permanent
-   Key skills: Kubernetes, Terraform
+<the client's JD>
+```
 
-   <the client's JD>
-   ```
+Values come off the row (`Location`, `Employment Type`, `Skills`) through
+`enrich_advert` and `ensure_skills`, exactly as `post` resolves them, and off
+the shared sourcing profile (titles, skill tiers, companies — D-024). A line
+whose value is unknown is not written at all. `source` takes the same
+`--set COLUMN=VALUE` as `post`, because a run started from a file has no row.
 
-   Values come off the row (`Location`, `Employment Type`, `Skills`) through
-   `enrich_advert` and `ensure_skills`, exactly as `post` resolves them; a
-   line whose value is unknown is not written at all. `source` takes the
-   same `--set COLUMN=VALUE` as `post`, because a run started from a file
-   has no row to read them off.
+**Only the role reaches the `Job title:` line.** TrustIn writes a title as the
+role plus what sells it — `Backend Platform Engineer - NYC / Series A /
+Kubernetes` — and noon turns that line into `preferences.type`, the list it
+searches for. `role_title()` cuts at the first spaced dash or slash and refuses
+anything that does not leave at least two words, so a filename (`Kepler -
+Backend Platform Engineer - NYC`, whose leading segment is the *company*)
+produces no title line at all. Silence is safe: noon also reads titles out of
+the JD body (seven of them on the ZZ TEST role, from a document with no title).
 
-   **Only the role reaches the `Job title:` line.** TrustIn writes a title as
-   the role plus what sells it — `Backend Platform Engineer - NYC / Series A /
-   Kubernetes` — and noon turns that line into `preferences.titles`, the list
-   it searches for. Handed the whole string it looks for people whose job
-   title is "NYC" or "Series A". `role_title()` cuts at the first spaced dash
-   or slash and refuses anything that does not leave at least two words, so a
-   filename (`Kepler - Backend Platform Engineer - NYC`, whose leading segment
-   is the *company*) produces no title line at all. Silence is safe here:
-   noon also reads titles out of the JD body.
-
-   **Salary is deliberately not in there** even though the row carries it.
-   noon has no compensation preference, so the only thing it could become is
-   a criterion — and every criterion here is promoted to a non-negotiable and
-   starred. "Will accept £35-45k" is not something a profile can satisfy, so
-   it would narrow the search to nobody while looking like diligence.
-
-   **Amended 2026-09-28 — the whole brief, not just the facts
-   ([D-024](../11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)).**
-   The 2026-09-28 review found live roles carrying little more than a title,
-   so the preamble now also states what the shared sourcing profile drafted:
-   `Also matching job titles:`, `Key skills:` (the profile's must-haves),
-   `Nice-to-have skills:` and `Ideal past companies:` (a shortlist of 12).
-   The JD below it is `search_jd` — the Client JD verbatim, else the
-   profile's composed spec, never the raw advert while a spec exists. And
-   when `generate_params` still extracts no requirements, the wizard writes
-   the profile's essentials as the must-haves instead of failing the stage
-   and leaving a bare role.
-
-**The preamble alone did not do it (corrected 2026-09-22).** `generate_params`
-*extracts* the location; it does not save it. That it did was inferred from the
-name of its `dont_save` flag and was wrong — a live row on 2026-09-22 had noon
-quote the location back as "New York, Atlanta, Georgia, United States" while the
-role read back with `preferences.location` still `[]`, and the run started the
-search anyway and reported Posted. Every candidate on it came from the wrong
-pool. What `generate_params` saves is the cached job description.
-
-**So the location is written explicitly.** `save_location` sends the same
-`update_role {token, role, name, preferences}` the Create New Role modal's own
-Submit sends, recorded whole in `artifacts/live1/20-after-submit.json` — which
-is also where `preferences.location: []` at role creation comes from. The
-existing `preferences` block is amended and sent back whole, so keys this code
-does not know about travel untouched. This is the wizard's step 3, "Confirm the
-search criteria" — the one screen of the seven whose call was never mapped.
-
-**It is checked, not assumed.** The role is read back through `refetch_roles`,
-not `all_roles`: the latter answers from a cache and would serve the copy from
-before the write, which cannot tell a failed save from a slow one.
-
-| Warning | Means |
-|---------|-------|
-| `noon extracted no location from this job description` | nothing stated one — fill the row's `Location` column |
-| `noon would not keep the location (X) … has NOT been started` | the write did not stick; the role is saved and idle — set the location in the Control Panel and press Start |
-| `noon extracted no job titles` | the role is matching on criteria alone |
-
-**An unrestricted search is not started.** If the location will not stick, the
-last `role_autopilot` goes out with `initialization: true` — the documented
-save-without-starting path — and the role sits idle rather than sourcing the
-world. Raising `PlatformError` would be quieter, not louder: `noon.py` catches
-one from the wizard into a warning and the row still reads Posted.
-
-**Still unproven:** no artifact in this repo holds a *populated*
-`preferences.location`, so whether noon accepts the plain strings
-`generate_params` returns or wants values resolved through its own location
-picker is a guess from the empty case. One Control Panel probe with the network
-tab recording settles it; until then the guard above is what makes a wrong guess
-safe.
+**Salary is deliberately not in there.** noon has no compensation preference,
+so the only thing it could become is a criterion — and every criterion here is
+promoted to a non-negotiable and starred.
 
 ## The API underneath
 
@@ -538,9 +572,10 @@ TEST inmail subject - delete me` and read it back gone. The one test role
 | Our field | noon | How | Confirmed |
 |-----------|------|-----|-----------|
 | `advert.title` | Role name | `[placeholder^='Search existing ATS roles']` | yes |
-| `document.job_description` | the job description the sourcing wizard reads | `generate_params` — the document's `Client JD`, else its advert | read half confirmed live 2026-08-31 |
-| `advert.location` | `preferences.location[]` | stated in the `targeting_preamble` above the JD, extracted by `generate_params`, read back off the role | preamble built 2026-08-31, not yet run live |
-| `advert.employment_type`, `advert.tags` | `preferences.type`, `preferences.experience` | same preamble | same |
+| `document.search_jd` | the job description the sourcing wizard reads | `generate_params` — the targeting preamble above the `Client JD`, else the profile's composed spec | live 2026-08-31, 2026-10-09 |
+| `advert.location` / the profile's candidate location | `preferences.location[]` | stated in the preamble, extracted by `generate_params`, **written by `update_role`**, read back through `poll_role_params` | live 2026-10-09 |
+| the profile's titles, years, companies | `preferences.type` (the title list), `preferences.experience`, `preferences.companySpecs`, `preferences.required_companies_to_source_from` | noon's extraction first, the profile where noon read nothing; companies resolved through `company_search_by_name` | live 2026-10-09 |
+| the JD's sentence about the employer; noon's visa reading | `update_role.client_description`, `update_role.requires_visa_sponsorship` | `client_description()`; passed back as extracted | live 2026-10-09 |
 | `advert.salary` | — | deliberately not given to the sourcing wizard | n/a |
 | `email.subject` | step Subject | `text='Subject' >> nth=-1 >> xpath=following::input[1]` | selector plausible, untested |
 | `email.body_html` | step body (Draft.js) | `.public-DraftEditor-content >> nth=-1`, `fill_rich` | element confirmed, paste untested |
@@ -563,9 +598,9 @@ TEST inmail subject - delete me` and read it back gone. The one test role
 - [x] **Which endpoints save?** `create_role` / `create_project` / `update_role` for the role, `template_update` for the campaign, `add_comparison_campaign` for an import.
 - [x] **Token mapping.** The `noon_tokens` template filter: `{{ email.body_html | noon_tokens }}` turns `{{name}}` into `{first_name}` and `{{job_company}}` into `{company}`.
 - [x] **What is behind `Start sourcing`?** A seven-step wizard; every step, payload and endpoint is in [the sourcing wizard](#the-sourcing-wizard).
-- [ ] **Run the write half of the sourcing wizard against a live role.** `generate_params` is confirmed live (2026-08-31); `set_candidate_source`, `gpt_stream`, `role_autopilot`, `rank_non_negotiables`, `clarifying_questions` and `mark_clarifying_question` were read out of the portal bundle and have never been sent. `python scripts/probe_noon_sourcing.py` records them from a hand-driven run; the first `source --live` should be watched with `--headed`.
+- [x] **Run the write half of the sourcing wizard against a live role.** Done 2026-10-09, twice: the live wizard walked and recorded on `ZZ TEST wizard probe 20261009 - delete me` (`f7814e44-c5af-4cac-838f-bb8adb1a8152`), then `post noon --live --headed` end to end on `61916844-dd38-4c17-9351-1d21e560de59`. The recording changed the map — see [the seven screens](#the-seven-screens-2026-10-09).
 - [ ] **Ask noon about the API.** The campaign already saves through `template_update` and the criteria now go through `role_autopilot`. Both are undocumented. support@noon.ai.
-- [ ] **Delete the test roles** — now one command each: `python -m app.cli retire noon --role <uuid> --delete --live --headed` (see *Retiring a role*). `ZZ TEST NOTE - delete me (1)` went that way on 2026-09-08.
+- [ ] **Delete the test roles** — one command each, `python -m app.cli delete noon --record "role=<uuid>" --live --headed` (dry-run first; the dry run reads the name back). Waiting since 2026-10-09: `61916844-dd38-4c17-9351-1d21e560de59` (`ZZ TEST - Founding Platform Engineer - SF`, the proven post, sourcing on), `e6aad6a4-c15c-438e-ad40-b195f352add3` (same name, a bare role from the run that hit the role-list lag), `f7814e44-c5af-4cac-838f-bb8adb1a8152` (`ZZ TEST wizard probe 20261009 - delete me`, sourcing on). Older: `2e3d07c4` (`ZZ TEST - Senior Recruitment Consultant - 20260831`). Deleted roles stay in `refetch_roles` as `obsolete` tombstones — that is what the delete's read-back now checks.
 - [ ] **Decide the mapping rule** for documents with a different number of emails than the template has slots. The recipe expects exactly three and fails clearly on fewer; a fourth is ignored.
 - [x] **Connection-request note** — written since 2026-09-01. noon's warning
   ("You can't add a message to connection requests on a non-premium LinkedIn
@@ -581,14 +616,18 @@ TEST inmail subject - delete me` and read it back gone. The one test role
 
 ## What is left
 
-The campaign half is done: `python -m app.cli post noon --doc <file> --live`
-creates the role and saves the campaign; a recruiter then reviews it and presses
-`Contact N candidates`.
+Both halves are done and proven on 2026-10-09: `python -m app.cli post noon
+--doc <file> --live` creates the role, sets its sourcing up (criteria, filters,
+example companies, ratings, agent on) and saves the campaign; a recruiter then
+reviews the campaign and presses `Contact N candidates`. The change is on the
+`release/2026-10-09` branch, **not yet deployed** — every production noon post
+since the portal redesign failed at the campaign wait, so deploying it is the
+next step, then deleting the test roles listed above.
 
-The sourcing half reads live and writes untested. One supervised run —
-`python -m app.cli source --role <uuid> --doc <file> --live --headed` on a
-throwaway role — is what stands between it and `NOON_SOURCING=true` in the
-Railway environment, where it would run unattended on every posted row.
+Two things to watch on the first production rows: the `NOON_ROLE_WAIT_SECONDS`
+log line ("role appeared in noon") — it should never fire now that the role is
+read directly — and the clarifying questions left on `SKIP`, which say which
+of noon's phrasings the strictness markers do not yet recognise.
 
 ## Gotchas
 
@@ -605,6 +644,20 @@ Railway environment, where it would run unattended on every posted row.
 - Cookie banner on every load (`Accept all`) and an error toast (`Unable to
   reach our servers … ad blocker`) that appears even when everything loads.
   The recipe dismisses both; neither blocks the page.
+- **Submit before the ATS lookup has settled hangs the modal** on "Creating
+  role..." for ever, with no `create_role` sent — two live runs died that way
+  on 2026-10-09 where a hand-driven run that paused went through. The recipe
+  now waits for `No matching ATS roles` (or a list of ATS roles) before
+  Submit, and gives creation 120 s.
+- **The `Chrome extension not detected` toast's close control is a bare
+  `svg`**, and its "Download" is a `div`, so the old `button` candidates in the
+  dismiss step matched nothing. Harmless (the toast sits bottom-right), but the
+  svg is now the first candidate.
+- **A fresh role has no `Review & Contact` card** until the sourcing wizard is
+  done; the driver runs the wizard first and reloads the role page.
+- **`all_roles` answers `[]`; `refetch_roles` lags by minutes; deleted roles
+  stay listed as `obsolete` tombstones; `poll_role_params` is the direct read**
+  — see [Reading a role](#reading-a-role).
 - `Edit outreach message` sits under a floating panel — a plain click timed
   out in the probe; `force=True` worked.
 - Role cards on the list render their text in nested `div`s, so
@@ -621,7 +674,8 @@ Railway environment, where it would run unattended on every posted row.
 
 ```bash
 python -m app.cli post noon --doc ./advert.docx --dry-run --headed --slow 200   # everything but Submit
-python -m app.cli post noon --doc ./advert.docx --live                           # once the dry run is clean
+python -m app.cli post noon --doc ./advert.docx --live --headed --set 'Location=<city>'   # role, wizard, campaign
+python -m app.cli delete noon --record "role=<uuid>" --dry-run --headed               # reads the name back; then --live
 ```
 
 Note that a dry run still creates the role (that `Submit` is not the final

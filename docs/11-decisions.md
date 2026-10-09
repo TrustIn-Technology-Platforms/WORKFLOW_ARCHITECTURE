@@ -679,7 +679,13 @@ volume, a laptop push must never replace it (the push leaves it out and the
 import refuses it), and a row posted before 2026-09-23 has only its one link.
 The 24-hour wait means a trashed row's outreach keeps running for a day.
 Loxo and Wellfound are not mapped, so their rows fail the delete until they
-are.
+are. *Amended 2026-10-09:* both are mapped, on the same terms -
+[loxo_delete.py](../app/platforms/loxo_delete.py) (the app's own
+`destroyCampaign`, only a campaign the run created, read back by name first)
+and [wellfound_delete.py](../app/platforms/wellfound_delete.py) (the app's
+persisted `DestroyJobListing`, drafts only - a listing published since is
+left alone because deleting it removes its applicants). Neither call has yet
+been sent live.
 
 **Revisit when** Notion offers a delete webhook, or when the ledger's rows
 need to be seen by recruiters - at which point it belongs in a database
@@ -870,3 +876,70 @@ sequence that is quietly short.
 **Revisit when** Juicebox publishes a supported API for sequences, or the
 editor breaks a third time - at that point writing through the API and
 owning the defaults is the cheaper side of the trade.
+
+
+## D-028 · noon's sourcing wizard runs before its campaign, and cannot be skipped
+
+**Status** Accepted
+**Date** 2026-10-09
+**Where** `app/platforms/noon.py`, `app/platforms/noon_sourcing.py`, `app/platforms/engine.py` (`RecipeEngine.run(after_capture=, interlude=)`), `platforms/noon.yaml` — [platforms/noon](platforms/noon.md#the-sourcing-wizard)
+
+### Context
+
+noon redesigned its portal in early October 2026. A freshly created role now
+shows a single button, `Start sourcing`; the stage cards — `Review & Contact`,
+behind which the outreach campaign editor lives — render only once the
+seven-step sourcing wizard has been completed. The recipe did the campaign
+first and the criteria after, waiting for `Review & Contact` straight after
+role creation, and every production run since the redesign died on that wait
+(five `Decart` roles created on 2026-10-08, each left at wizard step 2 with no
+campaign). The criteria replay, read out of noon's bundle on 2026-08-31, had
+also missed two screens: the full search-criteria confirm (titles, years,
+location, company chips, example companies, client, visa) and a new
+target-company rating step, so the roles it did configure searched the world on
+criteria alone. On 2026-10-09 the live wizard was walked by hand in a headed
+browser with every call recorded, and the replay rebuilt from that recording.
+
+### Decision
+
+The noon driver runs the sourcing wizard **between** creating the role and
+opening its campaign editor, through a general engine hook: `RecipeEngine.run`
+awaits a driver-supplied `interlude` right after the `capture_url` step that
+stores a named value (`after_capture="role_id"`), then continues with the
+remaining steps. The wizard replay sends the full step-3 write (`update_role`
+with the whole `preferences` block, the must-haves, the client description and
+noon's visa reading), rates the target companies noon proposes, and reads the
+role back directly (`poll_role_params`) rather than from a list that lags by
+minutes. Because the editor is unreachable without it, the sourcing half is
+**mandatory for noon**: `CRITERIA_ENABLED=false` / `--no-sourcing` is refused
+for this platform with a message saying why, and a wizard that does not finish
+fails the platform naming the bare role's URL instead of reporting Posted.
+
+### Why not the alternatives
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Keep the order and make the sourcing step optional, as before | the campaign cannot be saved at all on the new portal without the wizard; "optional" would mean "posting silently fails" |
+| Drive the wizard through the DOM now that it has been seen | seven timed screens, chip inputs, a two-thumb slider, an autocomplete that opens only on real keystrokes, star toggles — the state still travels in a dozen JSON calls the portal makes itself (D-017 stands) |
+| Split `noon.yaml` into two recipes and run the wizard in between in the driver | two recipes for one platform, both with login blocks and defaults, and a dry run that would have to know which half it is in; a hook on the engine is one small, tested change and reads as what it is |
+| Keep `refetch_roles` with a longer wait for the new role | the list lags by minutes and sometimes an hour; `poll_role_params` reads a role the moment it exists, and is what the portal's own role page polls |
+| Rate every proposed company "Okay" | neutral, but it teaches noon nothing; the brief already names target companies and noon's own anchors and size band give a defensible great / okay / no with no model call |
+
+### Trade-off
+
+A noon post now takes the wizard's ~60 s of API calls before the campaign, and
+a document with no job description (neither Client JD nor advert) can no
+longer post a campaign to noon at all — the recruiter gets a message and a
+bare role instead of a campaign on a role searching globally. The rating
+policy is deterministic and conservative; a recruiter who disagrees with a
+"no" fixes it in the Control Panel. The step-3 write mirrors a recorded
+payload from an undocumented API, so a noon change shows up as a failed call
+naming the step, not as a quietly wrong role.
+
+### Revisit when
+
+noon publishes an API, or changes the wizard again (a `PlatformError` naming
+`update_role`, `company_rating_cards` or `poll_role_params` is the signal), or
+a document legitimately needs a campaign without sourcing (then the wizard
+would need a "Skip" path — the JD screen has one — and the campaign's
+reachability would have to be re-checked).

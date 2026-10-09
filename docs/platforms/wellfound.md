@@ -10,6 +10,7 @@
 > The last piece was `ANTHROPIC_API_KEY` as a Railway variable (added
 > 2026-09-01; `/health` reports `anthropic_key_set`); without it the skills
 > step skips and, since v9, says so on the row.
+> **Delete built 2026-10-09, never run** - see [Deleting a row](#deleting-a-row-2026-10-09).
 >
 > Previously: **LIVE — proven 2026-08-31.** `post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live` filled the real *New Job Posting* form and saved job **4656911** as a draft; every field was verified by reading the saved job back through its own `/edit` page, and `Active (7)` was unchanged while `Drafts` went 51 → 53. The recipe submits **Save draft**, never Publish — see [Draft, not publish](#draft-not-publish). Sohaib's decision (2026-08-28): TrustIn posts anonymised adverts from its own account, as the recruiters already do by hand; the [policy risk](#the-policy-problem) is accepted, not removed.
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md) · [platforms/loxo](loxo.md)
@@ -331,3 +332,41 @@ the anchor's content. `:has-text` matches text that is `display: none`, and
 Playwright judges visibility on the anchor's own box, so a nav item keeping a
 visible icon beside the hidden label would still have been found — on the live
 page the item had collapsed outright.
+
+## Deleting a row (2026-10-09)
+
+> **Status** **BUILT, NEVER RUN.** [app/platforms/wellfound_delete.py](../../app/platforms/wellfound_delete.py),
+> wired through a new driver, [app/platforms/wellfound.py](../../app/platforms/wellfound.py)
+> (`driver: wellfound` in the recipe; the YAML steps still post exactly as
+> before, the driver only adds the records a delete needs and the delete).
+> Mapped from Wellfound's help article and its public JavaScript, **not from
+> a screen**: the laptop's profile had signed out by the time the probe ran
+> ([scripts/probe_wellfound_job_delete.py](../../scripts/probe_wellfound_job_delete.py)
+> landed on `/login`), and `.env` holds no `WELLFOUND_LOGIN_*` for a re-login.
+> The server's session was alive the same afternoon (`/health` keepalive,
+> 15:00 UTC), so the first proof can run from Railway once this is deployed,
+> or locally after `python -m app.cli login wellfound`.
+
+| What | How |
+|---|---|
+| The UI | Wellfound's own article ([How do I delete and unpublish a job posting?](https://help.wellfound.com/article/731-how-do-i-delete-and-unpublish-a-job-posting)): Jobs → All Jobs → the job's title → the **trash can** top-right. "Will remove the complete record, including applicants." Unpublish is the blue button beside it and returns a listing to draft. |
+| Transport | Apollo over `POST /graphql`, `credentials: same-origin`, headers `X-Requested-With: XMLHttpRequest`, `X-Apollo-Signature` (`window._alConfig.__APOLLO_SIGNATURE__`, inlined on every page) and `X-Apollo-Operation-Name`. **No query text is sent**: the body is `{operationName, variables, extensions: {operationId: "tfe/<sha256>"}}`, the hash from a registry the app ships (chunk `6994` of `application-c503218edf32f5ebc0bc.js`, module `getPersistedQueryAlias`, 622 operations). Seen live on the probe's one call: `RecruitJobCrosscheck {"jobId": ""}`. |
+| Delete | operation **`DestroyJobListing`**, id `tfe/bc24373bc28b7799b2ce3b4bff257753b0b149cc88fcbf90fd34fe9695ba439b` on 2026-10-09. The delete reads the live registry off the page first (webpack's module cache) and falls back to that hash. |
+| Its variables | **Not in the client code** - the job page is server-rendered Rails, and its JavaScript is not among the 79 chunks (the 54 ids that answered 403 are the CSS chunks). The recruit code names a listing's id `jobListingId` everywhere else, so that is sent first; when Wellfound answers that a *variable* was wrong ("Variable $input … was provided invalid value"), the call is sent once more under the name it asked for. The id itself never changes between attempts, and the accepted name is written to the row's note so this table can be pinned after the first live run. |
+| Read-back | the listing's own page, `/recruit/jobs/<id>`: deleted when it answers 404, redirects away, or says the page is gone; still there when it renders with the id in the address bar. Also read *before* the call, for the title and the state. |
+| Also in the registry | `DuplicateJobListing`, `RepostJobListing`, `ChangeJobListingVisibility`, `UpdateJobListing`, `RecruitJobListing` (a read), `DestroyJobListingQuestion`. Not used. |
+
+**What is deleted, and what is refused.** A Wellfound post's record is `job`
+(the listing URL the recipe captured after Save draft) and, from 2026-10-09,
+`job_title`. Every run creates a new listing, so the URL alone says what to
+delete. A listing whose page offers **Unpublish** has been published by a
+recruiter since and is **left alone and named on the row** - deleting it would
+take its applicants with it; unpublishing it back to a draft is a recruiter's
+call. When a title is recorded the page's title must still match it. A
+listing that is already gone counts as deleted and is said so.
+
+**To prove it:** `post wellfound --doc "ZZ TEST - ….docx" --set Location=… --live`
+(the ZZ TEST document carries a Wellfound board section), then the
+`delete wellfound --record job=… --dry-run` line the post prints, read the
+title back, then `--live`. Record here which variable name Wellfound accepted
+and what its page answers for a deleted listing.

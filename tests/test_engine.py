@@ -282,3 +282,55 @@ def test_the_context_gives_each_platform_its_own_advert():
     for platform in ("noon", "loxo", "juicebox", ""):
         context = build_context(document, None, {}, platform)
         assert "General advert copy." in context["advert"]["body_text"], platform
+
+
+def test_an_interlude_runs_once_right_after_the_named_capture(page_url):
+    """A driver's work between two steps - noon's sourcing wizard sits between
+    creating the role and opening its campaign editor - runs exactly once,
+    right after the `capture_url` that stores the named value, with that value
+    already captured.
+    """
+
+    async def run() -> dict:
+        recipe = load_recipe(RECIPE)
+        settings = get_settings()
+        seen: list[dict] = []
+
+        async def interlude(report) -> None:
+            seen.append({"captures": dict(report.captures), "executed": report.executed})
+
+        async with BrowserRunner(settings, headless=True) as runner:
+            async with runner.context() as (context, page):
+                await page.goto(page_url)
+                engine = RecipeEngine(recipe, page, settings, dry_run=False)
+                report = await engine.run(
+                    _document(), after_capture="post_url", interlude=interlude
+                )
+                return {"seen": seen, "executed": report.executed, "captures": dict(report.captures)}
+
+    state = asyncio.run(run())
+    assert len(state["seen"]) == 1
+    assert "post_url" in state["seen"][0]["captures"]
+    assert state["seen"][0]["captures"]["post_url"] == state["captures"]["post_url"]
+
+
+def test_a_dry_run_never_reaches_the_interlude(page_url):
+    """The capture sits past the submit step, where a dry run stops."""
+
+    async def run() -> int:
+        recipe = load_recipe(RECIPE)
+        settings = get_settings()
+        calls = 0
+
+        async def interlude(report) -> None:
+            nonlocal calls
+            calls += 1
+
+        async with BrowserRunner(settings, headless=True) as runner:
+            async with runner.context() as (context, page):
+                await page.goto(page_url)
+                engine = RecipeEngine(recipe, page, settings, dry_run=True)
+                await engine.run(_document(), after_capture="post_url", interlude=interlude)
+        return calls
+
+    assert asyncio.run(run()) == 0

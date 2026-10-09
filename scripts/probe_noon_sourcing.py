@@ -49,14 +49,20 @@ API = "https://noon.fly.dev"
 EXPECTED = [
     "generate_params",
     "set_candidate_source",
+    "company_search_by_name",       # per example company (step 3)
+    "prepare_role_preferences",
+    "role_summarized_jd_finished",
     "setup_clarifying_questions",
+    "update_role",                  # the whole step-3 screen
     "gpt_stream",
-    "role_autopilot",
-    "rank_non_negotiables",
-    "role_autopilot",
+    "company_rating_cards",         # step 4, when noon shows it
+    "save_company_ratings",
+    "role_autopilot",               # step 5, non-negotiables selected
     "clarifying_questions",
+    "role_autopilot",               # step 6, initialization: true
+    "rank_non_negotiables",
     "mark_clarifying_question",
-    "role_autopilot",
+    "role_autopilot",               # step 7, initialization: false
 ]
 
 # Redacted before anything reaches disk: this file gets read later, elsewhere.
