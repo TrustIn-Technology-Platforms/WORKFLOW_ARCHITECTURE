@@ -5,20 +5,29 @@ escape hatch documented in docs/07-platform-recipes.md: a Python driver that
 plugs into `RecipeAdapter` and reuses all of its session, login and
 failure-artifact handling, overriding only the part that drives the page.
 
-Why it needs a driver, established live on 2026-08-27 (see
-docs/platforms/juicebox.md and memory `juicebox-sequence-editor`):
+Why it needs a driver, re-established live on 2026-10-09 against the editor
+Juicebox shipped on 2026-10-08 (docs/platforms/juicebox.md, "The sequence
+editor (2026-10-08)"; the TinyMCE editor this driver was first written for is
+gone):
 
-- The step body is a **TinyMCE editor inside an `about:srcdoc` iframe**, and
-  only the *active* step's editor is mounted. Content goes in through TinyMCE's
-  own JS API (`setContent` + `save`), keyed by step index, not a CSS selector.
-- A sequence is grown one step at a time with an **Add step** button; only the
-  first step carries a Subject field — the rest are same-thread follow-ups that
-  inherit it. The engine's per-email loop cannot express "add a step between
-  emails, and only the first has a subject".
+- **New sequence → Build from scratch** creates and autosaves the sequence at
+  once (`POST /api/sequence`), titled after the most recent project and dated.
+  Every later edit is autosaved as a whole-sequence `PATCH /api/sequence`.
+- The subject and every step's body are **Tiptap editors**, all mounted at
+  once, with the Editor instance on the element (`element.editor`). Content
+  goes in through `setContent` with `emitUpdate` on - without it the editor
+  shows the text and the app never saves it, which is how the first probe
+  lost its subject. `{{First Name}}` written as text becomes Juicebox's own
+  token pill.
+- Only step 1 has a subject; steps added with **Add step** are threaded
+  follow-ups, scheduled two business days apart by default.
+- The editor is the writer and the API is the reader: the app keeps setting
+  its own defaults (sender, signature, schedule), and once the editor closes
+  the sequence is read back through `GET /api/sequence` and compared with the
+  document. A step that did not save fails the run with the sequence recorded,
+  so a Delete can still take it down.
 - Clicks that change the route hang Playwright (the app holds the document
   open), so navigation clicks pass `no_wait_after` and gotos wait for `commit`.
-- The REST API authenticates with an in-app bearer token, not the cookie, so
-  DOM automation is the only route (unlike noon, whose API was the whole job).
 
 Saving a sequence contacts nobody; sending starts only when a recruiter adds
 contacts and presses go. So the driver's output is a ready-to-review draft —
@@ -27,7 +36,9 @@ the same boundary noon draws.
 
 from __future__ import annotations
 
+import html as html_lib
 import re
+from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 from app.logging_conf import get_logger
@@ -47,71 +58,43 @@ from app.platforms.adapter import RecipeAdapter
 
 log = get_logger(__name__)
 
-# TinyMCE's editor list is exposed differently across builds; `tinymce.editors`
-# is undefined in Juicebox's, so fall back to `tinymce.get()`.
-_EDS = (
-    "function eds(){var t=window.tinymce;if(!t)return [];"
-    "try{if(t.editors&&t.editors.length!==undefined)return [].slice.call(t.editors);}catch(e){}"
-    "try{if(typeof t.get==='function'){var g=t.get();return Array.isArray(g)?g:(g?[g]:[]);}}catch(e){}"
-    "return [];}"
-)
-# React tracks controlled inputs through the native value setter; assigning
-# `.value` directly leaves its state stale, so drive the setter and fire the
-# same events a keystroke would.
-_SETN = (
-    "function setNative(el,val){var p=el.tagName==='TEXTAREA'"
-    "?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
-    "var d=Object.getOwnPropertyDescriptor(p,'value').set;d.call(el,val);"
-    "el.dispatchEvent(new Event('input',{bubbles:true}));"
-    "el.dispatchEvent(new Event('change',{bubbles:true}));}"
-)
+# The editor's handles, read off the live page on 2026-10-09
+# (artifacts/juicebox-editor-probe/). Step 1's subject; every step's body, in
+# step order, all mounted at once.
+_SUBJECT = "[data-step-subject-input]"
+_BODY = '[aria-label="Message body"]'
+_ADD_STEP = "button[aria-label='Add step']"
+_VALIDATION = "[data-testid='sequence-validation-errors']"
 
-# Filling a TinyMCE step is not just setContent: only the active step's editor
-# is mounted, and when a later step is added this one unmounts. The app's React
-# wrapper copies the editor's text into its own model on the editor's change
-# events, so a bare setContent (which updates TinyMCE but fires nothing the
-# wrapper listens to) is discarded on unmount — the classic symptom being the
-# first step saving empty. So: mark dirty, fire the whole event set the wrapper
-# binds, push an input from the iframe body, sync the backing textarea, and
-# blur to force the commit while the editor is still mounted.
-_FILL_STEP = "(a)=>{" + _EDS + _SETN + """
-  if(a.name){var n=document.querySelector('input[placeholder="Untitled sequence"]');
-    if(n){n.focus();setNative(n,a.name);}}
-  var subjEls=[].slice.call(document.querySelectorAll('input[placeholder="Add a subject"]'));
-  var E=eds();
-  var r={editors:E.length,subjectFields:subjEls.length,setSubject:false,setBody:false};
-  if(a.subject&&subjEls[a.idx]){subjEls[a.idx].focus();setNative(subjEls[a.idx],a.subject);r.setSubject=true;}
-  if(E[a.idx]){var ed=E[a.idx];
-    ed.setContent(a.html);
-    try{ed.setDirty(true);}catch(e){}
-    ['SetContent','input','change','keyup','NodeChange'].forEach(function(ev){try{ed.fire(ev);}catch(e){}});
-    var b=ed.getBody&&ed.getBody();
-    if(b){['input','keyup','change'].forEach(function(ev){b.dispatchEvent(new Event(ev,{bubbles:true}));});}
-    ed.save();
-    var ta=ed.getElement&&ed.getElement();
-    if(ta){ta.dispatchEvent(new Event('input',{bubbles:true}));ta.dispatchEvent(new Event('change',{bubbles:true}));}
-    try{ed.fire('blur');}catch(e){}
-    r.setBody=true;r.chars=ed.getContent().length;}
-  return r;
+# Write one Tiptap editor. `{emitUpdate: true}` is what makes the app save:
+# Tiptap 3 reads it as the option, Tiptap 2 as a truthy `emitUpdate`. A bare
+# setContent changes what is on screen and nothing the app persists.
+_SET_EDITOR = """([selector, index, content]) => {
+  const els = [...document.querySelectorAll(selector)];
+  const el = els[index];
+  if (!el) return {ok: false, why: 'not on the page', count: els.length};
+  const ed = el.editor;
+  if (!ed || !ed.commands) return {ok: false, why: 'no editor instance on it', count: els.length};
+  ed.commands.setContent(content, {emitUpdate: true});
+  return {ok: true, count: els.length, chars: ed.getText().length};
 }"""
 
-# Read one step's body length by index — used to verify a fill stuck.
-_READ_STEP = "(idx)=>{" + _EDS + """
-  var E=eds();
-  return E[idx]?E[idx].getContent().replace(/<[^>]+>/g,'').trim().length:-1;
+_EDITOR_AT = """([selector, index]) => {
+  const el = document.querySelectorAll(selector)[index];
+  return !!(el && el.editor && el.editor.commands);
 }"""
 
-# TinyMCE 8's autoresize plugin throws inside setContent if the editor is
-# mounted but not fully initialised (a race right after the step appears). Only
-# fill once the editor reports initialised and has a body.
-_EDITOR_READY = "(idx)=>{" + _EDS + """
-  var e=eds()[idx];
-  return !!(e && e.initialized && e.getBody && e.getBody());
-}"""
+_COUNT = "(selector) => document.querySelectorAll(selector).length"
 
-_COUNTS = "()=>{" + _EDS + """
-  return {editors:eds().length,
-          subjectFields:document.querySelectorAll('input[placeholder="Add a subject"]').length};
+# The title is a plain input holding the auto-title "<project> - <dd/mm/yyyy>";
+# it is marked so a real click and real keystrokes can replace it.
+_MARK_TITLE = """(title) => {
+  const inputs = [...document.querySelectorAll('input')];
+  const el = inputs.find(i => title && i.value === title)
+          || inputs.find(i => / - \\d{2}\\/\\d{2}\\/\\d{4}$/.test(i.value || ''));
+  if (!el) return null;
+  el.setAttribute('data-tb-title', '1');
+  return el.value;
 }"""
 
 
@@ -209,56 +192,61 @@ class JuiceboxAdapter(RecipeAdapter):
             )
 
         name = _sequence_name(document, row, emails)
-        await self._open_new_sequence(page)
+        subject = juicebox_tokens(emails[0].subject).strip()
+        bodies = [
+            juicebox_spacing(juicebox_tokens(email.body_html or email.body_text))
+            for email in emails
+        ]
 
-        # Step 1 exists already after "Start from scratch"; steps 2..N are added.
-        for index, email in enumerate(emails):
-            if index > 0:
-                await self._add_email_step(page, index)
-            subject = juicebox_tokens(email.subject) if index == 0 else ""
-            body = juicebox_spacing(juicebox_tokens(email.body_html or email.body_text))
-            result = await self._fill_step(page, index, name if index == 0 else None,
-                                           subject, body)
-            if not result.get("setBody"):
-                raise PlatformError(
-                    f"could not write email {email.order} into step {index + 1}: "
-                    f"the editor was not found ({result})"
+        tap = _ApiTap(page)
+        tap.attach()
+        try:
+            await self._open_new_sequence_dialog(page)
+            if self.dry_run:
+                # "Build from scratch" saves the sequence the moment it is
+                # clicked, so a dry run stops one click short of it.
+                await self._click_button_or_text(page, "Close")
+                report.skipped += 1
+                report.warnings.append(
+                    "dry run: stopped at Juicebox's New sequence dialog - 'Build "
+                    "from scratch' creates and saves the sequence on the click."
                 )
-            report.emails_written += 1
-            report.executed += 1
-            log.info(
-                "juicebox step filled",
-                extra={
-                    "order": email.order,
-                    "index": index,
-                    "subject": subject[:80],
-                    "chars": result.get("chars"),
-                    "editors": result.get("editors"),
-                },
-            )
-            # Move focus off the editor so the app commits this step's body to
-            # its model before the next 'Add step' unmounts the editor.
-            await self._commit_focus(page)
-            await page.wait_for_timeout(800)
+                return report
 
-        await self._verify_bodies(page, len(emails), report)
-        report.captures["post_url"] = _sequence_url(page.url)
+            sequence = await self._build_from_scratch(page, tap)
+            report.records["sequence"] = sequence
+            report.captures["post_url"] = _sequence_url(page.url) or page.url
+            try:
+                await self._write_sequence(page, tap, report, name, subject, bodies)
+                juicebox_says = await self._close_editor(page)
+                saved = await self._read_back(page, tap, sequence)
+            except PlatformError as exc:
+                raise _with_records(exc, report)
+            except Exception as exc:  # noqa: BLE001 - the sequence exists; say so
+                raise _with_records(
+                    PlatformError(
+                        f"Juicebox: the sequence was created but writing it failed - "
+                        f"{exc.__class__.__name__}: {_short(exc)}"
+                    ),
+                    report,
+                ) from exc
 
-        if self.dry_run:
-            report.skipped += 1
-            report.warnings.append(
-                "dry run: stopped before Save. Juicebox may autosave the draft, "
-                "so a sequence can still appear in the list."
-            )
-            log.info("juicebox dry run - not saving", extra={"sequence": name})
-            return report
+            problems = _saved_problems(saved, name, subject, bodies)
+            if problems:
+                raise _with_records(
+                    PlatformError(
+                        "Juicebox created the sequence but it did not save as written: "
+                        + "; ".join(problems)
+                        + (f". Juicebox says: {juicebox_says}" if juicebox_says else "")
+                        + f". Open it and finish it by hand, or set the row to Delete: "
+                        f"{report.post_url}"
+                    ),
+                    report,
+                )
+        finally:
+            tap.detach()
 
-        await self._save(page)
         report.submitted = True
-        from app.platforms.juicebox_delete import sequence_id
-
-        if sequence_id(report.post_url or ""):
-            report.records["sequence"] = sequence_id(report.post_url or "") or ""
         log.info(
             "juicebox sequence saved",
             extra={"sequence": name, "steps": report.emails_written, "url": report.post_url},
@@ -538,131 +526,220 @@ class JuiceboxAdapter(RecipeAdapter):
 
     # -- page interactions -------------------------------------------------
 
-    async def _open_new_sequence(self, page: "Page") -> None:
-        """Open a blank sequence editor, retrying the flow if it stalls.
+    async def _open_new_sequence_dialog(self, page: "Page") -> None:
+        """Sequences, New sequence, and the dialog with 'Build from scratch'.
 
-        'Start from scratch' intermittently hangs on "Getting things ready…"
-        and never mounts the editor. A reload and a fresh attempt clears it —
-        which is exactly how the flow was driven by hand.
+        Retried freely: nothing up to here creates anything. The list paints
+        late, and the first 'New sequence' click can land before it exists.
         """
         sequences_url = self.recipe.defaults.get("sequences_url")
-        attempts = 4
+        attempts = 3
         last = ""
         for attempt in range(attempts):
             try:
                 await self._go_to_sequence_list(page, sequences_url, first=attempt == 0)
-                await page.wait_for_timeout(8_000)
+                await self._wait_for_text(page, "New sequence", seconds=45)
                 await self._click_button_or_text(page, "New sequence")
-                await page.wait_for_timeout(2_500)
-                # Juicebox's 2026-10-08 redesign: the modal offers "Build from
-                # scratch" under a list of projects, and behind it is a new
-                # editor (Tiptap/ProseMirror, not TinyMCE) that none of the
-                # fill code below knows. Clicking through created an empty
-                # sequence in a real client project and then failed anyway
-                # (artifact 20261008-203918). Until the driver is remapped
-                # against that editor, stop here, before anything is created.
-                if await page.get_by_text("Build from scratch", exact=True).count():
-                    raise _Redesigned(
-                        "Juicebox redesigned its sequence editor on 2026-10-08 "
-                        "(a new 'Build from scratch' modal and a new message "
-                        "editor) and this automation has not been remapped to "
-                        "it yet. Nothing was created. Build this sequence in "
-                        "Juicebox by hand for now; the other platforms are "
-                        "unaffected."
-                    )
-                await self._click_button_or_text(page, "Start from scratch")
-            except _Redesigned:
-                raise
-            except Exception as exc:
+                await self._wait_for_text(page, "Build from scratch", seconds=20)
+                return
+            except Exception as exc:  # noqa: BLE001 - retried, then reported
                 last = _short(exc)
                 log.warning(
-                    "juicebox open-sequence attempt failed; retrying",
+                    "juicebox new-sequence dialog did not open; retrying",
                     extra={"attempt": attempt + 1, "of": attempts, "error": last},
                 )
-                continue
-
-            # The editor mounts late (~15-20s); wait for a TinyMCE instance.
-            for _ in range(12):
-                await page.wait_for_timeout(3_000)
-                if (await page.evaluate(_COUNTS))["editors"] >= 1:
-                    return
-            last = "editor stalled on 'Getting things ready…'"
-            log.warning(
-                "juicebox editor did not render; retrying",
-                extra={"attempt": attempt + 1, "of": attempts},
-            )
         raise PlatformError(
-            f"could not open a blank sequence editor after {attempts} attempts "
-            f"({last})"
+            f"could not open Juicebox's New sequence dialog after {attempts} attempts ({last})"
         )
 
-    async def _fill_step(
-        self, page: "Page", index: int, name: str | None, subject: str, html: str
+    async def _build_from_scratch(self, page: "Page", tap: "_ApiTap") -> str:
+        """Click 'Build from scratch' once and return the sequence it created.
+
+        Never retried: the click creates and saves the sequence, so a second
+        click is a second sequence. The id comes off the app's own
+        `POST /api/sequence` response, with the editor URL as the fallback.
+        """
+        from app.platforms.juicebox_delete import sequence_id
+
+        created: dict = {}
+        try:
+            async with page.expect_response(_is_create, timeout=60_000) as response_info:
+                await self._click_button_or_text(page, "Build from scratch")
+            response = await response_info.value
+            created = ((await response.json()) or {}).get("result") or {}
+        except Exception as exc:  # noqa: BLE001 - the URL may still name it
+            log.warning("juicebox create response not read", extra={"error": _short(exc)})
+        sequence = str(created.get("id") or "") or None
+        tap.created_title = str(created.get("title") or "")
+
+        # The editor mounts some seconds after the create returns.
+        for _ in range(60):
+            if not sequence:
+                sequence = sequence_id(page.url)
+            if sequence and await page.evaluate(_EDITOR_AT, [_SUBJECT, 0]):
+                break
+            await page.wait_for_timeout(1_000)
+        if not sequence:
+            raise PlatformError(
+                "'Build from scratch' did not create a sequence Juicebox would name, so "
+                "nothing was written. Check Juicebox's Sequences list for a stray draft "
+                "dated today and delete it."
+            )
+        if not await page.evaluate(_EDITOR_AT, [_SUBJECT, 0]):
+            raise _with_records(
+                PlatformError(
+                    "Juicebox created the sequence but its editor never opened, so nothing "
+                    "was written into it."
+                ),
+                {"sequence": sequence, "post_url": _sequence_url(page.url) or page.url},
+            )
+        log.info("juicebox sequence created", extra={"sequence": sequence,
+                                                     "auto_title": tap.created_title})
+        return sequence
+
+    async def _write_sequence(
+        self,
+        page: "Page",
+        tap: "_ApiTap",
+        report: RunReport,
+        name: str,
+        subject: str,
+        bodies: list[str],
+    ) -> None:
+        """Title, subject, then each step: step 1 exists, steps 2..N are added."""
+        await self._rename(page, name, tap.created_title)
+        if subject:
+            await self._set_editor(page, _SUBJECT, 0, subject, "the subject")
+        for index, body in enumerate(bodies):
+            if index > 0:
+                await self._add_step(page, index + 1)
+            result = await self._set_editor(page, _BODY, index, body, f"step {index + 1}'s body")
+            report.emails_written += 1
+            report.executed += 1
+            log.info(
+                "juicebox step written",
+                extra={"step": index + 1, "chars": result.get("chars"), "bodies": result.get("count")},
+            )
+        await self._settle(page, tap)
+
+    async def _rename(self, page: "Page", name: str, auto_title: str) -> None:
+        """Replace the auto-title with real keystrokes, as a person would."""
+        found = await page.evaluate(_MARK_TITLE, auto_title)
+        if found is None:
+            raise PlatformError("the sequence's title box was not found in Juicebox's editor")
+        box = page.locator("input[data-tb-title='1']").first
+        await box.click(timeout=8_000)
+        await page.keyboard.press("Control+A")
+        await page.keyboard.type(name, delay=10)
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(800)
+
+    async def _set_editor(
+        self, page: "Page", selector: str, index: int, content: str, what: str
     ) -> dict:
-        """Fill one step, waiting for the editor to be ready and retrying the
-        transient TinyMCE autoresize crash that setContent hits right after a
-        step mounts."""
-        # Wait until the target editor is initialised.
-        for _ in range(15):
+        """Write one Tiptap editor, waiting for it to mount first."""
+        for _ in range(20):
+            if await page.evaluate(_EDITOR_AT, [selector, index]):
+                break
+            await page.wait_for_timeout(750)
+        result = await page.evaluate(_SET_EDITOR, [selector, index, content])
+        if not result.get("ok"):
+            raise PlatformError(f"could not write {what} into Juicebox's editor: {result.get('why')}")
+        await page.wait_for_timeout(600)
+        return result
+
+    async def _add_step(self, page: "Page", wanted: int) -> None:
+        """Add step, until `wanted` bodies are on the page. A step-type menu,
+        when one opens instead, is answered with Email."""
+        try:
+            await page.locator(_ADD_STEP).first.click(timeout=8_000, no_wait_after=True)
+        except Exception as exc:
+            raise PlatformError(f"could not click 'Add step': {_short(exc)}") from exc
+        if await self._wait_for_count(page, _BODY, wanted, seconds=12):
+            return
+        for choose in (
+            page.get_by_role("menuitem", name="Email", exact=True),
+            page.get_by_role("option", name="Email", exact=True),
+        ):
             try:
-                if await page.evaluate(_EDITOR_READY, index):
-                    break
+                await choose.first.click(timeout=3_000)
+                break
+            except Exception:
+                continue
+        if not await self._wait_for_count(page, _BODY, wanted, seconds=12):
+            have = await page.evaluate(_COUNT, _BODY)
+            raise PlatformError(f"adding step {wanted} failed: the editor shows {have} step(s)")
+
+    async def _settle(self, page: "Page", tap: "_ApiTap") -> None:
+        """Wait for the autosave that follows the last edit to come back.
+
+        Juicebox saves the whole sequence a moment after each change. Closing
+        before the last save lands is how a step goes missing, so this waits
+        out the save delay, then for every save sent to be answered and the
+        saving to stop. The read-back after Done is the real check; this only
+        keeps it from finding a save still on the wire.
+        """
+        started = tap.clock()
+        for _ in range(40):
+            await page.wait_for_timeout(500)
+            if tap.clock() - started >= 2.5 and not tap.in_flight() and tap.quiet_for(1.5):
+                return
+        log.warning(
+            "juicebox autosave not confirmed before closing",
+            extra={"sent": tap.sent, "answered": tap.answered},
+        )
+
+    async def _close_editor(self, page: "Page") -> str:
+        """Done. Returns Juicebox's own complaint when it closed with errors."""
+        complaint = ""
+        try:
+            panel = page.locator(_VALIDATION)
+            if await panel.count():
+                complaint = " ".join((await panel.first.inner_text()).split())[:300]
+        except Exception:
+            pass
+        await self._click_button_or_text(page, "Done")
+        await page.wait_for_timeout(2_000)
+        # "Close with errors?" - the sequence is saved either way; closing
+        # lets the read-back say exactly what is wrong.
+        if await page.get_by_text("Close anyway", exact=True).count():
+            await self._click_button_or_text(page, "Close anyway")
+            await page.wait_for_timeout(1_500)
+            complaint = complaint or "it closed with errors"
+        return complaint
+
+    async def _read_back(self, page: "Page", tap: "_ApiTap", sequence: str) -> dict:
+        """The sequence as Juicebox stored it, through its own API."""
+        from app.platforms.juicebox_delete import JuiceboxSession
+
+        if not tap.token:
+            raise PlatformError("Juicebox's session token was not seen, so the sequence could not be read back")
+        data = await JuiceboxSession(page=page, token=tap.token).call(
+            "GET", f"/api/sequence?sequenceId={sequence}"
+        )
+        result = (data or {}).get("result") if isinstance(data, dict) else None
+        items = result if isinstance(result, list) else [result] if isinstance(result, dict) else []
+        for item in items:
+            if isinstance(item, dict) and item.get("id") == sequence:
+                return item
+        raise PlatformError(f"Juicebox did not return sequence {sequence} when asked for it back")
+
+    async def _wait_for_text(self, page: "Page", text: str, *, seconds: int) -> None:
+        for _ in range(seconds):
+            try:
+                if await page.get_by_text(text, exact=True).count():
+                    return
             except Exception:
                 pass
             await page.wait_for_timeout(1_000)
+        raise PlatformError(f"{text!r} never appeared")
 
-        last: dict = {}
-        for _ in range(4):
-            try:
-                last = await page.evaluate(
-                    _FILL_STEP,
-                    {"idx": index, "name": name, "subject": subject, "html": html},
-                )
-                if last.get("setBody"):
-                    return last
-            except Exception as exc:
-                log.debug("fill_step retry", extra={"index": index, "error": _short(exc)})
-            await page.wait_for_timeout(2_000)
-        return last
-
-    async def _commit_focus(self, page: "Page") -> None:
-        """Blur the editor onto the title input so the app commits the step."""
-        try:
-            await page.evaluate(
-                "()=>{var a=document.activeElement;if(a&&a.blur)a.blur();"
-                "var n=document.querySelector('input[placeholder=\"Untitled sequence\"]');"
-                "if(n){n.focus();n.blur();}}"
-            )
-        except Exception:
-            pass
-
-    async def _verify_bodies(
-        self, page: "Page", count: int, report: RunReport
-    ) -> None:
-        """Re-activate each step and confirm its body is non-empty.
-
-        Clicking a step in the left rail makes it the active step, which also
-        commits its live content to the app's model — so this both verifies and
-        reinforces the fill. A step that still reads empty is reported, not
-        silently saved.
-        """
-        empty: list[int] = []
-        for n in range(1, count + 1):
-            try:
-                await page.get_by_text(f"Step {n}:", exact=False).first.click(
-                    timeout=5_000, no_wait_after=True
-                )
-                await page.wait_for_timeout(1_200)
-            except Exception:
-                continue
-            length = await page.evaluate(_READ_STEP, n - 1)
-            log.info("juicebox body check", extra={"step": n, "chars": length})
-            if length <= 0:
-                empty.append(n)
-        if empty:
-            report.warnings.append(
-                "steps saved with an empty body: " + ", ".join(map(str, empty))
-            )
+    async def _wait_for_count(self, page: "Page", selector: str, wanted: int, *, seconds: int) -> bool:
+        for _ in range(seconds * 2):
+            if await page.evaluate(_COUNT, selector) >= wanted:
+                return True
+            await page.wait_for_timeout(500)
+        return False
 
     async def _go_to_sequence_list(
         self, page: "Page", sequences_url: str | None, first: bool
@@ -710,48 +787,6 @@ class JuiceboxAdapter(RecipeAdapter):
             pass
         await self._click_text(page, "Sequences")
 
-    async def _add_email_step(self, page: "Page", expected_index: int) -> None:
-        before = (await page.evaluate(_COUNTS))["editors"]
-        try:
-            await page.get_by_role("button", name="Add step", exact=True).first.click(
-                timeout=8_000
-            )
-        except Exception as exc:
-            raise PlatformError(f"could not click 'Add step': {_short(exc)}") from exc
-        await page.wait_for_timeout(3_000)
-
-        counts = await page.evaluate(_COUNTS)
-        if counts["editors"] <= before:
-            # Some builds open a step-type menu; choose Email.
-            for choose in (
-                lambda: page.get_by_role("menuitem", name="Email").first.click(timeout=3_000),
-                lambda: page.get_by_text("Email", exact=True).last.click(
-                    timeout=3_000, no_wait_after=True
-                ),
-            ):
-                try:
-                    await choose()
-                    break
-                except Exception:
-                    continue
-            await page.wait_for_timeout(3_000)
-            counts = await page.evaluate(_COUNTS)
-
-        if counts["editors"] < expected_index + 1:
-            raise PlatformError(
-                f"adding step {expected_index + 1} failed: editor count stayed at "
-                f"{counts['editors']}"
-            )
-
-    async def _save(self, page: "Page") -> None:
-        try:
-            await page.get_by_role("button", name="Save", exact=True).first.click(
-                timeout=10_000
-            )
-        except Exception as exc:
-            raise PlatformError(f"could not click 'Save': {_short(exc)}") from exc
-        await page.wait_for_timeout(5_000)
-
     async def _click_text(self, page: "Page", text: str) -> None:
         try:
             await page.get_by_text(text, exact=True).first.click(
@@ -780,10 +815,148 @@ class JuiceboxAdapter(RecipeAdapter):
         raise PlatformError(f"could not click {label!r}")
 
 
-class _Redesigned(PlatformError):
-    """The screen is one this driver has never been mapped against. Raised
-    before anything is created, and never retried: a retry would only create
-    the same stray thing again."""
+class _ApiTap:
+    """The app's own traffic, read while the driver works.
+
+    Two things come off it: the Firebase ID token every `/api/` call carries
+    (the read-back needs it; it is minted in the page and never in a cookie),
+    and the autosaves - each edit is saved as a whole-sequence
+    `PATCH /api/sequence`, and the driver closes the editor only after the
+    save that follows its last edit has come back.
+    """
+
+    def __init__(self, page: "Page") -> None:
+        import time
+
+        self.clock = time.monotonic
+        self.page = page
+        self.token: str | None = None
+        self.created_title = ""
+        self.sent = 0  # autosave requests sent
+        self.answered = 0  # ... and answered, or failed
+        self._last_activity = 0.0
+
+    def attach(self) -> None:
+        self.page.on("request", self._on_request)
+        self.page.on("response", self._on_response)
+        self.page.on("requestfailed", self._on_failed)
+
+    def detach(self) -> None:
+        for event, handler in (
+            ("request", self._on_request),
+            ("response", self._on_response),
+            ("requestfailed", self._on_failed),
+        ):
+            try:
+                self.page.remove_listener(event, handler)
+            except Exception:
+                pass
+
+    def _on_request(self, request: Any) -> None:
+        if "/api/" not in request.url:
+            return
+        try:
+            token = request.headers.get("fbauthorization")
+        except Exception:
+            token = None
+        if token:
+            self.token = token  # the latest: ID tokens are re-minted hourly
+        if _is_autosave(request):
+            self.sent += 1
+            self._last_activity = self.clock()
+
+    def _on_response(self, response: Any) -> None:
+        if _is_autosave(response.request):
+            self.answered += 1
+            self._last_activity = self.clock()
+
+    def _on_failed(self, request: Any) -> None:
+        if _is_autosave(request):
+            self.answered += 1
+            self._last_activity = self.clock()
+
+    def in_flight(self) -> int:
+        return max(0, self.sent - self.answered)
+
+    def quiet_for(self, seconds: float) -> bool:
+        """No autosave sent or answered for `seconds` (true before the first)."""
+        return self.clock() - self._last_activity >= seconds
+
+
+def _path(url: str) -> str:
+    return re.sub(r"^https?://[^/]+", "", (url or "").split("?", 1)[0]).rstrip("/")
+
+
+def _is_create(response: Any) -> bool:
+    return response.request.method == "POST" and _path(response.url) == "/api/sequence"
+
+
+def _is_autosave(request: Any) -> bool:
+    return request.method == "PATCH" and _path(request.url) == "/api/sequence"
+
+
+def _with_records(exc: Exception, records: Any) -> Exception:
+    """Attach what was created, so post_document can ledger a failed post.
+
+    `records` is a RunReport (its records plus the post URL) or a plain dict.
+    """
+    if isinstance(records, RunReport):
+        held = dict(records.records)
+        if records.post_url:
+            held.setdefault("post_url", records.post_url)
+    else:
+        held = dict(records or {})
+    exc.records = held  # type: ignore[attr-defined]
+    return exc
+
+
+def _plain_words(markup: str) -> list[str]:
+    """Words of an HTML or text body, tags and entities gone, case folded.
+
+    Tokens survive as words (`{{first`, `name}}`), so a lost token reads as a
+    lost word.
+    """
+    text = re.sub(r"<[^>]+>", " ", markup or "")
+    text = html_lib.unescape(text).replace("\xa0", " ")
+    return re.findall(r"[\w{}'’.,!?@$%&-]+", text.lower())
+
+
+def _coverage(saved: str, expected: str) -> float:
+    """The share of the expected words that the saved text holds."""
+    want = Counter(_plain_words(expected))
+    if not want:
+        return 1.0
+    have = Counter(_plain_words(saved))
+    return sum(min(count, have[word]) for word, count in want.items()) / sum(want.values())
+
+
+def _saved_problems(saved: dict, name: str, subject: str, bodies: list[str]) -> list[str]:
+    """Compare the stored sequence with what the document asked for.
+
+    Words, not markup: the editor rewrites HTML (empty paragraphs become
+    `<p><br></p>`, tokens become pills and back), so only lost words count.
+    """
+    problems: list[str] = []
+    title = str(saved.get("title") or "").strip()
+    if title != name.strip():
+        problems.append(f"the title reads {title!r}, not {name.strip()!r}")
+    steps = [s for s in saved.get("steps") or [] if isinstance(s, dict)]
+    emails = [s for s in steps if (s.get("type") or "email") == "email"]
+    if len(emails) != len(bodies):
+        problems.append(f"{len(emails)} email step(s) saved, the document has {len(bodies)}")
+    if subject:
+        stored = str((emails[0].get("subject") if emails else "") or saved.get("subject") or "")
+        if not stored.strip():
+            problems.append("the subject did not save")
+        elif _coverage(stored, subject) < 0.9:
+            problems.append(f"the subject saved as {stored!r}")
+    for number, (step, body) in enumerate(zip(emails, bodies), start=1):
+        share = _coverage(str(step.get("body") or ""), body)
+        if share == 0:
+            problems.append(f"step {number}'s body saved empty")
+        elif share < 0.9:
+            problems.append(f"step {number}'s body saved incomplete ({share:.0%} of its words)")
+    return problems
 
 
 # ----------------------------------------------------------------------

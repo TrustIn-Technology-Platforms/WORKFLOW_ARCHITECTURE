@@ -830,3 +830,43 @@ RecruitOS is where status lives.
 **Revisit when** RecruitOS has carried every posting for a month — then the
 Notion door, its settings and `app/notion` are the dead code D-025 spoke of —
 or when a second board or caller appears.
+
+## D-027 · Juicebox: the editor writes, the API reads back
+
+**Status** Accepted · **Date** 2026-10-09 · **Where** [app/platforms/juicebox.py](../app/platforms/juicebox.py), [platforms/juicebox](platforms/juicebox.md#the-sequence-editor-2026-10-08---remapped-proven-live-2026-10-09)
+
+**Context.** Juicebox replaced its sequence editor on 2026-10-08 (Tiptap,
+autosave, "Build from scratch"), and the TinyMCE driver failed on every row
+that day; one attempt left an empty sequence behind. A probe of the live app
+on 2026-10-09 showed that the whole sequence round-trips through Juicebox's
+own API - `POST /api/sequence` to create, a whole-sequence
+`PATCH /api/sequence` on every autosave, `GET /api/sequence?sequenceId=` to
+read - with the Firebase token the delete path already reads off the app's
+traffic. The 2026-08-27 reason for DOM automation ("the API needs an in-app
+token") no longer held. It also showed how the old driver had failed
+silently: a value written into the editor without `emitUpdate` is on screen
+and never saved, and only a read of the stored sequence notices.
+
+**Decision.** Content goes in through the editor, the way a person types it:
+Build from scratch, the title input, `element.editor.commands.setContent`
+with `emitUpdate`, Add step, Done. Nothing is written through the API. After
+Done the stored sequence is read back through the API and compared with the
+document word by word; any shortfall fails the platform with the sequence id
+recorded for a later Delete.
+
+**Why not the alternatives.**
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Write the sequence through the API (`POST` + one `PATCH` with every step) | The editor's first save fills in what a person never sees - `signatureId`, mailbox, send times, schedule fields, `uniqueSenders` - from calls the driver would have to reproduce. Getting one wrong gives a sequence that looks right and sends wrong, which is worse than one that fails. |
+| Keep the DOM-only check (re-open each step, count characters) | It is what missed the empty first email in August and would have missed the lost subject now: the DOM shows what the editor holds, not what was saved. |
+| Write through the API and open the editor to "normalise" it | Two writers on one document: the open editor autosaves its own state over the API's on the next change. |
+
+**Trade-off.** A redesign of the editor's controls still breaks the writer
+(the title input, the step selectors, the Add step and Done labels). It now
+breaks loudly - the read-back names what is missing - instead of saving a
+sequence that is quietly short.
+
+**Revisit when** Juicebox publishes a supported API for sequences, or the
+editor breaks a third time - at that point writing through the API and
+owning the defaults is the cheaper side of the trade.

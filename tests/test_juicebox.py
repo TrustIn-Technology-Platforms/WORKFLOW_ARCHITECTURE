@@ -229,3 +229,120 @@ def test_the_dry_run_says_which_stages_it_would_set(monkeypatch, tmp_path):
     stated, _ = _sourcing_run(monkeypatch, tmp_path, AXLE_JD_STATED, dry_run=True)
     line = next(w for w in stated if w.startswith("dry run"))
     assert "stages seed/series_a" in line
+
+
+# -- the 2026-10-08 editor: read-back comparison and the autosave tap ---------
+
+from app.platforms import juicebox as jb  # noqa: E402
+
+_SUBJECT = "Founding Platform Engineer / Seed / up to $275k + equity"
+_BODIES = [
+    "<p>Hi {{First Name}},</p><p><br></p><p>I am headhunting for a Platform Engineer at {{Current Company}}'s peer.</p>",
+    "<p>Hi {{First Name}},</p><p><br></p><p>Following up with one detail: the team is 5 engineers.</p>",
+]
+
+
+def _stored(title="Acme - Founding Platform Engineer - SF", subject=_SUBJECT, bodies=None):
+    """A sequence as GET /api/sequence returns it - the editor's own rewrites
+    included: `<p><br></p>` blanks, newlines between blocks, tokens as text."""
+    bodies = _BODIES if bodies is None else bodies
+    steps = []
+    for index, body in enumerate(bodies):
+        steps.append({
+            "id": f"step{index}", "type": "email", "delayDays": 0 if index == 0 else 2,
+            "subject": subject if index == 0 else "",
+            "body": body.replace("</p><p>", "</p>\n<p>").replace("&", "&amp;").replace("'", "&#39;"),
+        })
+    return {"id": "SEQ", "title": title, "subject": "", "steps": steps}
+
+
+def test_a_sequence_that_saved_as_written_has_no_problems():
+    assert jb._saved_problems(_stored(), "Acme - Founding Platform Engineer - SF",
+                              _SUBJECT, _BODIES) == []
+
+
+def test_the_lost_subject_is_named():
+    """The first probe's failure: the subject shown in the editor, never saved."""
+    problems = jb._saved_problems(_stored(subject=""), "Acme - Founding Platform Engineer - SF",
+                                  _SUBJECT, _BODIES)
+    assert problems == ["the subject did not save"]
+
+
+def test_an_empty_or_short_body_and_a_missing_step_are_named():
+    saved = _stored(bodies=["<p></p>"])
+    problems = jb._saved_problems(saved, "Acme - Founding Platform Engineer - SF", _SUBJECT, _BODIES)
+    assert "1 email step(s) saved, the document has 2" in problems
+    assert "step 1's body saved empty" in problems
+
+    half = _stored(bodies=[_BODIES[0], "<p>Hi {{First Name}},</p>"])
+    problems = jb._saved_problems(half, "Acme - Founding Platform Engineer - SF", _SUBJECT, _BODIES)
+    assert any(p.startswith("step 2's body saved incomplete") for p in problems)
+
+
+def test_a_title_that_kept_the_auto_name_is_named():
+    saved = _stored(title="Token - Infra Eng - SF - 10/08/2026")
+    problems = jb._saved_problems(saved, "Acme - Founding Platform Engineer - SF", _SUBJECT, _BODIES)
+    assert problems == [
+        "the title reads 'Token - Infra Eng - SF - 10/08/2026', not "
+        "'Acme - Founding Platform Engineer - SF'"
+    ]
+
+
+def test_a_lost_token_counts_as_lost_words():
+    assert jb._coverage("<p>Hi ,</p>", "<p>Hi {{First Name}},</p>") < 0.9
+    assert jb._coverage("<p>Hi {{First Name}},</p>", "<p>Hi {{First Name}},</p>") == 1.0
+
+
+def test_records_ride_on_the_failure():
+    from app.models import PlatformError
+    from app.platforms.engine import RunReport
+
+    report = RunReport()
+    report.records["sequence"] = "SEQ"
+    report.captures["post_url"] = "https://app.juicebox.ai/project/P/sequences/SEQ"
+    exc = jb._with_records(PlatformError("x"), report)
+    assert exc.records == {"sequence": "SEQ",
+                           "post_url": "https://app.juicebox.ai/project/P/sequences/SEQ"}
+
+
+class _Req:
+    def __init__(self, method, url, token=None):
+        self.method, self.url = method, url
+        self.headers = {"fbauthorization": token} if token else {}
+
+
+class _Resp:
+    def __init__(self, request):
+        self.request, self.url = request, request.url
+
+
+class _Page:
+    def on(self, *a):
+        pass
+
+    def remove_listener(self, *a):
+        pass
+
+
+def test_the_tap_keeps_the_latest_token_and_counts_saves_in_flight():
+    tap = jb._ApiTap(_Page())
+    now = [100.0]
+    tap.clock = lambda: now[0]
+    tap._on_request(_Req("GET", "https://app.juicebox.ai/api/user", token="t1"))
+    tap._on_request(_Req("GET", "https://app.juicebox.ai/api/sequence/list", token="t2"))
+    assert tap.token == "t2"
+
+    save = _Req("PATCH", "https://app.juicebox.ai/api/sequence")
+    tap._on_request(save)
+    assert tap.in_flight() == 1 and not tap.quiet_for(1.5)
+    now[0] += 0.5
+    tap._on_response(_Resp(save))
+    assert tap.in_flight() == 0 and not tap.quiet_for(1.5)
+    now[0] += 2.0
+    assert tap.quiet_for(1.5)
+
+    # A create or a list read is not an autosave.
+    tap._on_request(_Req("POST", "https://app.juicebox.ai/api/sequence"))
+    tap._on_request(_Req("PATCH", "https://app.juicebox.ai/api/sequence/other"))
+    assert tap.sent == 1
+    assert jb._is_create(_Resp(_Req("POST", "https://app.juicebox.ai/api/sequence?x=1")))

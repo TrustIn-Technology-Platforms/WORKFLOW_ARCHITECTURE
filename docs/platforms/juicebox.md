@@ -6,12 +6,12 @@
 > sequence ("Judgment Labs Cloud Infrastructure Engineer") was created and saved
 > from a real document on 2026-08-27, verified in the sequence list. The flow is
 > packaged as [app/platforms/juicebox.py](../../app/platforms/juicebox.py) — a
-> `driver`, not YAML steps, because the editor is TinyMCE-in-an-iframe reached
-> through its own JS API. Run it with `python -m app.cli post juicebox --doc
+> `driver`, not YAML steps, because the editor (Tiptap since 2026-10-08,
+> TinyMCE before) is reached through its own JS API and checked through the app's. Run it with `python -m app.cli post juicebox --doc
 > <file> --live`. **The login expires easily and is email+password (no SSO); when
 > it drops, `python -m app.cli login juicebox` re-captures it.** See
 > [the working session](#what-the-working-session-showed) and
-> [the editor mechanics](#the-sequence-editor-2026-08-27).
+> [the editor mechanics](#the-sequence-editor-2026-10-08---remapped-proven-live-2026-10-09).
 > **Redesign, 2026-10-08 ("Agent 4.0"):** the sidebar is icon-only, so the
 > word "Sequences" is no longer on the page; the item is a link with
 > `aria-label="Sequences"`. Until that day's fix the session check read a
@@ -20,6 +20,10 @@
 > `ready_selector` and the driver's own check now accept the aria-label link
 > too, and `_go_to_sequence_list` clicks it; `tests/test_adapter.py` runs the
 > shipped recipe against `mock-juicebox-home.html` and the blank signed-out page.
+> **Sequence editor remapped 2026-10-09:** Juicebox replaced the editor on
+> 2026-10-08 (Tiptap, autosave, Build from scratch); the driver writes through it
+> and reads the result back from the API - see
+> [the sequence editor (2026-10-08)](#the-sequence-editor-2026-10-08---remapped-proven-live-2026-10-09).
 > **Sourcing — project, JD search, filters — BUILT AND PROVEN LIVE 2026-09-02**,
 > see [Sourcing](#sourcing--project-jd-search-filters-2026-09-02).
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md)
@@ -378,7 +382,7 @@ disabled on a blank row. Run
 `python -m app.cli search-criteria --search <url> --headed` and record what the
 dialog offers here.
 
-## The sequence editor (2026-08-27)
+## The sequence editor (2026-08-27) - superseded 2026-10-08
 
 Mapped live, then packaged into
 [app/platforms/juicebox.py](../../app/platforms/juicebox.py). The facts that
@@ -599,60 +603,49 @@ Left behind by the proof: one `New Project` (`PJFFhvXqprbdhDfEoYFr`, created
 2026-09-23 17:43 UTC, no searches) - the first thing to delete when the
 project half is proven.
 
-## The redesigned sequence editor - driver PAUSED (2026-10-08)
+## The sequence editor (2026-10-08) - REMAPPED, PROVEN LIVE 2026-10-09
 
-**Status: Juicebox posting stops at the New sequence modal with a message on
-the row, until the driver is remapped.** Everything below comes from the
-three failure artifacts of 2026-10-08 (113052, 203006, 203918) and one live
-run; nothing has been driven by hand yet.
+**Status: live.** Juicebox replaced its sequence editor on 2026-10-08 and the
+driver stopped for a day (the TinyMCE flow below, under "The sequence editor
+(2026-08-27)", is history). On 2026-10-09 the new editor was mapped against
+the live app with `scripts/probe_juicebox_editor.py` (artifacts in
+`artifacts/juicebox-editor-probe/20261008-211844/`: every `/api/` call, the
+DOM and each editor's Tiptap instance at eleven stages), the driver was
+rewritten, and `post juicebox --doc "ZZ TEST - Founding Platform Engineer -
+SF.docx" --live --headed` produced a three-email sequence that read back
+whole: title, subject, all three bodies, `{{First Name}}` / `{{Current
+Company}}` as token pills, Marcus's signature, follow-ups two business days
+apart. Both ZZ TEST sequences were deleted with `delete juicebox --record
+sequence=<id> --live` after their names read back.
 
-What changed, in the order the driver meets it:
+How the new editor works, as the driver now drives it:
 
-1. **The modal.** "New sequence" opens *Generate a sequence for one of your
-   projects*: a list of recent projects, a "Choose project" dropdown, then
-   **Build from scratch** and **Clone existing sequence**. "Start from
-   scratch" is gone from the page. The driver retried the old label four
-   times on the Decart row (203006).
-2. **Build from scratch creates the sequence at once, inside a project.** On
-   the next attempt (203918) the click produced an autosaved sequence titled
-   **"Token - Infra Eng - SF - 10/08/2026"** - a real client project, named
-   after it with the date - with one empty email step marked *Needs
-   attention*. The old flow opened an unnamed editor the driver then named;
-   the new one files the sequence under a project first. Which project the
-   recipe's `sequences_url` (`AXAaleEq2JfO29jIjBXW`) now resolves to, and
-   whether the modal's first project card is what got picked, is unknown
-   until someone drives it headed. **That stray sequence has to be deleted
-   by hand** (Juicebox → Sequences → search the title); the run recorded
-   nothing, so the automation's delete does not know it.
-3. **The editor is not TinyMCE any more.** The step editor is a full-screen
-   dialog over the Sequences page (`role=dialog`, a "Done" button, no
-   Cancel/Close). The subject is a single-line **Tiptap/ProseMirror**
-   `contenteditable` (`data-step-subject-input="true"`,
-   `aria-labelledby="sequence-step-subject-label-<id>"`), the body another
-   (`aria-label="Message body"`, class `tiptap ProseMirror tiptap--composer
-   email-editor-content`). `tinymce` does not exist on the page, so
-   `_COUNTS` reports zero editors, the driver believes the editor stalled,
-   and its retry cannot close the dialog or reach the Sequences link behind
-   it ("could not click 'Sequences'"). Token chips are offered above the
-   toolbar (`{First Name}`, `{Current Company}`, `{Job title}`, `{Education}`,
-   `{Sender first name}`, `{Last Name}`), steps are added with an
-   `aria-label="Add step"` button, step 1 shows a "Start immediately" chip,
-   and a `sequence-validation-errors` panel lists what is missing.
+| What | How |
+|---|---|
+| Create | Sequences → **New sequence** → dialog "Generate a sequence for one of your projects" (recent project cards, Choose project, **Build from scratch**, Clone existing sequence). Picking a project starts AI generation; the driver never does. **Build from scratch** calls `POST /api/sequence` `{chosenTemplateId: 1, sequenceTitle: null, currentProjectTitle: "<most recent project>", ...}` and the sequence exists from that moment, titled `"<project> - <dd/mm/yyyy>"`. The project only names it: nothing in the stored sequence points at the project. Never retried - a second click is a second sequence. The id comes off the create response, the editor URL (`createdSequenceId=`) as the fallback. |
+| Autosave | Every edit is saved a moment later as a whole-sequence `PATCH /api/sequence` `{id, updatedFields: {...every field, steps[]...}}`. "Last saved at hh:mm" in the header. There is no Save button. |
+| Title | A plain `<input>` holding the auto-title. Replaced with real keystrokes (click, select all, type, Enter). |
+| Subject | Step 1 only: a single-line Tiptap editor, `[data-step-subject-input]`. Follow-ups have no subject box - they reply in the thread. |
+| Bodies | One Tiptap editor per step, `[aria-label="Message body"]`, **all mounted at once**, in step order. |
+| Writing | `element.editor.commands.setContent(content, {emitUpdate: true})`. **`emitUpdate` is what makes the app save**: the probe wrote the subject without it, the editor showed the text, and the subject never reached the API. `{{First Name}}` written as text becomes a `tokenPill` node and is stored back as `{{First Name}}`. Empty paragraphs are stored as `<p><br></p>`. |
+| Steps | **Add step** (`button[aria-label='Add step']`, the `+` under the step rail) appends an Email step, "Wait 2 business days · Send at 9:00AM". The step-type menu (Email / Connection Request / LinkedIn Message / Call) is on each step's "Email ▾". The document's `(wait N days)` is not applied here; Juicebox's default stands, as before. |
+| Close | **Done**. With an error left (a missing subject) Juicebox asks "Close with errors?" - Close anyway / Fix issues; the sequence is saved either way. The errors are listed in `[data-testid='sequence-validation-errors']`. |
+| Read back | `GET /api/sequence?sequenceId=<id>` → `{result: [sequence]}`, with the Firebase token every `/api/` call carries (`fbauthorization`, read off the app's own requests). |
+| Delete | Unchanged: `DELETE /api/sequence?sequenceId=<id>` archives it. |
 
-What the driver does now: after "New sequence", if the modal shows "Build
-from scratch" it raises before clicking anything - *"Juicebox redesigned its
-sequence editor on 2026-10-08 ... Nothing was created. Build this sequence in
-Juicebox by hand for now"* - and the row fails on Juicebox alone, with the
-other platforms unaffected. The old-layout path ("Start from scratch", TinyMCE)
-is kept in case the redesign is rolled back or staged.
+**The editor writes; the API reads back** ([D-027](../11-decisions.md)). The
+driver changes nothing through the API: the app keeps setting the sender,
+signature, schedule and step defaults the way it does for a person. After
+Done, `_read_back` fetches the stored sequence and `_saved_problems` compares
+it with the document word by word (markup is rewritten by the editor; lost
+words are what matter). A missing step, an empty or short body, a lost
+subject or a title that kept the auto-name fails the run, **with the sequence
+id recorded**, so the row's `Delete` can still take it down. A dry run stops
+at the dialog: Build from scratch would already have created something.
 
-The remap needs a headed run on a ZZ TEST row: `python -m app.cli post
-juicebox --doc <file> --headed`, then the modal (which project, how to open a
-blank editor without the AI generation), the name field
-(`sequence-name-resize-handle` suggests an inline-editable title), the two
-ProseMirror fields (a `paste` event with HTML is how noon's Draft.js is
-filled; ProseMirror takes the same), step delays, and "Done". Every stray
-sequence a trial creates must be deleted before the next.
+Still open: the stray **"Token - Infra Eng - SF - 10/08/2026"** (one empty
+step) left by the 2026-10-08 20:39 attempt is not a ZZ TEST record and is
+for a person to delete in Juicebox.
 
 ## The expiry that was not one (2026-10-08)
 
