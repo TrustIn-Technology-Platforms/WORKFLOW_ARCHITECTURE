@@ -51,6 +51,7 @@ to the same column even without an override.
 | `PROP_ERROR` | `Error` | Written back on failure. |
 | `PROP_POSTED_ON` | `Posted On` | **Optional** multi-select. Each platform is added the moment its post succeeds and removed the moment its delete succeeds. A row set back to `Ready to Post` skips every platform already listed here, so re-running a half-failed row posts only what is missing. Create the column with the four platform names as options. |
 | `PROP_FAILED_ON` | `Failed On` | **Optional** multi-select. The platforms that failed in the last run; cleared when a run starts. `PROP_ERROR` carries the per-platform reasons. |
+| `PLATFORM_ORDER` | `loxo,noon,wellfound,juicebox` | The order a row's platforms post in, whatever order the row or the direct-door job lists them. Juicebox is last because it is the slowest and the most often broken by a redesign; a platform that fails or crashes never stops the ones after it. Platforms not named here run after the named ones, in the row's own order. |
 | `PROP_NOTES` | `Notes` | **Optional.** Where a successful run's notes go: the search it built, what a taxonomy refused, a stage Claude inferred. Without this column the notes land in `Error` prefixed `Posted OK`, which reads as a failure. Add a rich-text column of this name and `Error` stays empty on success. |
 | `PROP_TITLE` | `Name` | Fallback title. The client also detects the real `title` column by type. |
 | `PROP_LOCATION` | `Location` | Fills `advert.location` when the document has none. Job boards (Wellfound) require it. |

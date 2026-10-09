@@ -686,3 +686,106 @@ def test_a_delete_empties_posted_on_one_platform_at_a_time(monkeypatch, tmp_path
         (["juicebox"], ["juicebox"]),
     ]
     assert client.failed
+
+
+def test_platforms_post_in_the_set_order_with_juicebox_last():
+    """loxo, noon, wellfound, then juicebox - whatever order the row lists them;
+    anything the setting does not name keeps the row's order, after."""
+    from app.pipeline import order_platforms
+
+    order = "loxo,noon,wellfound,juicebox"
+    assert order_platforms(["juicebox", "wellfound", "Loxo", "noon"], order) == [
+        "Loxo", "noon", "wellfound", "juicebox",
+    ]
+    assert order_platforms(["TrustIn", "juicebox", "noon", "acme"], order) == [
+        "noon", "juicebox", "TrustIn", "acme",
+    ]
+    assert order_platforms(["juicebox", "noon"], "") == ["juicebox", "noon"]
+
+
+class _PostingAdapter:
+    """A platform that posts, fails, or crashes outright, as told."""
+
+    calls: list[str] = []
+
+    def __init__(self, name, behaviour):
+        self.name, self.behaviour = name, behaviour
+
+    async def post(self, document, row):
+        from app.models import Outcome, PlatformError, PostResult
+
+        _PostingAdapter.calls.append(self.name)
+        if self.behaviour == "crash":
+            raise KeyError("a bug, not a PipelineError")
+        if self.behaviour == "fail-with-records":
+            exc = PlatformError("juicebox: step 2's body saved empty")
+            exc.records = {"sequence": "SEQ123", "post_url": "https://jb/s/SEQ123"}
+            raise exc
+        return PostResult(platform=self.name, outcome=Outcome.POSTED,
+                          post_url=f"https://{self.name}/x", records={"id": self.name})
+
+
+def _post_setup(monkeypatch, behaviours, broken_factory=()):
+    from app.config import Settings
+
+    _PostingAdapter.calls = []
+    recipes = {name: object() for name in ("noon", "juicebox", "loxo", "wellfound")}
+    monkeypatch.setattr("app.pipeline.load_recipes", lambda s: recipes)
+    monkeypatch.setattr("app.pipeline.resolve", lambda name, r: r.get(name.lower()))
+    monkeypatch.setattr("app.pipeline.BrowserRunner", _NoBrowser)
+    monkeypatch.setattr("app.pipeline.enrich_advert", lambda *a, **k: None)
+
+    async def no_skills(*a, **k):
+        return []
+
+    monkeypatch.setattr("app.pipeline.ensure_skills", no_skills)
+
+    def factory(name, **k):
+        if name in broken_factory:
+            raise RuntimeError(f"no adapter for {name}")
+        return _PostingAdapter(name, behaviours.get(name, "post"))
+
+    monkeypatch.setattr("app.pipeline.get_adapter", factory)
+    return Settings()
+
+
+def _doc():
+    return ParsedDocument(advert=Advert(title="T", body_text="b", body_html="<p>b</p>"), emails=[])
+
+
+def test_a_platform_that_crashes_does_not_stop_the_others(monkeypatch):
+    """A non-PipelineError used to escape the loop: every platform after it
+    never ran, and the row failed as 'Unexpected error'."""
+    import asyncio
+
+    from app.models import Outcome
+    from app.pipeline import post_document
+
+    settings = _post_setup(monkeypatch, {"noon": "crash"}, broken_factory=("wellfound",))
+    results = asyncio.run(post_document(
+        _doc(), ["juicebox", "wellfound", "noon", "loxo"], settings=settings, dry_run=False))
+
+    assert [r.platform for r in results] == ["loxo", "noon", "wellfound", "juicebox"]
+    outcome = {r.platform: r.outcome for r in results}
+    assert outcome == {"loxo": Outcome.POSTED, "noon": Outcome.FAILED,
+                       "wellfound": Outcome.FAILED, "juicebox": Outcome.POSTED}
+    assert "KeyError" in next(r.detail for r in results if r.platform == "noon")
+    assert "not affected" in next(r.detail for r in results if r.platform == "wellfound")
+    assert _PostingAdapter.calls == ["loxo", "noon", "juicebox"]
+
+
+def test_a_failed_post_keeps_what_it_created_for_the_ledger(monkeypatch):
+    """Juicebox fails after the sequence exists; the id must reach the ledger,
+    or a Delete has nothing to take down."""
+    import asyncio
+
+    from app.models import Outcome
+    from app.pipeline import post_document
+
+    settings = _post_setup(monkeypatch, {"juicebox": "fail-with-records"})
+    results = asyncio.run(post_document(_doc(), ["juicebox", "loxo"], settings=settings, dry_run=False))
+
+    juicebox = next(r for r in results if r.platform == "juicebox")
+    assert juicebox.outcome is Outcome.FAILED
+    assert juicebox.records == {"sequence": "SEQ123", "post_url": "https://jb/s/SEQ123"}
+    assert [r.platform for r in results] == ["loxo", "juicebox"]

@@ -151,6 +151,19 @@ def enrich_advert(
     return filled
 
 
+def order_platforms(platforms: list[str], order: str) -> list[str]:
+    """`platforms` in `PLATFORM_ORDER`'s order, whatever order the row gave.
+
+    Stable: platforms the setting does not name keep the row's relative order
+    and run after the named ones.
+    """
+    rank = {
+        name: index
+        for index, name in enumerate(p.strip().lower() for p in (order or "").split(",") if p.strip())
+    }
+    return sorted(platforms, key=lambda p: rank.get(p.strip().lower(), len(rank)))
+
+
 def _row_multi(row: NotionRow, column: str) -> list[str]:
     """A multi-select column's option names, matched loosely like `_row_text`."""
     from app.notion.schema import multi_select_names
@@ -219,7 +232,7 @@ async def post_document(
     await ensure_skills(document, settings)
 
     async with BrowserRunner(settings) as runner:
-        for name in platforms:
+        for name in order_platforms(platforms, settings.platform_order):
             # A Platforms option with no recipe is a tag, not a destination:
             # the database carries `TrustIn` alongside the four real ones. That
             # must not fail a row whose actual platforms all posted, so it is
@@ -237,10 +250,10 @@ async def post_document(
                 log.info("platform skipped - no recipe", extra={"platform": name})
                 continue
 
-            adapter = get_adapter(
-                name, recipes=recipes, runner=runner, settings=settings, dry_run=dry_run
-            )
             try:
+                adapter = get_adapter(
+                    name, recipes=recipes, runner=runner, settings=settings, dry_run=dry_run
+                )
                 result = await adapter.post(document, row)
             except PipelineError as exc:
                 result = PostResult(
@@ -248,10 +261,28 @@ async def post_document(
                     outcome=Outcome.FAILED,
                     detail=str(exc),
                     artifacts=list(getattr(exc, "artifacts", []) or []),
+                    # What a driver created before it failed (a Juicebox
+                    # sequence whose read-back came up short), so the ledger
+                    # holds it and a Delete can take it down.
+                    records=dict(getattr(exc, "records", None) or {}),
                 )
                 log.error(
                     "platform failed",
                     extra={"platform": name, "error": str(exc)},
+                )
+            except Exception as exc:  # noqa: BLE001 - one platform, never the row
+                # Anything that is not a PipelineError - building the adapter,
+                # a bug in a driver - used to escape this loop, and every
+                # platform after it never ran. It fails this platform only.
+                log.exception("platform crashed", extra={"platform": name})
+                first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+                result = PostResult(
+                    platform=name,
+                    outcome=Outcome.FAILED,
+                    detail=(
+                        f"{name}: unexpected error - {exc.__class__.__name__}: "
+                        f"{first[:300]}. The other platforms were not affected."
+                    ),
                 )
             await report(result)
 

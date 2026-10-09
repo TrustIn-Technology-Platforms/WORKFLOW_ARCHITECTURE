@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # without the columns the writes are skipped and the row behaves as before.
     prop_posted_on: str = "Posted On"
     prop_failed_on: str = "Failed On"
+    # The order a row's platforms post in, whatever order the row lists them.
+    # Juicebox last: it is the slowest, and the one a redesign broke twice in a
+    # day (2026-10-08), so the three that rarely fail are up before it starts.
+    # A platform that fails never stops the ones after it (post_document).
+    # Platforms not named here run after these, in the row's own order.
+    platform_order: str = "loxo,noon,wellfound,juicebox"
     prop_title: str = "Name"
     # Advert fields that live on the row rather than in the document. The
     # recruiters' adverts are prose with no labelled Location/Salary lines, and
