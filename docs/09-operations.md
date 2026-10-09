@@ -275,14 +275,22 @@ different builds that day all said `1.9`.
 Deploy with the script, from a clean tree on `main`:
 
 ```
-python scripts/deploy.py            # stamps HEAD on the service, uploads, waits until /health reports it
+python scripts/deploy.py            # pushes to GitHub main, stamps HEAD, uploads, waits until /health reports it
 python scripts/deploy.py --check    # live sha  vs  GitHub main  vs  this folder
 ```
 
-It sets `BUILD_SHA` / `BUILD_BRANCH` / `BUILD_TIME` as service variables
-(with `--skip-deploys`, so they do not trigger a deploy of their own), runs
-`railway up --detach`, and polls `/health` until `build.sha` is the commit it
-started from. "Is the backend up to date" is then `--check` saying
+It pushes `HEAD` to GitHub `main` first (a push that is not a fast-forward
+is refused, and so is the deploy), then sets `BUILD_SHA` / `BUILD_BRANCH` /
+`BUILD_TIME` as service variables. Pushes go out as the TrustIn GitHub account
+with no prompt: Git Credential Manager holds two accounts on this machine
+(`Trust-in-company-acc`, `sohaib-ali47`), and the clone is pinned to the first
+with `git config --local credential.https://github.com.username
+Trust-in-company-acc`. A fresh clone needs that line once; without it a push
+from a non-interactive shell hangs on the account picker (2026-10-09).
+
+The stamp variables are set with `--skip-deploys`, so they do not trigger a
+deploy of their own; then the script runs `railway up --detach` and polls
+`/health` until `build.sha` is the commit it started from. "Is the backend up to date" is then `--check` saying
 `UP TO DATE`, which means `build.sha == origin/main`. A deploy with a dirty
 tree is refused: the upload would include uncommitted edits, and a sha that
 does not describe what was uploaded is worse than none.

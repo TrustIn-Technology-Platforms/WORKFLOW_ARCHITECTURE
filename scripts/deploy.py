@@ -1,7 +1,12 @@
 """Deploy to Railway with the commit stamped on it, or check what is live.
 
     python scripts/deploy.py --check     # live sha vs GitHub main vs this folder
-    python scripts/deploy.py             # stamp HEAD, `railway up`, wait until /health shows it
+    python scripts/deploy.py             # push to GitHub main, stamp HEAD, `railway up`, wait for /health
+
+The push goes out as the TrustIn GitHub account without asking: this clone
+is pinned to it (`git config --local credential.https://github.com.username
+Trust-in-company-acc`), so Git Credential Manager never shows its account
+picker.
 
 Railway here deploys from `railway up` - an upload of this folder - not from
 GitHub, so Railway itself cannot say which commit a deployment holds, and
@@ -144,6 +149,19 @@ def deploy(url: str, allow_dirty: bool) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if branch != "main":
         print(f"note: deploying from branch {branch!r}, not main")
+
+    # GitHub first: what Railway runs must be on main, or --check reads AHEAD
+    # and nobody else can see the code that is live. A push that is not a
+    # fast-forward is refused by git itself, and so is the deploy.
+    if not allow_dirty or not _git("status", "--porcelain"):
+        print(f"pushing {sha[:7]} to GitHub main...")
+        refs = ["HEAD:main"] + ([f"HEAD:{branch}"] if branch and branch != "main" else [])
+        try:
+            subprocess.run([_tool("git"), "push", "origin", *refs], cwd=ROOT, check=True)
+        except subprocess.CalledProcessError:
+            print("push refused (not a fast-forward of GitHub main?) - pull and merge first; "
+                  "nothing was deployed.")
+            return 1
 
     print(f"stamping {sha[:7]} ({branch}, {stamp}) on the service...")
     for key, value in (("BUILD_SHA", sha), ("BUILD_BRANCH", branch), ("BUILD_TIME", stamp)):
