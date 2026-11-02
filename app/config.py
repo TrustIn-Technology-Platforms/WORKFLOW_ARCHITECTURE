@@ -183,6 +183,12 @@ class Settings(BaseSettings):
     # nothing, and left the criteria unset - yet all six were listed hours
     # later. Zero means one look at each list and no waiting.
     noon_role_wait_seconds: float = 240.0
+    # Who a noon campaign sends as, by email and on LinkedIn. noon defaults to
+    # the signed-in user, which is not the person candidates should hear from;
+    # the signature comes from this mailbox's settings in noon. The name is
+    # how noon shows the LinkedIn sender.
+    noon_sender_email: str = "marcus@trust-in.co.uk"
+    noon_sender_name: str = "Marcus Gardiner-hill"
 
     # --- criteria drafting --------------------------------------------------
     # A platform's own generator (Loxo's "Write with AI") does not always fill

@@ -1,38 +1,29 @@
-# noon.ai - create a role, import the team's shared campaign template, and fill
-# its steps from the document.
+# noon.ai - create a role. That is all the browser does any more.
 #
-# This replays, step for step, the run done by hand-in-code on 2026-08-27
-# against the throwaway role "ZZ TEST - delete me" - see
-# docs/platforms/noon.md#the-live-run-2026-08-27. Every selector below was
-# used in that run. The UI has no ids, names or data-testids, so selectors are
-# visible text and DOM position; when noon changes copy, the failure screenshot
-# shows the new wording.
+# The rest is app/platforms/noon.py, through noon's own API: the sourcing
+# wizard right after the role_id capture below, then the campaign - the
+# document's words on five fixed steps (connection request -> email -> email
+# same-thread -> InMail -> email same-thread), sent by Marcus on the team's
+# timing (app/platforms/noon_campaign.py). The campaign editor used to be
+# driven here, step by step, importing "Nicholas Template" and pasting into
+# positional Draft.js editors; noon's 2026-11 redesign broke it for the third
+# time, and noon now writes a campaign of its own for every role, so the
+# driver overwrites that instead (2026-11-03, docs/platforms/noon.md).
 #
-# Facts that shape the recipe:
-#   - The campaign editor AUTOSAVES on every change. There is no Save button.
-#     So the only place a dry run can stop is before the role is created -
-#     which is where `submit: true` sits. A dry run therefore proves login,
-#     navigation and the modal, nothing more.
-#   - A fresh role has NO campaign card until its sourcing wizard is done
-#     (noon's 2026-10 redesign). The driver runs that wizard between the
-#     role_id capture and the "Review & Contact" wait below.
-#   - The document's emails are mapped onto FIXED slots in Nicholas's template
-#     (connection request -> email -> email same-thread -> InMail -> email
-#     same-thread), not one step per email. A document with fewer than three
-#     emails fails at the first empty slot with a clear message.
-#   - Draft.js editors sit in DOM order: steps 2, 3, 4, 5, then the "If
-#     accepted" trigger message. Step 1 (connection request) has no editor on a
-#     non-Premium LinkedIn account. Subject inputs: step 2, then step 4.
+# The UI has no ids, names or data-testids, so selectors are visible text and
+# DOM position; when noon changes copy, the failure screenshot shows the new
+# wording. A dry run stops at the Submit that creates the role, so it proves
+# login, navigation and the modal, nothing more.
 
 key: noon
 label: noon.ai
 kind: email_sequence
 enabled: true           # proven: `post noon --live` reproduced the hand-driven campaign on a throwaway role, 2026-08-27
-# The driver runs these steps with one interruption: once the role's id has
-# been captured it sets the role's sourcing criteria through noon's API, then
-# the steps resume on the campaign. The order is noon's - the campaign editor
-# is only reachable once sourcing is set up (2026-10-09). See
-# app/platforms/noon.py and docs/platforms/noon.md#the-sourcing-wizard.
+# The driver runs these steps, sets the role's sourcing criteria through
+# noon's API once the role's id has been captured, then writes the campaign.
+# The order is noon's - a role has no campaign until its sourcing is set up
+# (2026-10-09). See app/platforms/noon.py and
+# docs/platforms/noon.md#the-sourcing-wizard.
 driver: noon
 
 login:
@@ -71,7 +62,6 @@ login:
 defaults:
   base_url: https://www.noon.ai
   timeout_ms: 25000
-  template_name: Nicholas Template      # the shared template to import; owned by nicholas@
 
 # ---------------------------------------------------------------------------
 # 1. Create the role
@@ -203,188 +193,15 @@ steps:
 
   - action: capture_url
     description: >-
-      the role's own uuid. The final capture_url overwrites post_url with the
-      project page, and the sourcing wizard is keyed on the role, so keep it
-      separately here while it is still on screen.
+      the role's own uuid - the sourcing wizard, the campaign and a later
+      delete are all keyed on it.
 
-      THE DRIVER PAUSES HERE. app/platforms/noon.py runs the sourcing wizard
-      through noon's API as soon as this capture lands (RecipeEngine.run's
-      `after_capture="role_id"`), then reloads the role page - which is what
-      makes the card the next step waits for appear.
+      THE DRIVER TAKES OVER HERE. app/platforms/noon.py runs the sourcing
+      wizard through noon's API as soon as this capture lands
+      (RecipeEngine.run's `after_capture="role_id"`), then writes the
+      campaign once the recipe has finished.
     as: role_id
     pattern: "(?<=role=)[0-9a-fA-F-]{36}"
 
-  # -------------------------------------------------------------------------
-  # 2. Open the campaign editor and import the shared template
-  # -------------------------------------------------------------------------
-  - action: wait_for
-    description: >-
-      the stage cards, which exist only once sourcing is set up. A miss here
-      means the wizard did not complete; the driver raises before this step
-      in that case, so this is the belt to its braces.
-    selector: "text='Review & Contact'"
-    timeout_ms: 60000
-
-  - action: click
-    selector: "text='Review & Contact'"
-
-  - action: wait_for
-    selector: "text='Edit outreach message'"
-    timeout_ms: 40000
-
-  - action: wait
-    ms: 3000
-
-  - action: click
-    description: sits under a floating panel, so a plain click times out
-    selector: "text='Edit outreach message'"
-    force: true
-
-  - action: wait_for
-    selector: "text='Outreach campaign'"
-
-  - action: click
-    selector: "text='Use shared template'"
-
-  - action: click
-    description: exact match, so "Nicholas Template (1)" (a personal copy) is not picked by mistake
-    selector: "text='{{ template_name }}'"
-
-  - action: wait_for
-    description: the import arrives as an alternate campaign tab
-    selector: "text='Add alternate campaign'"
-
-  - action: wait
-    ms: 3000
-
-  # -------------------------------------------------------------------------
-  # 3. Remove the default campaign so the import is the only one. Without this
-  #    noon A/B-splits candidates between placeholder copy and ours.
-  # -------------------------------------------------------------------------
-  - action: click
-    selector: "[aria-label='Remove Main campaign']"
-    force: true
-
-  - action: click
-    description: the confirm dialog offers "Keep campaign" / "Remove from role"
-    selector: "text='Remove from role'"
-
-  - action: wait_for
-    description: >-
-      Nicholas's five steps are on screen. The template import renders slowly -
-      slower still on the Railway container, where the default 25s timed out
-      (2026-08-28) - so give it the same generous window as the other renders.
-    selector: "text='Step 5'"
-    timeout_ms: 90000
-
-  - action: wait
-    ms: 3000
-
-  # -------------------------------------------------------------------------
-  # 4. Subjects - the two steps that have one (email step 2, InMail step 4)
-  # -------------------------------------------------------------------------
-  - action: fill
-    selector: "input.absolute.inset-0 >> nth=0"
-    value: "{{ emails[0].subject | noon_tokens }}"
-
-  - action: fill
-    description: >-
-      the InMail's subject - the InMail section's own Subject: line when it has
-      one, else the emails' subject. The parser resolves that; a heading's name
-      is never a subject ("InMail" landed in this box once, 2026-09-02).
-    selector: "input.absolute.inset-0 >> nth=1"
-    value: "{{ inmail.subject | noon_tokens }}"
-
-  # -------------------------------------------------------------------------
-  # 5. Bodies - Draft.js, paste event, Ctrl+A first so the template copy goes
-  # -------------------------------------------------------------------------
-  - action: fill_rich
-    description: step 2, email
-    selector: ".public-DraftEditor-content >> nth=0"
-    value_html: "{{ emails[0].body_html | noon_tokens }}"
-    value: "{{ emails[0].body_text | noon_tokens }}"
-
-  - action: fill_rich
-    description: step 3, email in the same thread
-    selector: ".public-DraftEditor-content >> nth=1"
-    value_html: "{{ emails[1].body_html | noon_tokens }}"
-    value: "{{ emails[1].body_text | noon_tokens }}"
-
-  - action: fill_rich
-    description: >-
-      step 4, LinkedIn InMail - the document's own InMail section when it has
-      one (documents carry channel sections since 2026-08-28), else the first
-      email again on the other channel, as before.
-    selector: ".public-DraftEditor-content >> nth=2"
-    value_html: "{{ inmail.body_html | noon_tokens }}"
-    value: "{{ inmail.body_text | noon_tokens }}"
-
-  - action: fill_rich
-    description: step 5, closing email in the same thread
-    selector: ".public-DraftEditor-content >> nth=3"
-    value_html: "{{ emails[2].body_html | noon_tokens }}"
-    value: "{{ emails[2].body_text | noon_tokens }}"
-
-  - action: fill_rich
-    description: >-
-      the "If accepted -> then send" message, sent after a connection request
-      is accepted - the document's Connect/LinkedIn section when it has one,
-      else the first email, as before.
-    selector: ".public-DraftEditor-content >> nth=4"
-    value_html: "{{ connection_note.body_html | noon_tokens }}"
-    value: "{{ connection_note.body_text | noon_tokens }}"
-
-  - action: wait
-    description: let the last autosave go out
-    ms: 4000
-
-  # -------------------------------------------------------------------------
-  # 6. Step 1's connection-request note. Deliberately LAST: opening it adds a
-  #    new Draft.js editor at the top of the step list, which would shift every
-  #    nth index above if it ran before the body fills.
-  #
-  #    noon warns "You can't add a message to connection requests on a
-  #    non-premium LinkedIn account" and offers "Add note anyways" - the note
-  #    saves regardless (typed, closed, reopened and still there, proven
-  #    2026-09-01 on a throwaway role). The warning click is optional so a
-  #    Premium upgrade, which removes the dialog, does not break the run; the
-  #    "Generate with AI" wait is not - it exists only inside the opened note
-  #    UI, and filling nth=0 without it would overwrite step 2's body.
-  # -------------------------------------------------------------------------
-  - action: click
-    selector: "text='Add a note'"
-    force: true
-
-  - action: dismiss
-    description: the non-premium warning, when noon shows one
-    selector: "text='Add note anyways'"
-
-  - action: wait_for
-    selector: "text='Generate with AI'"
-    timeout_ms: 20000
-
-  - action: fill_rich
-    description: >-
-      the note itself - the document's Connect/LinkedIn section, same text as
-      the accepted-trigger message. Plain text on purpose (a connection note
-      has no formatting), capped at the 300 characters noon's editor enforces.
-    selector: ".public-DraftEditor-content >> nth=0"
-    value: "{{ connection_note.body_text | noon_tokens | truncate(300) }}"
-
-  - action: wait
-    description: the note autosaves on blur like every other field here
-    ms: 4000
-
-# The emails are mapped onto fixed slots above, so nothing repeats per email.
+# The campaign is written by the driver, so nothing repeats per email.
 per_email: []
-
-finalise:
-  - action: press
-    description: closes the editor - autosave already happened
-    key: Escape
-
-  - action: wait
-    ms: 1500
-
-  - action: capture_url
-    as: post_url

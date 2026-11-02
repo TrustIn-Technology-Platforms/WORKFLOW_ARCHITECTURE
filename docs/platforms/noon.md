@@ -191,8 +191,9 @@ imported one. Fix: hover `Main campaign`, click its hidden `×`
 (the other button is `Keep campaign`). The imported campaign then becomes the
 only one, shown as `Main campaign`; its saved name stays `Nicholas Template`.
 
-**Nicholas's structure** (the team's cadence; `offset` is days after the
-previous step):
+**Nicholas's structure** (`offset` is days after the previous step). History:
+posting no longer imports this template - the driver writes the same five
+slots itself, with [the house settings](#the-house-settings-2026-11-03):
 
 | Step | Type | Offset | Subject | What we put in it |
 |------|------|--------|---------|-------------------|
@@ -243,6 +244,56 @@ Still undocumented — ask noon before relying on it.
 `From: You` for LinkedIn. The "Complete setup to launch — 2 steps remaining"
 banner on a fresh role concerns connecting Outlook and LinkedIn for sending, not
 saving.
+
+### The house settings (2026-11-03)
+
+> **Status** **BUILT, NOT YET PROVEN LIVE** ([D-029](../11-decisions.md)).
+> Unit-tested against the campaign shape noon generates, read live
+> 2026-11-03; no posting run has written it yet.
+
+Read live on 2026-11-03: every one of the 62 roles built from `Nicholas
+Template` sent as `sohaib@` (email and InMail), had step 2 at +4 days 08:00
+Pacific, and had the accepted-trigger off. `sohaib@`'s noon mailbox has **no
+signature** (`get_email_signature` → `null`), so no email carried one; a step's
+`signature` is only a flag that appends the *sender's* saved signature.
+`marcus@`'s mailbox holds the right one (Marcus Gardiner-Hill / Founder at
+TrustIn / the site / "Book time to meet with me" → his Outlook booking page).
+
+The same night the editor was redesigned again: `Use shared template` became
+`Use a template`, the first test run died there, and noon now writes a
+campaign of its own for every role once sourcing is done — six emails, no
+InMail, "Written by Noon", sent as the signed-in user, with two generated
+"just bumping this up" nudges on the accepted-trigger.
+
+So the editor is no longer driven. After the wizard,
+[noon_campaign.py](../../app/platforms/noon_campaign.py) finds the role's
+campaign the way the portal does (`role.autopilot.emailCampaign.id`, else
+`role.template`; polled for up to 120 s while noon writes it), **replaces every
+step**, saves it with the editor's own `template_update` payload
+(`save_role: true`), and reads it back; a field that did not save fails the
+row. What it writes, as Sohaib set it out and as Marcus's hand-built campaigns
+store it:
+
+| Step | Type | Words | Scheduled for | Stored as |
+|------|------|-------|---------------|-----------|
+| 1 | LinkedIn connection request | the document's Connect section, else email 1; plain text, 300 chars | Now | `offset 0`, `{day: now, time: random time, timezone: Recipient's Timezone}` |
+| 2 | Email | email 1 + its subject | Same time as previous step | `offset 0`, `{day: now, time: the same time, timezone: Recipient's Timezone}` |
+| 3 | Email, same thread | email 2 | 2 days after, random 9 AM–5 PM, recipient's time zone | `offset 2`, `{time: random time, timezone: Recipient's Timezone}`, `newThread: false` |
+| 4 | LinkedIn InMail | the InMail section, else email 1; its own subject | the same | the same |
+| 5 | Email, same thread | email 3 | the same | the same |
+| trigger | If accepted → wait 30 min → send, don't send if accepted after 60 days | the connection note | **enabled** | `connectionAccepted {enabled: true, waitMinutes: 30, acceptanceWindowDays: 60, useFirstMessage: false, followups: []}` |
+
+`senders.from` and `inmailSender` = `NOON_SENDER_EMAIL` / `NOON_SENDER_NAME`
+(Marcus) — `inmailSender` is the only LinkedIn sender field a campaign has, and
+is the "From" on steps 1 and 4. `secondary_senders.from` cleared,
+`ai_written: false`. `signature: true` on the three email steps, false on the
+connection request and the InMail. Roles posted before this change keep the
+old settings.
+
+Found in the bundle while doing this, not used: `reformat_campaign {token,
+template_id, company, new_sender_email, new_sender_name, template_data}` —
+what the portal calls after importing a template, to rewrite its copy for a
+new sender with noon's model.
 
 ## The sourcing wizard
 

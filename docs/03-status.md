@@ -147,6 +147,18 @@ and `post noon --live` produced a role with its criteria set, sourcing on and
 the document's campaign saved, read back the same evening. Every production
 noon post between the redesign and this fix failed at the campaign wait.
 
+**Amended 2026-11-03: the campaign is written through the API, sent as Marcus
+on the team's timing — built, not yet proven live.** Every noon campaign so far
+went out as `sohaib@` with no signature, its first email 4 days after the
+connection request at 08:00 Pacific, and the accepted-message off — all
+inherited from `Nicholas Template`. The same night noon redesigned the
+campaign editor again and the recipe died at `Use a template`. The recipe now
+stops at creating the role; after the wizard the driver replaces the campaign
+noon generates with the document's five steps and the team's settings, and
+reads it back ([D-029](11-decisions.md), [noon_campaign.py](../app/platforms/noon_campaign.py),
+[the house settings](platforms/noon.md#the-house-settings-2026-11-03)). Roles
+posted before this keep the old settings.
+
 *Earlier headline, kept for the record:* **noon.ai posts for real
 (2026-08-27)** via `post noon --doc <file> --live`, verified on a throwaway
 role, with Notion credentials, the webhook service and the Railway deploy

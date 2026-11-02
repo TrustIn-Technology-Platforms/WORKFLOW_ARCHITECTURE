@@ -119,9 +119,13 @@ async def update_properties(page_id: str, values: dict[str, Any]) -> None
 
 - Everything I/O-bound is `async`. Notion and document fetching use `httpx`;
   browser work uses the Playwright async API.
-- **Rows** may be processed concurrently. **Platforms within a row** run
-  sequentially, so a single row produces one coherent status rather than a race
-  of partial write-backs.
+- **Rows run one at a time** on a deployed service (`_row_lock` in
+  [app/api.py](../app/api.py), since 2026-09-03): the webhook, the poll, the
+  direct door, deletes and the session keepalive all queue on one lock, because
+  two browser contexts on one platform account log each other out. Rows that
+  arrive while one is running wait their turn and stay on `Ready to Post`
+  until claimed. **Platforms within a row** run sequentially too, so a single
+  row produces one coherent status rather than a race of partial write-backs.
 - One browser context per platform per row. Contexts are not shared across
   platforms, because a shared context leaks cookies between destinations.
 

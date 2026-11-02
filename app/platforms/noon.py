@@ -1,12 +1,12 @@
 """noon.ai — create the role, set its sourcing up, then fill the campaign.
 
-`platforms/noon.yaml` still owns the browser work: create the role, import the
-team's shared template, fill the steps from the document. This driver runs
-that recipe with one interruption. Right after the role exists — the step
-that captures its id — it sets the role's search criteria from the same
-document, the wizard behind `Start sourcing`, replayed through noon's own API
-in [noon_sourcing](noon_sourcing.py). Then the recipe carries on into the
-campaign editor.
+`platforms/noon.yaml` owns the one piece of browser work left: creating the
+role. Right after the role exists — the step that captures its id — this
+driver sets the role's search criteria from the same document, the wizard
+behind `Start sourcing`, replayed through noon's own API in
+[noon_sourcing](noon_sourcing.py). Then it writes the campaign, also through
+the API ([noon_campaign](noon_campaign.py)): the document's words, sent by
+Marcus on the team's timing. The campaign editor is not driven any more.
 
 **The order is noon's, not ours.** Since the portal's 2026-10 redesign a fresh
 role shows nothing but `Start sourcing`; the `Review & Contact` card the
@@ -42,7 +42,7 @@ from app.models import (
     PlatformError,
 )
 from app.platforms.adapter import RecipeAdapter
-from app.platforms.engine import RecipeEngine, RunReport, _role_name
+from app.platforms.engine import RecipeEngine, RunReport, _role_name, build_context
 from app.platforms.noon_sourcing import (
     PORTAL,
     WizardBrief,
@@ -250,10 +250,48 @@ class NoonAdapter(RecipeAdapter):
         async def between(report: RunReport) -> None:
             await self._set_up_sourcing(page, document, row, report)
 
-        # The recipe pauses right after it has captured the new role's id -
-        # the role exists, nothing else does yet - and resumes on the campaign
-        # once the wizard has run and the page has been reloaded to show it.
-        return await engine.run(document, row, after_capture="role_id", interlude=between)
+        # The recipe pauses right after it has captured the new role's id - the
+        # role exists, nothing else does yet - for the wizard, and the campaign
+        # is written once it has run: noon only writes a role's campaign after
+        # its sourcing is set up.
+        report = await engine.run(document, row, after_capture="role_id", interlude=between)
+        if not self.dry_run and report.captures.get("role_id"):
+            await self._write_campaign(page, document, row, report)
+        return report
+
+    async def _write_campaign(
+        self, page: "Page", document: ParsedDocument, row: NotionRow | None, report: RunReport
+    ) -> None:
+        from app.platforms.noon_campaign import write_campaign
+        from app.platforms.noon_sourcing import capture_session
+
+        role_id = report.captures["role_id"]
+        role_url = f"{PORTAL}?role={role_id}"
+        context = build_context(document, row, self.recipe.defaults, self.recipe.key)
+        try:
+            session = await capture_session(page, url=role_url)
+            report.warnings.extend(
+                await write_campaign(
+                    session,
+                    role_id,
+                    context,
+                    sender_email=self.settings.noon_sender_email,
+                    sender_name=self.settings.noon_sender_name,
+                )
+            )
+        except PlatformError as exc:
+            # The role holds noon's own generated campaign, sent as whoever is
+            # signed in. Nobody is contacted until a recruiter presses Contact.
+            raise PlatformError(
+                f"{exc} The role is at {role_url} with noon's own campaign on it - "
+                "do not contact candidates from it; delete the role and re-run."
+            ) from exc
+        report.emails_written = 3
+        report.warnings.append(
+            f"campaign sends as {self.settings.noon_sender_email}: connection request "
+            "now, first email at the same time, then every 2 days at a random time "
+            "9 AM-5 PM in the recipient's time zone; the accepted message is on"
+        )
 
     async def _set_up_sourcing(
         self,
@@ -325,7 +363,7 @@ class NoonAdapter(RecipeAdapter):
         report.warnings.append(f"sourcing: {sourcing.summary}")
 
         # The wizard wrote through the API while the page sat on the fresh
-        # role; a reload is what makes the stage cards - and with them the
-        # `Review & Contact` card the recipe clicks next - appear.
+        # role; a reload shows the role as a recruiter now sees it, which is
+        # what the failure screenshot catches if the campaign write fails.
         await page.goto(f"{PORTAL}?role={role_id}", wait_until="domcontentloaded")
         await page.wait_for_timeout(4000)

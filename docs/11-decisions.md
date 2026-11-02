@@ -943,3 +943,58 @@ noon publishes an API, or changes the wizard again (a `PlatformError` naming
 a document legitimately needs a campaign without sourcing (then the wizard
 would need a "Skip" path — the JD screen has one — and the campaign's
 reachability would have to be re-checked).
+
+## D-029 · noon's campaign is written through the API, not the editor
+
+**Status** Accepted — built 2026-11-03, not yet proven live
+**Date** 2026-11-03
+**Where** `app/platforms/noon_campaign.py`, `app/platforms/noon.py`, `platforms/noon.yaml` — [platforms/noon](platforms/noon.md#the-house-settings-2026-11-03)
+
+### Context
+
+Two problems surfaced the same night. Every noon campaign posted so far went
+out as `sohaib@` (the signed-in user) with no signature — `sohaib@`'s noon
+mailbox has none, and a step's `signature` is only a flag that appends the
+sender's — with the first email 4 days after the connection request at 08:00
+Pacific and the accepted-message off, all inherited from `Nicholas Template`.
+Then the first test of a fix that repainted those settings after the editor
+showed the editor itself had been redesigned again: `Use shared template` is
+now `Use a template`, the run died there, and noon now writes a six-email
+campaign of its own ("Written by Noon") for every role once sourcing is set
+up. It was the third redesign to break the positional Draft.js recipe.
+
+### Decision
+
+The recipe stops at creating the role. After the sourcing wizard, the driver
+finds the role's campaign the way the portal does (`autopilot.emailCampaign.id`,
+else `template`), replaces all of its steps with the document's five — the
+connection note, email 1, email 2, the InMail, email 3 — on the team's
+cadence (now / same time / +2 / +2 / +2 days, random 9-5 in the recipient's
+time zone), sets Marcus as the email and LinkedIn sender, the signature on
+the three emails, and the accepted-trigger on (30 minutes, 60-day window, the
+connection note, no generated nudges), saves it with the same
+`template_update` call the editor's own save makes, and reads it back. Any
+field noon did not keep fails the platform.
+
+### Why not the alternatives
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| Fix the recipe for `Use a template` and keep pasting into the editor | noon now generates a campaign, so importing a template means adding an alternate campaign and removing noon's, through positional editors that have broken three times; the settings would still need the API |
+| Import `Nicholas Template` and repaint only sender/signature/timing via the API | the first version of this fix; it depends on the same broken editor flow for the words |
+| Edit `Nicholas Template` itself in noon | fixes manual use too, but posting no longer imports it, and its own sender is whoever imports it |
+| Run noon's `reformat_campaign` to change the sender | it rewrites copy with noon's model; the words are the document's |
+
+### Trade-off
+
+The campaign write is an undocumented API, as the wizard already is (D-017,
+D-028): a noon change shows up as a failed call or a read-back naming the
+field, not as a quietly wrong campaign. noon's generated copy is discarded
+every time, by design. The InMail cannot carry an email signature, so a
+document whose InMail ends on a bare sign-off sends it that way.
+
+### Revisit when
+
+noon publishes an API, a read-back fails on a field noon renamed, or the team
+wants different timing per role (then the cadence moves from constants to
+the document's `delay_days`).

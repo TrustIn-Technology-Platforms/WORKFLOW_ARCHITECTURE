@@ -256,6 +256,10 @@ def _filter_noon_tokens(value: Any) -> str:
     )
 
 
+# The noon driver writes its campaign through the API, outside any recipe.
+noon_tokens = _filter_noon_tokens
+
+
 # Juicebox wants double-brace, space-separated, Title Case tokens that match its
 # own field labels ({{First Name}}, {{Current Company}}). Its editor refuses to
 # save otherwise and shows "use double curly braces like {{First Name}}". Our
