@@ -460,12 +460,13 @@ class NotionClient:
             values[s.prop_error] = f"Deleted OK. Notes: {detail}"[:1800]
         await self.update_properties(page_id, values)
 
-    async def mark_still_posted(self, page_id: str) -> None:
+    async def mark_still_posted(self, page_id: str, note: str | None = None) -> None:
         """A delete that took some platforms down and left others up, as
-        asked: the row reads Posted again, and `Posted On` says which."""
+        asked: the row reads Posted again, and `Posted On` says which.
+        `note` is why a record was left in place, for `Error`."""
         s = self.settings
         await self.update_properties(
-            page_id, {s.prop_status: s.status_posted, s.prop_error: ""}
+            page_id, {s.prop_status: s.status_posted, s.prop_error: (note or "")[:1800]}
         )
 
     async def mark_failed(self, page_id: str, error: str) -> None:

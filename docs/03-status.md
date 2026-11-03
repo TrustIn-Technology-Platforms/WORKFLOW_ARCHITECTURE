@@ -501,9 +501,10 @@ Built 2026-09-23 ([D-023](11-decisions.md)), reshaped 2026-11-03
   ([sweep_trashed_rows](../app/pipeline.py)) is still there behind
   `DELETE_TRASHED_ROWS=true`, off by default.
 - **`Notes` is the row's log** (2026-11-03): one line per platform event,
-  newest first - `2026-11-03 18:14 · noon · deleted — role gone`. Posts
-  write `posted` / `failed` lines with the platform's link, deletes
-  `deleted` / `delete failed` / `left in place`. Appended, never
+  newest first - `2026-11-03 18:14 · noon · deleted`. Posts write
+  `posted` / `failed` lines with the platform's link, deletes `deleted` /
+  `delete failed` / `left in place`; the reasons stay in `Error`
+  (2026-11-04). Appended, never
   overwritten, oldest lines dropped at Notion's limit. The board's `Posted
   On` and `Failed On` were created as single selects and must be converted
   to multi-select before the tick-off works ([05](05-notion-contract.md)).

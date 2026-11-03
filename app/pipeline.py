@@ -353,10 +353,13 @@ async def process_row(
             # carries the same facts.
             log.warning("could not update the platform columns",
                         extra={"page_id": row.page_id, "error": str(exc)[:200]})
+        # Time, platform, outcome and link only: the platform's own words go
+        # to `Error` (a failure) or the log, not the row's history (asked for
+        # 2026-11-04 - a long line per event made the column unreadable).
         await note(
             client, row.page_id, result.platform,
             "posted" if result.outcome is Outcome.POSTED else "failed",
-            detail=result.detail, url=result.post_url,
+            url=result.post_url,
         )
 
     if not dry_run:
@@ -644,16 +647,16 @@ async def delete_row(
             action = "delete failed"
         else:
             # Skipped: nothing recorded there, or a record the adapter will
-            # not touch (a recruiter's own campaign). It stays on Posted On
-            # and the note says why.
-            await note(client, row.page_id, name, "left in place", detail=result.detail)
+            # not touch (a recruiter's own campaign). It stays on Posted On;
+            # the reason goes to `Error` with the final status.
+            await note(client, row.page_id, name, "left in place")
             return
         try:
             await client.set_platform_columns(row.page_id, posted=posted_on, failed=failed_on)
         except Exception as exc:  # noqa: BLE001 - optional columns
             log.warning("could not update the platform columns",
                         extra={"page_id": row.page_id, "error": str(exc)[:200]})
-        await note(client, row.page_id, name, action, detail=result.detail)
+        await note(client, row.page_id, name, action)
 
     if not dry_run:
         await client.mark_deleting(row.page_id)
@@ -696,7 +699,11 @@ async def delete_row(
     elif report.ok:
         # What was asked for is down; the rest is still up, and `Posted On`
         # says which. The row goes back to Posted rather than Deleted.
-        await client.mark_still_posted(row.page_id)
+        left = [
+            f"{r.platform}: {r.detail}" for r in report.results
+            if r.outcome is Outcome.SKIPPED and r.detail
+        ]
+        await client.mark_still_posted(row.page_id, "; ".join(left) or None)
         log.info("row partly deleted - still posted elsewhere",
                  extra={"page_id": row.page_id, "still_up": posted_on})
     else:

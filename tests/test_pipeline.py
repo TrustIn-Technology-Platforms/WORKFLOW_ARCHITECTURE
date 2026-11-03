@@ -403,8 +403,8 @@ class _DeleteClient:
     async def mark_deleted(self, page_id, detail=None):
         self.deleted.append((page_id, detail))
 
-    async def mark_still_posted(self, page_id):
-        self.still_posted.append(page_id)
+    async def mark_still_posted(self, page_id, note=None):
+        self.still_posted.append((page_id, note))
 
     async def mark_failed(self, page_id, error):
         self.failed.append((page_id, error))
@@ -640,7 +640,7 @@ def test_posted_on_and_failed_on_fill_platform_by_platform(monkeypatch, tmp_path
     # The same trail on the Notes log, with each platform's link.
     assert client.notes == [
         ("loxo", "posted", None, "https://loxo/x"),
-        ("wellfound", "failed", "form timed out", None),
+        ("wellfound", "failed", None, None),
         ("noon", "posted", None, "https://noon/x"),
     ]
 
@@ -709,8 +709,8 @@ def test_a_delete_empties_posted_on_one_platform_at_a_time(monkeypatch, tmp_path
     ]
     assert client.failed
     assert client.notes == [
-        ("noon", "deleted", "noon done", None),
-        ("juicebox", "delete failed", "juicebox done", None),
+        ("noon", "deleted", None, None),
+        ("juicebox", "delete failed", None, None),
     ]
 
 
@@ -734,7 +734,7 @@ def test_a_delete_takes_down_only_the_ticked_platforms(monkeypatch, tmp_path):
     assert report.ok
     assert [name for name, _ in _FakeDeleteAdapter.calls] == ["noon"]
     assert client.columns[-1] == (["juicebox"], [])
-    assert client.still_posted == ["p1"] and not client.deleted and not client.failed
+    assert client.still_posted == [("p1", None)] and not client.deleted and not client.failed
     assert Ledger(settings.ledger_file).get("p1").open_platforms == ["juicebox"]
 
 
@@ -771,9 +771,9 @@ def test_a_record_the_adapter_leaves_in_place_is_noted_and_stays_posted(monkeypa
     client = _DeleteClient()
     asyncio.run(delete_row(row, client, settings, dry_run=False))
 
-    assert client.notes == [("loxo", "left in place", "loxo done", None)]
+    assert client.notes == [("loxo", "left in place", None, None)]
     assert client.columns == [(["loxo"], [])]
-    assert client.still_posted == ["p1"] and not client.deleted
+    assert client.still_posted == [("p1", "loxo: loxo done")] and not client.deleted
 
 
 def test_platforms_post_in_the_set_order_with_juicebox_last():
