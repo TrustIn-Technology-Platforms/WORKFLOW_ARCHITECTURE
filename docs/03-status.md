@@ -482,18 +482,31 @@ merge ([tests/test_pipeline.py](../tests/test_pipeline.py)).
 
 ## Deleting a row (2026-09-23)
 
-The reverse of posting: remove what a row created on every platform. Built
-2026-09-23 ([D-023](11-decisions.md)); two triggers, one code path
-([pipeline.delete_row / sweep_trashed_rows](../app/pipeline.py)):
+The reverse of posting: remove what a row created on the platforms ticked.
+Built 2026-09-23 ([D-023](11-decisions.md)), reshaped 2026-11-03
+([D-030](11-decisions.md)); one code path
+([pipeline.delete_row](../app/pipeline.py)):
 
-- **`Post Status` set to `Delete`** - picked up by the poll and the webhook
-  like `Ready to Post`, claimed as `Deleting`, written back `Deleted` or
-  `Failed` naming the platform that is left. Setting it back to `Delete`
-  finishes the job; what went stays gone and is not visited again.
-- **The row moved to Notion's trash** - Notion sends no event, so a sweep
-  (`TRASH_SWEEP_MINUTES`) asks after every row the ledger holds, and deletes
-  its posts once it has sat in the trash for `DELETE_TRASHED_AFTER_HOURS`
-  (24). Restored inside that, nothing is touched.
+- **Tick the platforms under `Platforms`, set `Post Status` to `Ready to
+  Delete`** - picked up by the poll and the webhook like `Ready to Post`,
+  claimed as `Deleting`. Each platform leaves `Posted On` the moment its post
+  is confirmed gone and gets a line in `Notes`. Written back `Deleted` when
+  nothing is left up, `Posted` when other platforms still are (`Posted On`
+  names them), or `Failed` naming the platform that refused. Setting it back
+  to `Ready to Delete` finishes the job; what went stays gone and is not
+  visited again. Until 2026-11-03 the status was `Delete` and ignored the
+  ticks.
+- **The row moved to Notion's trash** - left alone since 2026-11-03. The
+  sweep that used to take its posts down after 24 hours
+  ([sweep_trashed_rows](../app/pipeline.py)) is still there behind
+  `DELETE_TRASHED_ROWS=true`, off by default.
+- **`Notes` is the row's log** (2026-11-03): one line per platform event,
+  newest first - `2026-11-03 18:14 · noon · deleted — role gone`. Posts
+  write `posted` / `failed` lines with the platform's link, deletes
+  `deleted` / `delete failed` / `left in place`. Appended, never
+  overwritten, oldest lines dropped at Notion's limit. The board's `Posted
+  On` and `Failed On` were created as single selects and must be converted
+  to multi-select before the tick-off works ([05](05-notion-contract.md)).
 
 What to delete comes from the **ledger** ([app/ledger.py](../app/ledger.py),
 `<SESSION_DIR>/posted-rows.json`, on the volume): every post since 2026-09-23

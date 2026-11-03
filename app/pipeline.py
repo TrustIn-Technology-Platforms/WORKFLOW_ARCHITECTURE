@@ -184,6 +184,25 @@ async def progress_reset(client: NotionClient, page_id: str, posted: list[str]) 
                     extra={"page_id": page_id, "error": str(exc)[:200]})
 
 
+async def note(
+    client: NotionClient,
+    page_id: str,
+    platform: str,
+    action: str,
+    *,
+    detail: str | None = None,
+    url: str | None = None,
+) -> None:
+    """One line on the row's `Notes` log. Never fails the run: the posts and
+    deletes it describes have already happened."""
+    try:
+        await client.add_note(page_id, platform, action, detail=detail, url=url)
+    except Exception as exc:  # noqa: BLE001 - optional column, see above
+        log.warning("could not write the row's note",
+                    extra={"page_id": page_id, "platform": platform,
+                           "action": action, "error": str(exc)[:200]})
+
+
 def _row_text(row: NotionRow, column: str) -> str | None:
     """`property_text` with the same loose name match the Notion client uses."""
     exact = row.property_text(column)
@@ -334,6 +353,11 @@ async def process_row(
             # carries the same facts.
             log.warning("could not update the platform columns",
                         extra={"page_id": row.page_id, "error": str(exc)[:200]})
+        await note(
+            client, row.page_id, result.platform,
+            "posted" if result.outcome is Outcome.POSTED else "failed",
+            detail=result.detail, url=result.post_url,
+        )
 
     if not dry_run:
         await client.mark_posting(row.page_id)
@@ -614,20 +638,37 @@ async def delete_row(
         name = result.platform.lower()
         if result.outcome is Outcome.DELETED:
             posted_on[:] = [p for p in posted_on if p != name]
+            action = "deleted"
         elif not result.ok:
             failed_on.append(name)
+            action = "delete failed"
         else:
+            # Skipped: nothing recorded there, or a record the adapter will
+            # not touch (a recruiter's own campaign). It stays on Posted On
+            # and the note says why.
+            await note(client, row.page_id, name, "left in place", detail=result.detail)
             return
         try:
             await client.set_platform_columns(row.page_id, posted=posted_on, failed=failed_on)
         except Exception as exc:  # noqa: BLE001 - optional columns
             log.warning("could not update the platform columns",
                         extra={"page_id": row.page_id, "error": str(exc)[:200]})
+        await note(client, row.page_id, name, action, detail=result.detail)
 
     if not dry_run:
         await client.mark_deleting(row.page_id)
         await progress_reset(client, row.page_id, posted_on)
+    report = DeleteReport(page_id=row.page_id, title=row.title)
     try:
+        # Only the platforms ticked on the row come down (2026-11-03): the
+        # `Platforms` column is the ask, for a delete as for a post. Untick
+        # Loxo and set the status, and Loxo keeps its campaign.
+        if not row.platforms:
+            raise PipelineError(
+                f"No platforms are ticked under {settings.prop_platforms}, so there "
+                "is nothing to take down. Tick the platforms to delete and set the "
+                f"status to {settings.status_delete} again."
+            )
         report = await delete_records(
             row.page_id,
             row.title,
@@ -635,11 +676,13 @@ async def delete_row(
             settings,
             post_url=_row_text(row, settings.prop_post_url),
             dry_run=dry_run,
+            only_named=True,
             on_result=None if dry_run else progress,
         )
+    except PipelineError as exc:
+        report.error = str(exc)
     except Exception as exc:  # noqa: BLE001 - the row must not be left on Deleting
         log.exception("row delete crashed", extra={"page_id": row.page_id})
-        report = DeleteReport(page_id=row.page_id, title=row.title)
         report.error = f"Unexpected error: {exc.__class__.__name__}. Check the logs."
     if dry_run:
         log.info(
@@ -647,9 +690,15 @@ async def delete_row(
             extra={"page_id": row.page_id, "detail": report.detail},
         )
         return report
-    if report.ok:
+    if report.ok and not posted_on:
         await client.mark_deleted(row.page_id, report.detail or None)
         log.info("row deleted", extra={"page_id": row.page_id})
+    elif report.ok:
+        # What was asked for is down; the rest is still up, and `Posted On`
+        # says which. The row goes back to Posted rather than Deleted.
+        await client.mark_still_posted(row.page_id)
+        log.info("row partly deleted - still posted elsewhere",
+                 extra={"page_id": row.page_id, "still_up": posted_on})
     else:
         await client.mark_failed(
             row.page_id,

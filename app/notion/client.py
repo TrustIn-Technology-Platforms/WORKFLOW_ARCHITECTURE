@@ -23,6 +23,52 @@ log = get_logger(__name__)
 
 API_ROOT = "https://api.notion.com/v1"
 
+# The `Notes` log is written as one rich_text item, and Notion caps one at
+# 2000 characters; a little under that keeps a chunking edge case away.
+NOTES_MAX_CHARS = 1900
+# How much of a platform's own words one log line carries.
+NOTE_DETAIL_CHARS = 220
+
+
+def format_note_line(
+    at: datetime,
+    platform: str,
+    action: str,
+    *,
+    detail: str | None = None,
+    url: str | None = None,
+    tz_name: str = "UTC",
+) -> str:
+    """One `Notes` line: `2026-11-03 18:14 · noon · deleted · <url> — <detail>`."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        stamp = at.astimezone(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001 - an unknown zone name is not worth a lost line
+        stamp = at.astimezone(timezone.utc)
+    parts = [stamp.strftime("%Y-%m-%d %H:%M"), platform.strip().lower(), action.strip()]
+    if url:
+        parts.append(url.strip())
+    line = " · ".join(parts)
+    if detail:
+        text = " ".join(detail.split())
+        if len(text) > NOTE_DETAIL_CHARS:
+            text = text[: NOTE_DETAIL_CHARS - 1].rstrip() + "…"
+        line += f" — {text}"
+    return line
+
+
+def _row_property_text(row: NotionRow, column: str) -> str | None:
+    """`property_text` with the same loose name match `resolve_property` uses."""
+    exact = row.property_text(column)
+    if exact:
+        return exact
+    wanted = _loose(column)
+    for name in row.raw_properties:
+        if _loose(name) == wanted:
+            return row.property_text(name)
+    return None
+
 
 class NotionAPIError(PipelineError):
     def __init__(self, status: int, code: str, message: str) -> None:
@@ -329,6 +375,44 @@ class NotionClient:
             {s.prop_posted_on: sorted(set(posted)), s.prop_failed_on: sorted(set(failed))},
         )
 
+    async def add_note(
+        self,
+        page_id: str,
+        platform: str,
+        action: str,
+        detail: str | None = None,
+        url: str | None = None,
+    ) -> None:
+        """Prepend one event line to the row's `Notes` log.
+
+        `Notes` is the one place a row says what happened to it per platform
+        and when: `Post Status` is a single state for four destinations, and
+        `Post URL` keeps the first link only. So the column is a log, newest
+        first, and nothing else writes to it whole. The current text is read
+        back first; two services writing at once would lose a line, and one
+        line lost is better than a column wiped. The oldest lines fall off
+        when the column would exceed Notion's limit.
+        """
+        s = self.settings
+        if await self.resolve_property(s.prop_notes) is None:
+            return
+        row = await self.get_row(page_id)
+        current = _row_property_text(row, s.prop_notes) or ""
+        line = format_note_line(
+            datetime.now(timezone.utc), platform, action, detail=detail, url=url,
+            tz_name=s.notes_timezone,
+        )
+        kept: list[str] = [line]
+        size = len(line)
+        for old in current.splitlines():
+            if not old.strip():
+                continue
+            if size + 1 + len(old) > NOTES_MAX_CHARS:
+                break
+            kept.append(old)
+            size += 1 + len(old)
+        await self.update_properties(page_id, {s.prop_notes: "\n".join(kept)})
+
     async def mark_posted(
         self, page_id: str, post_url: str | None, detail: str | None = None
     ) -> None:
@@ -347,11 +431,11 @@ class NotionClient:
             s.prop_posted_at: datetime.now(timezone.utc),
             s.prop_error: "",
         }
-        # Written every time, empty when this run had nothing to say: a
-        # stale note from the previous run reads as this run's own.
-        if await self.resolve_property(s.prop_notes) is not None:
-            values[s.prop_notes] = (detail or "")[:1800]
-        elif detail:
+        # With a `Notes` column the run's notes are already on the row, one
+        # line per platform (`add_note`), and the log is never overwritten.
+        # Without one they have nowhere to go but `Error`, behind a prefix
+        # that says this is not a failure.
+        if detail and await self.resolve_property(s.prop_notes) is None:
             values[s.prop_error] = f"Posted OK. Notes: {detail}"[:1800]
         await self.update_properties(page_id, values)
 
@@ -361,7 +445,9 @@ class NotionClient:
         )
 
     async def mark_deleted(self, page_id: str, detail: str | None = None) -> None:
-        """Status Deleted, `Error` cleared, what each platform said in Notes."""
+        """Status Deleted, `Error` cleared. What each platform said is already
+        in the `Notes` log, line by line; `detail` is kept for a board with
+        no such column, where it has nowhere to go."""
         s = self.settings
         values: dict[str, Any] = {
             s.prop_status: s.status_deleted,
@@ -370,20 +456,23 @@ class NotionClient:
             s.prop_posted_on: [],
             s.prop_failed_on: [],
         }
-        if await self.resolve_property(s.prop_notes) is not None:
-            values[s.prop_notes] = (detail or "")[:1800]
+        if detail and await self.resolve_property(s.prop_notes) is None:
+            values[s.prop_error] = f"Deleted OK. Notes: {detail}"[:1800]
         await self.update_properties(page_id, values)
+
+    async def mark_still_posted(self, page_id: str) -> None:
+        """A delete that took some platforms down and left others up, as
+        asked: the row reads Posted again, and `Posted On` says which."""
+        s = self.settings
+        await self.update_properties(
+            page_id, {s.prop_status: s.status_posted, s.prop_error: ""}
+        )
 
     async def mark_failed(self, page_id: str, error: str) -> None:
         s = self.settings
-        values: dict[str, Any] = {
-            s.prop_status: s.status_failed,
-            s.prop_error: error[:1800],
-        }
-        # The previous run's notes describe work this run did not do.
-        if await self.resolve_property(s.prop_notes) is not None:
-            values[s.prop_notes] = ""
-        await self.update_properties(page_id, values)
+        await self.update_properties(
+            page_id, {s.prop_status: s.status_failed, s.prop_error: error[:1800]}
+        )
 
 
 def _loose(name: str) -> str:

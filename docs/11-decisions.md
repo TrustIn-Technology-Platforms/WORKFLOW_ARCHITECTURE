@@ -998,3 +998,58 @@ document whose InMail ends on a bare sign-off sends it that way.
 noon publishes an API, a read-back fails on a field noon renamed, or the team
 wants different timing per role (then the cadence moves from constants to
 the document's `delay_days`).
+
+## D-030 · A delete takes down the ticked platforms; `Notes` is the row's log; the trash sweep is off
+
+**Status** Accepted — built 2026-11-03, not yet proven live
+**Date** 2026-11-03
+**Where** `app/pipeline.py` (`delete_row`), `app/notion/client.py` (`add_note`, `mark_still_posted`), `app/config.py` — [05-notion-contract](05-notion-contract.md#status-lifecycle)
+
+### Context
+
+The delete built in D-023 took a row down everywhere at once, from two
+triggers: a `Delete` status, and the row sitting in Notion's trash for 24
+hours. Sohaib's ask on 2026-11-03 was narrower and more legible: tick the
+platforms, set one status, watch `Posted On` shrink as each post is confirmed
+gone - and nothing else should ever delete a post. The same conversation
+asked how a recruiter knows what the service has done to a row so far.
+`Post Status` is one state for four platforms, `Post URL` keeps the first
+platform's link, and the old `Notes` write-back was overwritten by every run,
+so the history of a row lived only in the service log.
+
+### Decision
+
+`Ready to Delete` (renamed from `Delete`) deletes exactly the platforms ticked
+under `Platforms`, the way `Ready to Post` posts exactly them; nothing ticked
+is a `Failed` row that says so. `Posted On` loses a platform only when its
+post is confirmed gone. The end state is `Deleted` when `Posted On` is empty,
+`Posted` when the asked-for platforms are down and others still up, `Failed`
+when one refused. `Notes` becomes an append-only log: one line per platform
+event, newest first, stamped in `NOTES_TIMEZONE` (London), carrying the
+platform's link and its own words, truncated; the three final-status writes
+no longer touch it. `DELETE_TRASHED_ROWS` defaults to false; the sweep stays
+in the code behind it.
+
+### Why not the alternatives
+
+| Alternative | Ruled out because |
+|-------------|-------------------|
+| A `Deleted On` multi-select beside `Posted On` | two columns to read for one question; `Posted On` emptying as each delete lands already says what is still up, and `Notes` says when each came down |
+| Keep `Delete` meaning "everything" and add a second status for "ticked only" | two statuses for one verb; the `Platforms` column already exists and is what a recruiter reaches for |
+| A `Platform Posts` database, one row per role × platform | the right shape for per-platform links and times, but a bigger change on this service and on RecruitOS, which reads the same board; the log answers the question today, the database is the step after a month of real rows |
+| Keep the trash sweep with a longer wait | a delete nobody asked for, however long the wait; every take-down is now a deliberate status change |
+
+### Trade-off
+
+A `Notes` line is read-modify-write, so two services writing the same row at
+the same moment lose a line; one line lost beats a column wiped. The log is
+capped at Notion's 2,000-character item limit and drops its oldest lines,
+so a row with a long history keeps only the recent part. A row deleted in
+Notion now keeps its posts; taking them down means restoring the row and
+setting `Ready to Delete`.
+
+### Revisit when
+
+the board is replaced by RecruitOS as the only front (D-026's month), or a
+recruiter needs more of a row's history than 2,000 characters hold - then
+the per-platform database.

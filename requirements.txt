@@ -23,3 +23,9 @@ anthropic==1.2.0
 # --- document handling ------------------------------------------------------
 python-docx==1.1.2
 beautifulsoup4==4.12.3
+
+# --- time zones --------------------------------------------------------------
+# The `Notes` log on a row is stamped in NOTES_TIMEZONE (Europe/London). The
+# slim Debian image ships no /usr/share/zoneinfo, so without this package
+# zoneinfo finds nothing and every line falls back to UTC.
+tzdata==2026.2

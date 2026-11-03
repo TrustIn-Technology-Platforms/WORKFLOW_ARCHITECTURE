@@ -62,8 +62,9 @@ One row is one document and one set of destinations.
 | `Post URL` | `url` or `rich_text` | Optional | Written on success. |
 | `Posted At` | `date` | Optional | Written on success. |
 | `Error` | `rich_text` | Optional but strongly advised | Written on failure. Without it, a failure is invisible in Notion. |
-| `Posted On` | `multi_select` | Optional | One option per platform. Filled platform by platform as each post succeeds; emptied platform by platform as each delete succeeds. A re-run skips what is already listed. Added 2026-10-09. |
+| `Posted On` | `multi_select` | Optional | One option per platform. Filled platform by platform as each post succeeds; emptied platform by platform as each delete succeeds. A re-run skips what is already listed. Added 2026-10-09. **Must be a multi-select**: as a single select it can hold one value only, and the platform-by-platform tick-off becomes `loxo + noon`. |
 | `Failed On` | `multi_select` | Optional | The platforms that failed in the last run. Cleared when a run starts; `Error` says why each one failed. |
+| `Notes` | `rich_text` | Recommended | The row's log: one line per platform event, newest first, stamped in `NOTES_TIMEZONE` - `2026-11-03 18:14 · noon · posted · <url> — <what noon said>`. Actions: `posted`, `failed`, `deleted`, `delete failed`, `left in place`. Appended to, never overwritten; the oldest lines drop off at Notion's 2,000-character limit. Without it a run's notes go to `Error` behind `Posted OK`. |
 
 Any column name can differ from the default — see [04-configuration](04-configuration.md).
 Optional columns that are absent are logged and skipped, so a missing `Posted At`
@@ -88,8 +89,11 @@ hand:
 - [ ] Share the database with that integration — **Connections → add your integration**.
       Without this the API returns 404 for a database that plainly exists.
 - [ ] Confirm `Status` option names match `STATUS_READY`, `STATUS_POSTING`,
-      `STATUS_POSTED` and `STATUS_FAILED` exactly. Notion rejects an option name
-      that has not already been created.
+      `STATUS_POSTED`, `STATUS_FAILED`, `STATUS_DELETE` (`Ready to Delete`),
+      `STATUS_DELETING` and `STATUS_DELETED` exactly. Notion rejects an option
+      name that has not already been created.
+- [ ] `Posted On` and `Failed On` are **multi-select** columns, with one option
+      per platform; a `Notes` rich-text column exists.
 - [ ] Confirm each `Platforms` option name matches a recipe filename in `platforms/`.
 - [ ] Set `NOTION_DATABASE_ID` to the 32-character id from the database URL.
 
@@ -128,6 +132,28 @@ client details included. See [D-013](11-decisions.md#d-013--documents-are-shared
 - A row is retried by setting it back to `Ready to Post`. There is no automatic
   retry of a failed row, deliberately — a failure usually means a human has
   something to fix.
+
+Taking a row down is the same shape in reverse (2026-11-03):
+
+```
+   Ready to Delete  --claimed-->  Deleting  --nothing left on Posted On-->  Deleted
+   (platforms ticked)                |
+                                     +--ticked ones down, others still up-->  Posted
+                                     +--a platform refused-->                 Failed
+```
+
+- **`Ready to Delete`** takes down only the platforms ticked under `Platforms`.
+  Untick Loxo and Loxo keeps its campaign. Nothing ticked is a `Failed` row
+  that says so.
+- `Posted On` loses each platform the moment its post is confirmed gone, and
+  only then; `Failed On` gains any that refused. `Notes` gets a line per
+  platform either way.
+- **`Deleted`** means nothing is up anywhere. **`Posted`** after a delete means
+  what was asked for is down and `Posted On` names the rest. A record the
+  adapter will not touch (a campaign a recruiter made, a published Wellfound
+  listing) stays on `Posted On` with a `left in place` line in `Notes`.
+- A row deleted in Notion is left alone. The trash sweep that used to take its
+  posts down after 24 hours is off (`DELETE_TRASHED_ROWS=false`).
 
 ## Query behaviour
 

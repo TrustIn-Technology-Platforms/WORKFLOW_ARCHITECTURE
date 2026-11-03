@@ -198,7 +198,7 @@ def test_a_row_set_to_delete_runs_the_delete_not_the_post(monkeypatch):
     from app.models import NotionRow
 
     rows = {
-        "del": NotionRow(page_id="del", title="D", document_url="x", status="Delete"),
+        "del": NotionRow(page_id="del", title="D", document_url="x", status="Ready to Delete"),
         "busy": NotionRow(page_id="busy", title="B", document_url="x", status="Deleting"),
     }
     deleted: list[str] = []

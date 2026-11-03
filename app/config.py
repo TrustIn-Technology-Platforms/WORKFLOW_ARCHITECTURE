@@ -40,12 +40,17 @@ class Settings(BaseSettings):
     prop_post_url: str = "Post URL"
     prop_posted_at: str = "Posted At"
     prop_error: str = "Error"
-    # Optional. Where a successful run's notes go - which search was built,
-    # what a taxonomy refused, a stage Claude had to infer. Without this column
-    # they land in `Error` prefixed "Posted OK", which reads as a failure
-    # (Sohaib, 2026-09-03: "I got this error"). Add a rich-text column of this
-    # name and `Error` stays empty on success.
+    # Optional. The row's activity log: one line per platform event, newest
+    # first - "2026-11-03 18:14 · noon · posted · <url>", "... · deleted".
+    # It is appended to, never overwritten, so a row says what has happened
+    # to it so far on every platform (asked for 2026-11-03: Post Status is
+    # one state for four platforms, and Post URL keeps one link). Without
+    # this column a run's notes land in `Error` prefixed "Posted OK", which
+    # reads as a failure (Sohaib, 2026-09-03: "I got this error").
     prop_notes: str = "Notes"
+    # The clock the log lines are stamped in. Recruiters read the row in
+    # London; the service runs in UTC.
+    notes_timezone: str = "Europe/London"
     # Per-platform outcome, two multi-selects beside the one row status. Each
     # platform is added to `Posted On` the moment it succeeds and to `Failed
     # On` the moment it fails, so a row on `Failed` says which of its four
@@ -91,11 +96,13 @@ class Settings(BaseSettings):
     status_posting: str = "Posting"
     status_posted: str = "Posted"
     status_failed: str = "Failed"
-    # Deleting a row: a recruiter sets the status to `status_delete`, the
-    # service claims it as `status_deleting`, removes what the row created on
-    # every platform, and writes `status_deleted` (or Failed, saying which
-    # platform is left). See pipeline.delete_row.
-    status_delete: str = "Delete"
+    # Deleting a row: a recruiter ticks the platforms to take down and sets
+    # the status to `status_delete`; the service claims it as
+    # `status_deleting`, removes what the row created on those platforms,
+    # and writes `status_deleted` when nothing is left up - `status_posted`
+    # when other platforms still are, Failed when one refused. See
+    # pipeline.delete_row.
+    status_delete: str = "Ready to Delete"
     status_deleting: str = "Deleting"
     status_deleted: str = "Deleted"
 
@@ -225,12 +232,14 @@ class Settings(BaseSettings):
     # puts it beside the sessions (`<SESSION_DIR>/posted-rows.json`), which on
     # Railway is the volume - a ledger on container disk dies with each deploy.
     ledger_path: Path | None = None
-    # A posted row moved to Notion's trash has its records deleted too, once it
-    # has sat there this long. The wait is the undo: a row trashed by mistake
-    # and restored inside it keeps everything. Notion sends no event for a
-    # deleted row, so the sweep checks the ledger's rows every
+    # Off by default since 2026-11-03: the `status_delete` status is the one
+    # way a row's posts come down, and a row trashed in Notion keeps them.
+    # On, a posted row moved to Notion's trash has its records deleted too,
+    # once it has sat there this long. The wait is the undo: a row trashed by
+    # mistake and restored inside it keeps everything. Notion sends no event
+    # for a deleted row, so the sweep checks the ledger's rows every
     # `trash_sweep_minutes`.
-    delete_trashed_rows: bool = True
+    delete_trashed_rows: bool = False
     delete_trashed_after_hours: float = 24
     trash_sweep_minutes: int = 30
 

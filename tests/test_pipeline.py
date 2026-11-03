@@ -203,7 +203,7 @@ def test_a_row_left_on_deleting_is_released_with_the_delete_note():
     row.status = "Deleting"
     client = _StuckClient([row])
     asyncio.run(recover_stuck_rows(client, Settings(), older_than_minutes=45))
-    assert "set the status back to Delete" in client.failed["gone"]
+    assert "set the status back to Ready to Delete" in client.failed["gone"]
 
 
 def test_recover_dry_run_lists_but_changes_nothing():
@@ -231,12 +231,17 @@ class _WriteBackClient:
         self.failed: list[tuple] = []
         # Every (posted, failed) pair written, in order - the progress trail.
         self.columns: list[tuple[list[str], list[str]]] = []
+        # Every Notes line asked for: (platform, action, detail, url).
+        self.notes: list[tuple] = []
 
     async def mark_posting(self, page_id):
         self.posting.append(page_id)
 
     async def set_platform_columns(self, page_id, *, posted, failed):
         self.columns.append((sorted(set(posted)), sorted(set(failed))))
+
+    async def add_note(self, page_id, platform, action, detail=None, url=None):
+        self.notes.append((platform, action, detail, url))
 
     async def mark_posted(self, page_id, post_url, detail=None):
         if self.fail_posted:
@@ -382,7 +387,9 @@ class _DeleteClient:
     def __init__(self, trash=None):
         self.trash = trash or {}
         self.deleting, self.deleted, self.failed = [], [], []
+        self.still_posted: list[str] = []
         self.columns: list[tuple[list[str], list[str]]] = []
+        self.notes: list[tuple] = []
 
     async def mark_deleting(self, page_id):
         self.deleting.append(page_id)
@@ -390,8 +397,14 @@ class _DeleteClient:
     async def set_platform_columns(self, page_id, *, posted, failed):
         self.columns.append((sorted(set(posted)), sorted(set(failed))))
 
+    async def add_note(self, page_id, platform, action, detail=None, url=None):
+        self.notes.append((platform, action, detail, url))
+
     async def mark_deleted(self, page_id, detail=None):
         self.deleted.append((page_id, detail))
+
+    async def mark_still_posted(self, page_id):
+        self.still_posted.append(page_id)
 
     async def mark_failed(self, page_id, error):
         self.failed.append((page_id, error))
@@ -458,7 +471,7 @@ def test_a_half_deleted_row_fails_and_the_retry_skips_what_went(monkeypatch, tmp
     client = _DeleteClient()
 
     asyncio.run(delete_row(row, client, settings, dry_run=False))
-    assert client.failed and "juicebox" in client.failed[0][1] and "back to Delete" in client.failed[0][1]
+    assert client.failed and "juicebox" in client.failed[0][1] and "back to Ready to Delete" in client.failed[0][1]
 
     _FakeDeleteAdapter.calls = []
     asyncio.run(delete_row(row, client, settings, dry_run=False))
@@ -558,6 +571,9 @@ def test_a_trashed_row_waits_out_the_grace_period_then_is_deleted(monkeypatch, t
     from app.pipeline import sweep_trashed_rows
 
     settings = _delete_setup(monkeypatch, tmp_path, {"noon": Outcome.DELETED})
+    # Off by default since 2026-11-03; the sweep must still work for a
+    # deployment that turns it on.
+    settings.delete_trashed_rows = True
     settings.delete_trashed_after_hours = 24
     ledger = Ledger(settings.ledger_file)
     for page in ("trashed", "restored", "noaccess", "live"):
@@ -621,6 +637,12 @@ def test_posted_on_and_failed_on_fill_platform_by_platform(monkeypatch, tmp_path
         (["loxo", "noon"], ["wellfound"]),
     ]
     assert client.failed and "wellfound: form timed out" in client.failed[0][1]
+    # The same trail on the Notes log, with each platform's link.
+    assert client.notes == [
+        ("loxo", "posted", None, "https://loxo/x"),
+        ("wellfound", "failed", "form timed out", None),
+        ("noon", "posted", None, "https://noon/x"),
+    ]
 
 
 def test_a_rerun_posts_only_the_platforms_not_already_on_posted_on(monkeypatch, tmp_path):
@@ -686,6 +708,72 @@ def test_a_delete_empties_posted_on_one_platform_at_a_time(monkeypatch, tmp_path
         (["juicebox"], ["juicebox"]),
     ]
     assert client.failed
+    assert client.notes == [
+        ("noon", "deleted", "noon done", None),
+        ("juicebox", "delete failed", "juicebox done", None),
+    ]
+
+
+def test_a_delete_takes_down_only_the_ticked_platforms(monkeypatch, tmp_path):
+    """The Platforms column is the ask for a delete as for a post (2026-11-03):
+    a row posted to noon and Juicebox with only noon ticked keeps its
+    Juicebox sequence, and reads Posted again with juicebox still on Posted On."""
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import delete_row
+
+    settings = _delete_setup(monkeypatch, tmp_path, {"noon": Outcome.DELETED, "juicebox": Outcome.DELETED})
+    Ledger(settings.ledger_file).record_post("p1", "Row", {"noon": {"role": "r1"}, "juicebox": {"sequence": "s1"}})
+    row = NotionRow(page_id="p1", title="Row", document_url=None, status="Ready to Delete",
+                    platforms=["noon"], raw_properties={"Posted On": _multi("noon", "juicebox")})
+    client = _DeleteClient()
+    report = asyncio.run(delete_row(row, client, settings, dry_run=False))
+
+    assert report.ok
+    assert [name for name, _ in _FakeDeleteAdapter.calls] == ["noon"]
+    assert client.columns[-1] == (["juicebox"], [])
+    assert client.still_posted == ["p1"] and not client.deleted and not client.failed
+    assert Ledger(settings.ledger_file).get("p1").open_platforms == ["juicebox"]
+
+
+def test_a_delete_with_nothing_ticked_says_so(monkeypatch, tmp_path):
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import delete_row
+
+    settings = _delete_setup(monkeypatch, tmp_path, {"noon": Outcome.DELETED})
+    Ledger(settings.ledger_file).record_post("p1", "Row", {"noon": {"role": "r1"}})
+    row = NotionRow(page_id="p1", title="Row", document_url=None, status="Ready to Delete", platforms=[])
+    client = _DeleteClient()
+    asyncio.run(delete_row(row, client, settings, dry_run=False))
+
+    assert _FakeDeleteAdapter.calls == []
+    assert client.failed and "Tick the platforms" in client.failed[0][1]
+
+
+def test_a_record_the_adapter_leaves_in_place_is_noted_and_stays_posted(monkeypatch, tmp_path):
+    """A campaign the run found rather than made is a recruiter's: the adapter
+    skips it, the row says so in Notes, and the platform stays on Posted On."""
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import delete_row
+
+    settings = _delete_setup(monkeypatch, tmp_path, {"loxo": Outcome.SKIPPED})
+    Ledger(settings.ledger_file).record_post("p1", "Row", {"loxo": {"campaign": "c1", "campaign_created": "no"}})
+    row = NotionRow(page_id="p1", title="Row", document_url=None, status="Ready to Delete",
+                    platforms=["loxo"], raw_properties={"Posted On": _multi("loxo")})
+    client = _DeleteClient()
+    asyncio.run(delete_row(row, client, settings, dry_run=False))
+
+    assert client.notes == [("loxo", "left in place", "loxo done", None)]
+    assert client.columns == [(["loxo"], [])]
+    assert client.still_posted == ["p1"] and not client.deleted
 
 
 def test_platforms_post_in_the_set_order_with_juicebox_last():
