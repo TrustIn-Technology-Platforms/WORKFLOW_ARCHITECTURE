@@ -143,9 +143,9 @@ def test_row_columns_reach_a_board_advert_too():
 
     wellfound = doc.advert_for("wellfound")
     assert wellfound is not doc.advert
-    assert wellfound.location == "NY", "the recipe reads THIS advert"
+    assert wellfound.location == "New York", "the recipe reads THIS advert (NY expanded)"
     assert wellfound.tags == ["Python", "Go"]
-    assert doc.advert.location == "NY"
+    assert doc.advert.location == "New York"
 
 
 def test_a_multi_select_skills_column_reads_as_a_list():
