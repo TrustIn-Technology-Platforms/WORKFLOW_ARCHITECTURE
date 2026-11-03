@@ -7,6 +7,8 @@ a browser.
 
 from __future__ import annotations
 
+import asyncio
+
 from pathlib import Path
 
 import pytest
@@ -346,3 +348,105 @@ def test_the_tap_keeps_the_latest_token_and_counts_saves_in_flight():
     tap._on_request(_Req("PATCH", "https://app.juicebox.ai/api/sequence/other"))
     assert tap.sent == 1
     assert jb._is_create(_Resp(_Req("POST", "https://app.juicebox.ai/api/sequence?x=1")))
+
+
+# -- reaching the sequence list ---------------------------------------------
+
+_ROOT = "https://app.juicebox.ai"
+_LIST = "https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW/sequences"
+_NAV = "a[aria-label='Sequences']"
+
+
+class _Loc:
+    """One of the page's controls, present or not on the current screen."""
+
+    def __init__(self, page, key):
+        self.page, self.key = page, key
+        self.first = self
+
+    async def count(self):
+        return 1 if self.key in self.page.present else 0
+
+    async def click(self, **_):
+        if self.key not in self.page.present:
+            raise RuntimeError(f"Locator.click: no {self.key}")
+        self.page.clicks.append(self.key)
+        if self.key in (_NAV, "Sequences"):
+            # The SPA routes to the list; the sidebar stays.
+            self.page.present = {_NAV, "New sequence"}
+
+
+class _ScreenPage:
+    """A page whose URL decides which controls are on it."""
+
+    def __init__(self, screens, present=()):
+        self.screens, self.present = screens, set(present)
+        self.url, self.gotos, self.clicks = "", [], []
+        self.keyboard = self
+
+    async def goto(self, url, **_):
+        self.gotos.append(url)
+        self.url = url
+        self.present = set(self.screens.get(url, ()))
+
+    async def wait_for_timeout(self, ms):
+        pass
+
+    async def press(self, key):
+        pass
+
+    def get_by_text(self, text, exact=True):
+        return _Loc(self, text)
+
+    def locator(self, selector):
+        return _Loc(self, selector)
+
+    def get_by_role(self, role, name=None, exact=True):
+        return _Loc(self, f"{role}:{name}")
+
+
+def _land(page, sequences_url, *, first):
+    from types import SimpleNamespace
+
+    adapter = object.__new__(JuiceboxAdapter)
+    adapter.recipe = SimpleNamespace(defaults={"base_url": _ROOT}, login=SimpleNamespace(url=_ROOT))
+    asyncio.run(adapter._go_to_sequence_list(page, sequences_url, first=first))
+
+
+def test_a_closed_project_url_falls_back_to_the_app_root():
+    # 2026-11-03: the recipe's sequences_url named a project a colleague had
+    # closed. Juicebox showed a "Project Closed" card with no sidebar.
+    page = _ScreenPage({_LIST: {"Project Closed", "Return Home"}, _ROOT: {_NAV}})
+    _land(page, _LIST, first=True)
+    assert page.gotos == [_LIST, _ROOT]
+    assert page.clicks == [_NAV]
+    assert "New sequence" in page.present
+
+
+def test_without_a_sequences_url_the_sidebar_item_is_clicked_where_the_page_is():
+    page = _ScreenPage({}, present={_NAV})
+    _land(page, None, first=True)
+    assert page.gotos == []
+    assert page.clicks == [_NAV]
+    assert "New sequence" in page.present
+
+
+def test_the_older_sidebar_with_the_word_on_it_still_works():
+    page = _ScreenPage({}, present={"Sequences"})
+    _land(page, None, first=True)
+    assert page.clicks == ["Sequences"]
+
+
+def test_a_retry_dismisses_the_modal_and_uses_the_sidebar():
+    page = _ScreenPage({}, present={_NAV, "button:Close"})
+    _land(page, _LIST, first=False)
+    assert page.gotos == []
+    assert page.clicks == ["button:Close", _NAV]
+
+
+def test_no_sidebar_anywhere_is_a_clear_error():
+    page = _ScreenPage({_ROOT: set()}, present={"Project Closed"})
+    with pytest.raises(PipelineError) as info:
+        _land(page, None, first=True)
+    assert "Sequences" in str(info.value) and "open project" in str(info.value)
+    assert page.gotos == [_ROOT]

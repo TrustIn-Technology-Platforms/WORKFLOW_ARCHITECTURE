@@ -671,6 +671,46 @@ back to the aria-label. Same family as Wellfound's hidden-twin logo
 (2026-09-16): **a session check must never rest on a label the user can
 hide.**
 
+## The project that closed under the list URL (2026-11-03)
+
+Every Juicebox post failed with *"could not open Juicebox's New sequence
+dialog after 3 attempts (could not click 'Sequences': Locator.click: Timeout
+12000ms exceeded.)"*. The keepalive a minute later found the session alive, so
+it was not a login. The saved page
+(`artifacts/from-server/20261103-192636-juicebox-failed.png`) is a single
+card:
+
+> **Project Closed** — This project New Project was closed by a member of your
+> organization. You can reactivate it from the All Projects page. [Return Home]
+
+The recipe's `sequences_url` was project-scoped:
+`/project/AXAaleEq2JfO29jIjBXW/sequences`, Axle's unrenamed "New Project".
+Someone closed that project, and Juicebox now answers its URLs with the card
+above - no sidebar, no list, no `New sequence`. The first attempt waited 45 s
+for `New sequence`; the two retries skip the `goto` and click the sidebar's
+`Sequences` item, which the card does not have either, so the error named the
+last thing tried rather than the cause. The driver's own delete only closes a
+project the run recorded as created within 45 minutes
+([Deleting a row](#deleting-a-row-2026-09-23)), so this was a person, and it
+will happen again whenever a URL is tied to one project.
+
+Fixed 2026-11-04:
+
+- `sequences_url` is unset in `platforms/juicebox.yaml`. The driver clicks
+  the sidebar's `Sequences` item from wherever the session check left it (the
+  app root, which lands on an open project's home). The list shows every
+  sequence regardless of project, so no project id is needed.
+- If a `sequences_url` is set, the driver stops waiting the moment the
+  "Project Closed" card appears and uses the sidebar instead.
+- A page with no sidebar at all (the card, or a page that never painted) sends
+  the driver to the app root, where it waits up to 45 s for the sidebar. Only
+  if that fails too does it raise, and the message says to check that the
+  account still has an open project.
+
+The card is the screen to recognise: a page with a `Project Closed` heading
+and a `Return Home` button is a closed project's URL, not an expired session
+and not a slow paint.
+
 ## Unattended sign-in (2026-09-21)
 
 `platforms/juicebox.yaml` carries `login.steps` for an email + password form

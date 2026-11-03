@@ -746,9 +746,16 @@ class JuiceboxAdapter(RecipeAdapter):
     ) -> None:
         """Land on the sequence list, closing any open editor modal first.
 
-        On a retry the previous 'Start from scratch' left a modal open, and a
-        second `goto` to the same SPA URL never commits — so dismiss the modal
+        On a retry the previous 'Build from scratch' left a modal open, and a
+        second `goto` to the same SPA URL never commits - so dismiss the modal
         and use the in-app 'Sequences' nav instead of re-navigating.
+
+        The nav is the route; `sequences_url` is only a shortcut, and it goes
+        stale. It is project-scoped, and once that project is closed Juicebox
+        answers with a "Project Closed" card that has no sidebar, so neither
+        the list nor the nav is on the page (every post failed that way on
+        2026-11-03; artifact 20261103-192636). A page with no sidebar is left
+        for the app root, which lands on an open project's home and has one.
         """
         if not first:
             for label in ("Cancel", "Close"):
@@ -769,31 +776,79 @@ class JuiceboxAdapter(RecipeAdapter):
                 await page.goto(
                     str(sequences_url), wait_until="commit", timeout=45_000
                 )
-                return
             except Exception as exc:
                 log.warning(
                     "juicebox sequences goto slow; using nav instead",
                     extra={"error": _short(exc)},
                 )
-        # The icon-only sidebar (2026-10-08) has no "Sequences" text to click;
-        # its link still carries the aria-label. The text click stays as the
-        # fallback for the older layout.
-        try:
-            await page.locator("a[aria-label='Sequences']").first.click(
-                timeout=8_000, no_wait_after=True
-            )
-            return
-        except Exception:
-            pass
-        await self._click_text(page, "Sequences")
+            else:
+                if await self._wait_for_list(page, seconds=45):
+                    return
+                log.warning(
+                    "juicebox sequences_url did not show the list; using nav instead",
+                    extra={"url": str(sequences_url), "page": page.url},
+                )
 
-    async def _click_text(self, page: "Page", text: str) -> None:
-        try:
-            await page.get_by_text(text, exact=True).first.click(
-                timeout=12_000, no_wait_after=True
+        if await self._click_sequences_nav(page, seconds=10):
+            return
+        base_url = str(
+            self.recipe.defaults.get("base_url")
+            or self.recipe.login.url
+            or "https://app.juicebox.ai/"
+        )
+        log.warning(
+            "juicebox page has no sidebar; going to the app root",
+            extra={"page": page.url},
+        )
+        await page.goto(base_url, wait_until="commit", timeout=60_000)
+        if not await self._click_sequences_nav(page, seconds=45):
+            raise PlatformError(
+                "could not reach Juicebox's Sequences list: the sidebar's 'Sequences' "
+                "item never appeared, on the list page or on the app home. Open "
+                "app.juicebox.ai by hand and check the account still has an open project."
             )
-        except Exception as exc:
-            raise PlatformError(f"could not click {text!r}: {_short(exc)}") from exc
+
+    async def _wait_for_list(self, page: "Page", *, seconds: int) -> bool:
+        """True once 'New sequence' is on the page.
+
+        False the moment Juicebox shows a closed project's card instead: no
+        point waiting out the clock on a page that will never hold the list.
+        """
+        for _ in range(seconds):
+            try:
+                if await page.get_by_text("New sequence", exact=True).count():
+                    return True
+                if await page.get_by_text("Project Closed", exact=True).count():
+                    return False
+            except Exception:
+                pass
+            await page.wait_for_timeout(1_000)
+        return False
+
+    async def _click_sequences_nav(self, page: "Page", *, seconds: int) -> bool:
+        """Click the sidebar's Sequences item; False when the page has none.
+
+        The icon-only sidebar (2026-10-08) renders the item as a link with an
+        aria-label and no text; the text stays for the older layout.
+        """
+        locators = (
+            page.locator("a[aria-label='Sequences']").first,
+            page.get_by_text("Sequences", exact=True).first,
+        )
+        for _ in range(seconds):
+            for locator in locators:
+                try:
+                    if not await locator.count():
+                        continue
+                    await locator.click(timeout=8_000, no_wait_after=True)
+                    return True
+                except Exception as exc:  # noqa: BLE001 - the other shape, then again
+                    log.debug(
+                        "juicebox sequences nav click failed",
+                        extra={"error": _short(exc)},
+                    )
+            await page.wait_for_timeout(1_000)
+        return False
 
     async def _click_button_or_text(self, page: "Page", label: str) -> None:
         """Click a control by button role, then text, forcing past overlays.

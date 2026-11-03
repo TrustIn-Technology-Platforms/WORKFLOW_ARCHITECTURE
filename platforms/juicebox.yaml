@@ -86,7 +86,12 @@ login:
 defaults:
   base_url: https://app.juicebox.ai
   marketing_url: https://juicebox.ai
-  # Where the sequence list lives. Optional: if unset, the driver clicks the
-  # "Sequences" nav item instead. Project-scoped in the URL, but the list shows
-  # every sequence regardless of project.
-  sequences_url: https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW/sequences
+  # Where the sequence list lives. Optional, and best left unset: the driver
+  # reaches the list through the sidebar's "Sequences" item, which every open
+  # project's page has. The URL is project-scoped, and when that project is
+  # closed Juicebox shows a "Project Closed" card with no sidebar in its place,
+  # which is how every Juicebox post failed on 2026-11-03 after the project
+  # this pointed at (AXAaleEq2JfO29jIjBXW, Axle's "New Project") was closed.
+  # The driver now spots the card and falls back to the nav, but a URL that
+  # can die with a project is not worth the shortcut.
+  # sequences_url: https://app.juicebox.ai/project/<an open project>/sequences
