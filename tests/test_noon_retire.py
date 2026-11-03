@@ -30,10 +30,15 @@ class _Session:
     company = "co"
     email = "me@x"
 
-    def __init__(self, role):
+    def __init__(self, role, *, listed=True, tombstone=True):
         self.role = role
         self.calls: list[tuple[str, dict]] = []
         self.deleted = False
+        # `listed`: the role list has caught up with the role (it lags by
+        # minutes for a new one). `tombstone`: a delete turns the row obsolete,
+        # rather than leaving it live (the failure case).
+        self.listed = listed
+        self.tombstone = tombstone
 
     async def post(self, path, payload, *, forbidden_ok=False):
         self.calls.append((path, payload))
@@ -46,7 +51,11 @@ class _Session:
             # only the list says it is gone, as a tombstone.
             return {"autopilot": dict(self.role["autopilot"]), "preferences": {}}
         if path == "refetch_roles":
-            return [{"obsolete": True, "id": self.role["id"]}] if self.deleted else [self.role]
+            if not self.listed:
+                return []
+            if self.deleted and self.tombstone:
+                return [{"obsolete": True, "id": self.role["id"]}]
+            return [self.role]
         return {}
 
 
@@ -68,6 +77,38 @@ def test_retire_stops_then_deletes_through_the_portals_own_calls(monkeypatch):
     delete = next(c for c in session.calls if c[0] == "delete_role")
     assert delete[1] == {"token": "tok", "id": "r1"}
     assert report.sourcing_stopped and report.deleted and not report.warnings
+
+
+def test_a_role_the_list_never_knew_counts_as_deleted_with_a_note(monkeypatch):
+    # 2026-11-04: a ZZ TEST role deleted minutes after it was made. The list
+    # had not caught up, so no tombstone ever appeared, and the direct read
+    # still answered - the old read-back called that "still listed".
+    role = {"id": "r1", "name": "ZZ TEST", "active": True, "autopilot": {"enabled": True}}
+    session = _Session(role, listed=False)
+
+    async def fake_capture(page):
+        return session
+
+    monkeypatch.setattr("app.platforms.noon_retire.capture_session", fake_capture)
+    report = asyncio.run(retire_role(object(), "r1", delete=True, dry_run=False))
+    assert report.deleted
+    assert [c[0] for c in session.calls].count("delete_role") == 1
+    assert len(report.warnings) == 1 and "had not caught up" in report.warnings[0]
+    assert "delete it by hand" not in report.summary
+
+
+def test_a_row_still_live_after_the_delete_is_a_failure(monkeypatch):
+    role = {"id": "r1", "name": "ZZ TEST", "active": True, "autopilot": {"enabled": False}}
+    session = _Session(role, tombstone=False)
+
+    async def fake_capture(page):
+        return session
+
+    monkeypatch.setattr("app.platforms.noon_retire.capture_session", fake_capture)
+    monkeypatch.setattr("app.platforms.noon_retire.LIST_SETTLE_SECONDS", 0.0)
+    report = asyncio.run(retire_role(object(), "r1", delete=True, dry_run=False))
+    assert not report.deleted
+    assert any("delete it by hand" in w for w in report.warnings)
 
 
 def test_a_dry_run_only_reads(monkeypatch):

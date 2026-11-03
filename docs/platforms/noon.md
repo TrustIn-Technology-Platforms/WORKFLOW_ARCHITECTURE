@@ -577,8 +577,19 @@ a literal `https://noon.fly.dev/<path>`). Two facts shape it:
   no token, as the portal sends it. Read back through `refetch_roles`
   (`all_roles` answers from a cache and returned an empty list all evening).
 - **Delete is `POST /delete_role {token, id}`**, behind the UI's "Confirm
-  deletion?" prompt (the red *Delete*). The role is out of `refetch_roles` at
-  once; the portal marks its copy `obsolete: true, active: false`.
+  deletion?" prompt (the red *Delete*). The portal marks its copy
+  `obsolete: true, active: false`, and the role's row in `refetch_roles`
+  becomes that tombstone - **if the list knew the role**. The list lags new
+  roles by minutes (see [Reading a role](#reading-a-role)), so a role deleted
+  soon after it was made never appears in it at all, and `poll_role_params`
+  keeps answering for a deleted role. **2026-11-04:** a production delete of
+  `zz testdel-robotics-sf-remote` hit exactly that - the call was accepted,
+  no tombstone could appear, the direct read still answered, and the row was
+  failed with "still in noon's list - delete it by hand". `delete_role` now
+  reads the deletion back off the list alone: a tombstone or a vanished row is
+  deleted; a row the list never had counts as deleted too, with a Notes line
+  saying the read-back was not possible; only a row still live 30 s after the
+  call fails the delete.
 
 The full endpoint list the portal knows, for the next time something has to be
 found: `create_role update_role update_role_from_popup delete_role

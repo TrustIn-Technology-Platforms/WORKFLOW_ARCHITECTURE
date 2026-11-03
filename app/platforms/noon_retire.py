@@ -8,7 +8,11 @@ bundle on 2026-09-08 (docs/platforms/noon.md, "Retiring a role"):
   and `autopilot.enabled === false`; there is no separate pause endpoint and
   no `active` flag a client can set - `active` only ever goes false on delete.
 - **Delete** is `delete_role {token, id}`, behind the portal's "Confirm
-  deletion?" prompt. The role leaves `refetch_roles` at once.
+  deletion?" prompt. The role's row in `refetch_roles` becomes an `obsolete`
+  tombstone - unless the list had not caught up with the role yet, which it
+  takes minutes to do, and then it simply never appears (2026-11-04). The
+  direct read, `poll_role_params`, keeps answering for a deleted role and so
+  cannot read a deletion back.
 
 Nothing here touches the campaign (the template): a role's outreach only
 starts when a recruiter presses `Contact N candidates`, and deleting the role
@@ -17,17 +21,27 @@ takes its project and template with it.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.logging_conf import get_logger
-from app.models import PlatformError
-from app.platforms.noon_sourcing import NoonSession, capture_session, fetch_role
+from app.platforms.noon_sourcing import (
+    ROLE_POLL_SECONDS,
+    NoonSession,
+    capture_session,
+    fetch_role,
+    list_role_row,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright.async_api import Page
 
 log = get_logger(__name__)
+
+# How long a row still live in the list after `delete_role` gets to turn into
+# a tombstone before the delete is called a failure.
+LIST_SETTLE_SECONDS = 30.0
 
 
 @dataclass(slots=True)
@@ -89,16 +103,46 @@ async def stop_sourcing(session: NoonSession, role: dict[str, Any]) -> bool:
     return enabled is False
 
 
-async def delete_role(session: NoonSession, role_id: str) -> bool:
-    """Delete the role and confirm it is gone from the role list."""
+async def delete_role(
+    session: NoonSession,
+    role_id: str,
+    *,
+    settle_seconds: float | None = None,
+    poll_seconds: float | None = None,
+) -> tuple[bool, str | None]:
+    """Delete the role and read the deletion back off the role list.
+
+    Only the list can say a role was deleted - the direct read keeps answering
+    for one - and it says so in one of two ways: the row turns into an
+    `obsolete` tombstone, or, for a role the list had not caught up with yet
+    (every role deleted within minutes of being made, 2026-11-04), it never
+    appears at all. noon accepting the call is the same evidence the portal
+    acts on when it drops the role from its screen, so an unlisted role
+    counts as deleted, with a note for the row. Only a row still live after
+    `settle_seconds` is a failure. Returns (deleted, note).
+    """
+    settle = LIST_SETTLE_SECONDS if settle_seconds is None else settle_seconds
+    poll = ROLE_POLL_SECONDS if poll_seconds is None else poll_seconds
+    listed_before = await list_role_row(session, role_id)
     await session.post("delete_role", {"token": session.token, "id": role_id})
-    try:
-        await fetch_role(session, role_id)
-    except PlatformError:
-        log.info("noon role deleted", extra={"role": role_id})
-        return True
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while True:
+        row = await list_role_row(session, role_id)
+        if row is None and listed_before is None:
+            log.info("noon role deleted before its list knew it", extra={"role": role_id})
+            return True, (
+                "noon's role list had not caught up with this role, so the deletion "
+                "could not be read back; noon accepted the delete"
+            )
+        if row is None or row.get("obsolete"):
+            log.info("noon role deleted", extra={"role": role_id})
+            return True, None
+        if loop.time() - started >= settle:
+            break
+        await asyncio.sleep(poll)
     log.warning("noon role still listed after delete", extra={"role": role_id})
-    return False
+    return False, None
 
 
 async def retire_role(
@@ -135,9 +179,12 @@ async def retire_role(
                 "open the role and check its Sourcing card"
             )
     if delete:
-        report.deleted = await delete_role(session, role_id)
+        report.deleted, note = await delete_role(session, role_id)
+        if note:
+            report.warnings.append(note)
         if not report.deleted:
             report.warnings.append(
-                "the role is still in noon's list after delete_role - delete it by hand"
+                f"the role is still live in noon's list {LIST_SETTLE_SECONDS:.0f}s "
+                "after delete_role - delete it by hand"
             )
     return report

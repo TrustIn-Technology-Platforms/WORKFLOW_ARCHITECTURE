@@ -1189,6 +1189,29 @@ class RoleMissing(PlatformError):
     """The role is in neither of noon's role lists - deleted, or never made."""
 
 
+def _listing_payload(session: NoonSession) -> dict[str, Any]:
+    listing: dict[str, Any] = {"token": session.token}
+    if session.company:
+        listing["company"] = session.company
+    if session.email:
+        listing["email"] = session.email
+    return listing
+
+
+async def list_role_row(session: NoonSession, role_id: str) -> dict[str, Any] | None:
+    """The role's row in `refetch_roles`, the user's role list - None while the
+    list has not caught up with it, which takes minutes for a new role. A
+    deleted role's row is a tombstone, `{obsolete: true, ...}` (see `fetch_role`)."""
+    payload = await session.post("refetch_roles", _listing_payload(session))
+    roles = payload.get("roles") if isinstance(payload, dict) else payload
+    if not isinstance(roles, list):
+        return None
+    for role in roles:
+        if isinstance(role, dict) and str(role.get("id")) == role_id:
+            return role
+    return None
+
+
 async def fetch_role(
     session: NoonSession,
     role_id: str,
@@ -1221,12 +1244,6 @@ async def fetch_role(
     passes NOON_ROLE_WAIT_SECONDS, a delete or a read-back passes nothing and
     a miss means gone.
     """
-    listing: dict[str, Any] = {"token": session.token}
-    if session.company:
-        listing["company"] = session.company
-    if session.email:
-        listing["email"] = session.email
-
     async def direct() -> dict[str, Any] | None:
         data = await session.post(
             "poll_role_params",
@@ -1246,16 +1263,6 @@ async def fetch_role(
             "preferences": preferences,
         }
 
-    async def listed() -> dict[str, Any] | None:
-        payload = await session.post("refetch_roles", listing)
-        roles = payload.get("roles") if isinstance(payload, dict) else payload
-        if not isinstance(roles, list):
-            return None
-        for role in roles:
-            if isinstance(role, dict) and str(role.get("id")) == role_id:
-                return role
-        return None
-
     def merged(record: dict[str, Any] | None, row: dict[str, Any] | None) -> dict[str, Any]:
         # The list row carries the name, the creator and the flags; the direct
         # read carries the blocks as they are now. The blocks win.
@@ -1269,7 +1276,7 @@ async def fetch_role(
     if fresh and record is not None:
         return record
 
-    row = await listed()
+    row = await list_role_row(session, role_id)
     if row is not None and row.get("obsolete"):
         raise RoleMissing(
             f"noon role {role_id!r} has been deleted (it is listed as obsolete)."
@@ -1284,7 +1291,7 @@ async def fetch_role(
     while loop.time() - started < wait_seconds:
         await asyncio.sleep(poll)
         record = await direct()
-        row = await listed()
+        row = await list_role_row(session, role_id)
         if row is not None and row.get("obsolete"):
             raise RoleMissing(
                 f"noon role {role_id!r} has been deleted (it is listed as obsolete)."
