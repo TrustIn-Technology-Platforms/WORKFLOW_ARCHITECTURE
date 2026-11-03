@@ -117,18 +117,38 @@ def url_of(prop: dict[str, Any] | None) -> str | None:
 
 
 def multi_select_names(prop: dict[str, Any] | None) -> list[str]:
+    """The option names a column holds, one platform each.
+
+    A list written to a single select goes on the wire as one option,
+    `juicebox + loxo + noon` (see `build_value`). Read back whole, that name
+    matched no platform, so a delete could never take anything off `Posted On`
+    and the row never reached Deleted (2026-11-03, the first production
+    delete). The join is undone here, so a board whose column is still a
+    select behaves - and a multi-select converted from one, which keeps the
+    joined option, does too.
+    """
     if not prop:
         return []
     ptype = prop.get("type")
     if ptype == "multi_select":
-        return [o["name"] for o in prop.get("multi_select") or [] if o.get("name")]
+        names = [o["name"] for o in prop.get("multi_select") or [] if o.get("name")]
+        return _split_joined(names)
     if ptype in ("select", "status"):
         name = (prop.get(ptype) or {}).get("name")
-        return [name] if name else []
+        return _split_joined([name]) if name else []
     text = plain_text_of(prop)
     if not text:
         return []
     return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _split_joined(names: list[str]) -> list[str]:
+    out: list[str] = []
+    for name in names:
+        for part in name.split(" + "):
+            if part.strip():
+                out.append(part.strip())
+    return out
 
 
 # --------------------------------------------------------------------------

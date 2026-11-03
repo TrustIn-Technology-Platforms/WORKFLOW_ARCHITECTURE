@@ -607,6 +607,19 @@ async def delete_records(
             if resolve(name, recipes) is None:
                 continue  # a tag such as `TrustIn`, not a destination
             if name in already and name not in records:
+                # Taken down by an earlier attempt on this row. Not visited
+                # again, but reported: the first production delete (2026-11-03)
+                # skipped Loxo here in silence, and the recruiter read a row
+                # with Loxo ticked, nothing in `Notes` for it, and Loxo still
+                # on `Posted On`.
+                result = DeleteResult(
+                    platform=name, outcome=Outcome.DELETED,
+                    detail=f"already deleted by an earlier attempt ({entry.deleted[name]})",
+                    earlier=entry.deleted[name],
+                )
+                report.results.append(result)
+                if on_result is not None:
+                    await on_result(result)
                 continue
             if entry is not None and name not in entry.records and name not in records:
                 # A tracked row whose post here recorded nothing - it failed
@@ -638,7 +651,7 @@ async def delete_records(
             {
                 r.platform: (r.outcome is Outcome.DELETED, r.detail or r.outcome.value)
                 for r in report.results
-                if r.platform in entry.records
+                if r.platform in entry.records and r.earlier is None
             },
         )
     failures = [r for r in report.results if not r.ok]
@@ -669,7 +682,7 @@ async def delete_row(
         name = result.platform.lower()
         if result.outcome is Outcome.DELETED:
             posted_on[:] = [p for p in posted_on if p != name]
-            action = "deleted"
+            action = "already deleted" if result.earlier else "deleted"
         elif not result.ok:
             failed_on.append(name)
             action = "delete failed"

@@ -497,8 +497,14 @@ def test_a_half_deleted_row_fails_and_the_retry_skips_what_went(monkeypatch, tmp
     assert client.failed and "juicebox" in client.failed[0][1] and "back to Ready to Delete" in client.failed[0][1]
 
     _FakeDeleteAdapter.calls = []
+    client.notes.clear()
     asyncio.run(delete_row(row, client, settings, dry_run=False))
     assert [name for name, _ in _FakeDeleteAdapter.calls] == ["juicebox"]
+    # The retry says what the earlier attempt did, rather than passing noon
+    # over in silence (2026-11-03: Loxo ticked, no line, still on Posted On).
+    assert [(p, a) for p, a, _, _ in client.notes] == [
+        ("noon", "already deleted"), ("juicebox", "delete failed"),
+    ]
 
 
 def test_a_platform_whose_post_recorded_nothing_does_not_hold_the_row_back(monkeypatch, tmp_path):
@@ -626,6 +632,52 @@ def test_a_trashed_row_waits_out_the_grace_period_then_is_deleted(monkeypatch, t
 
 def _multi(*names):
     return {"type": "multi_select", "multi_select": [{"name": n} for n in names]}
+
+
+def _select(name):
+    return {"type": "select", "select": {"name": name}}
+
+
+def test_a_single_select_posted_on_reads_as_the_platforms_it_joined():
+    """`Posted On` created as a select holds `juicebox + loxo + noon` as one
+    option (the writer joins a list that way). Read back whole, no delete
+    could take a platform off it and the row never reached Deleted
+    (2026-11-03, the first production delete)."""
+    from app.pipeline import _row_multi
+
+    row = _row(**{"Posted On": _select("juicebox + loxo + noon")})
+    assert _row_multi(row, "Posted On") == ["juicebox", "loxo", "noon"]
+    row = _row(**{"Posted On": _multi("juicebox + loxo", "noon")})
+    assert _row_multi(row, "Posted On") == ["juicebox", "loxo", "noon"]
+    row = _row(**{"Posted On": _select("")})
+    assert _row_multi(row, "Posted On") == []
+
+
+def test_a_retry_after_a_select_column_catches_posted_on_up_and_reads_deleted(monkeypatch, tmp_path):
+    """The 2026-11-03 row: Loxo deleted by the first attempt, Juicebox and noon
+    by later ones, the column a select that never shrank. The next Ready to
+    Delete visits nothing, takes all three off Posted On, and ends Deleted."""
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.pipeline import delete_row
+
+    settings = _delete_setup(monkeypatch, tmp_path, {})
+    ledger = Ledger(settings.ledger_file)
+    ledger.record_post("p1", "Row", {"loxo": {"campaign": "c1"}, "juicebox": {"sequence": "s1"},
+                                     "noon": {"role": "r1"}})
+    ledger.record_delete("p1", {"loxo": (True, "deleted")})
+    ledger.record_delete("p1", {"juicebox": (True, "deleted"), "noon": (True, "already gone")})
+    row = NotionRow(page_id="p1", title="Row", document_url=None, status="Ready to Delete",
+                    platforms=["loxo", "juicebox", "noon"],
+                    raw_properties={"Posted On": _select("juicebox + loxo + noon")})
+    client = _DeleteClient()
+    report = asyncio.run(delete_row(row, client, settings, dry_run=False))
+
+    assert report.ok and not _FakeDeleteAdapter.calls
+    assert client.columns[-1] == ([], [])
+    assert client.deleted and not client.still_posted and not client.failed
+    assert {a for _, a, _, _ in client.notes} == {"already deleted"}
 
 
 def test_posted_on_and_failed_on_fill_platform_by_platform(monkeypatch, tmp_path):

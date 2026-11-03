@@ -1053,3 +1053,19 @@ setting `Ready to Delete`.
 the board is replaced by RecruitOS as the only front (D-026's month), or a
 recruiter needs more of a row's history than 2,000 characters hold - then
 the per-platform database.
+
+### Amendment 2026-11-04
+
+The first production delete (`22zz test-autodel-robotics-onsite`, three
+attempts on 2026-11-03) took every platform down and still left the row
+`Posted` with `Posted On` reading `juicebox + loxo + noon`. Two gaps:
+
+- The board's `Posted On` is a single select, so the writer had joined the
+  list into one option, and that option matched no platform on the way back.
+  The reader now splits the join; the column still wants converting.
+- A platform an earlier attempt had deleted was skipped in silence. It now
+  reports `already deleted`, comes off `Posted On`, and keeps its original
+  stamp in the ledger.
+
+`Deleted` also clears `Post URL` now: the link points at nothing, and `Notes`
+keeps every link with its line.

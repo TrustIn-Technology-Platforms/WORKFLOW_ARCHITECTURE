@@ -62,9 +62,9 @@ One row is one document and one set of destinations.
 | `Post URL` | `url` or `rich_text` | Optional | Written on success. |
 | `Posted At` | `date` | Optional | Written on success. |
 | `Error` | `rich_text` | Optional but strongly advised | Written on failure. Without it, a failure is invisible in Notion. |
-| `Posted On` | `multi_select` | Optional | One option per platform. Filled platform by platform as each post succeeds; emptied platform by platform as each delete succeeds. A re-run skips what is already listed. Added 2026-10-09. **Must be a multi-select**: as a single select it can hold one value only, and the platform-by-platform tick-off becomes `loxo + noon`. |
+| `Posted On` | `multi_select` | Optional | One option per platform. Filled platform by platform as each post succeeds; emptied platform by platform as each delete succeeds. A re-run skips what is already listed. Added 2026-10-09. **Must be a multi-select**: as a single select it can hold one value only, and the platform-by-platform tick-off becomes `loxo + noon`. Since 2026-11-04 that joined value is read back as the platforms it names, so a board still on a select works, with the join showing; it is still one option and still wants converting. |
 | `Failed On` | `multi_select` | Optional | The platforms that failed in the last run. Cleared when a run starts; `Error` says why each one failed. |
-| `Notes` | `rich_text` | Recommended | The row's log: one line per platform event, newest first, stamped in `NOTES_TIMEZONE` - `2026-11-03 18:14 · noon · posted · <url>`. Actions: `posted`, `failed`, `deleted`, `delete failed`, `left in place`. The line carries no reason: a failure's reason is in `Error`, and so is why a record was left in place (2026-11-04). Appended to, never overwritten; the oldest lines drop off at Notion's 2,000-character limit. Without it a run's notes go to `Error` behind `Posted OK`. |
+| `Notes` | `rich_text` | Recommended | The row's log: one line per platform event, newest first, stamped in `NOTES_TIMEZONE` - `2026-11-03 18:14 · noon · posted · <url>`. Actions: `posted`, `failed`, `deleted`, `already deleted` (an earlier attempt on the row took it down; not visited again), `delete failed`, `left in place`. The line carries no reason: a failure's reason is in `Error`, and so is why a record was left in place (2026-11-04). Appended to, never overwritten; the oldest lines drop off at Notion's 2,000-character limit. Without it a run's notes go to `Error` behind `Posted OK`. |
 
 Any column name can differ from the default — see [04-configuration](04-configuration.md).
 Optional columns that are absent are logged and skipped, so a missing `Posted At`
@@ -148,7 +148,10 @@ Taking a row down is the same shape in reverse (2026-11-03):
 - `Posted On` loses each platform the moment its post is confirmed gone, and
   only then; `Failed On` gains any that refused. `Notes` gets a line per
   platform either way.
-- **`Deleted`** means nothing is up anywhere. **`Posted`** after a delete means
+- **`Deleted`** means nothing is up anywhere; `Posted On`, `Failed On`, `Error`
+  and `Post URL` are cleared (the links live on in `Notes`). A platform an
+  earlier attempt already took down is not visited again but still comes off
+  `Posted On`, with an `already deleted` line. **`Posted`** after a delete means
   what was asked for is down and `Posted On` names the rest. A record the
   adapter will not touch (a campaign a recruiter made, a published Wellfound
   listing) stays on `Posted On` with a `left in place` line in `Notes`.

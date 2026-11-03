@@ -363,6 +363,10 @@ class DeleteResult:
     outcome: Outcome  # DELETED | SKIPPED | FAILED | DRY_RUN
     detail: str | None = None
     artifacts: list[str] = field(default_factory=list)
+    # When an earlier attempt on the row already took this platform down (the
+    # ledger's stamp). The platform was not visited again; the row still has
+    # to hear it, so `Posted On` and `Notes` catch up.
+    earlier: str | None = None
 
     @property
     def ok(self) -> bool:

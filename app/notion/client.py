@@ -445,14 +445,17 @@ class NotionClient:
         )
 
     async def mark_deleted(self, page_id: str, detail: str | None = None) -> None:
-        """Status Deleted, `Error` cleared. What each platform said is already
-        in the `Notes` log, line by line; `detail` is kept for a board with
-        no such column, where it has nowhere to go."""
+        """Status Deleted, `Error` and `Post URL` cleared. What each platform
+        said is already in the `Notes` log, line by line, links included;
+        `detail` is kept for a board with no such column, where it has
+        nowhere to go."""
         s = self.settings
         values: dict[str, Any] = {
             s.prop_status: s.status_deleted,
             s.prop_error: "",
-            # Nothing is up anywhere once the row reads Deleted.
+            # Nothing is up anywhere once the row reads Deleted, and the link
+            # points at a post that no longer exists.
+            s.prop_post_url: "",
             s.prop_posted_on: [],
             s.prop_failed_on: [],
         }
