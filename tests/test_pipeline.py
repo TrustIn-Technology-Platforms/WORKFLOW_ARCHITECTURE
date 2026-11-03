@@ -11,6 +11,29 @@ class _Settings:
     prop_salary = "Salary"
     prop_employment_type = "Employment Type"
     prop_skills = "Skills"
+    location_aliases = "SF=San Francisco,NY=New York,LD=London"
+
+
+def test_short_form_locations_expand_wherever_they_came_from():
+    """Recruiters write `SF`; Wellfound's autocomplete and noon's search want
+    `San Francisco`. The column, the document and mixed values all expand;
+    an unknown form passes through (2026-11-04)."""
+    from app.pipeline import expand_location
+
+    doc = ParsedDocument(advert=Advert(title="x", body_text="", body_html=""))
+    filled = enrich_advert(doc, _row(Location=_rich("sf")), _Settings())
+    assert doc.advert.location == "San Francisco"
+    assert filled == ["location <- Location", "location sf -> San Francisco"]
+
+    doc = ParsedDocument(advert=Advert(title="x", body_text="", body_html="", location="NY"))
+    enrich_advert(doc, _row(Location=_rich("SF")), _Settings())
+    assert doc.advert.location == "New York"
+
+    aliases = _Settings.location_aliases
+    assert expand_location("SF, Remote", aliases) == "San Francisco, Remote"
+    assert expand_location("Safford", aliases) == "Safford"
+    assert expand_location("", aliases) == ""
+    assert expand_location("London", "") == "London"
 
 
 def _rich(text: str) -> dict:

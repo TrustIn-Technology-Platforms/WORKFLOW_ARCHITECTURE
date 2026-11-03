@@ -132,6 +132,15 @@ def enrich_advert(
         if value:
             filled.append(f"{attr} <- {column}")
 
+    # `SF` on the row or in the document is what the recruiters write; the
+    # platforms want `San Francisco`. Expanded here, once, wherever it came
+    # from, so neither the parser nor a recipe needs the list.
+    for advert in adverts:
+        expanded = expand_location(advert.location, settings.location_aliases)
+        if expanded != advert.location:
+            filled.append(f"location {advert.location} -> {expanded}")
+            advert.location = expanded
+
     # Skills are a list, so they take the same "column fills a gap" rule but a
     # different reader. A recruiter naming the stack beats anything inferred
     # from the prose, which is why the column is consulted before Claude is.
@@ -149,6 +158,25 @@ def enrich_advert(
     if filled:
         log.info("advert enriched from row", extra={"filled": filled})
     return filled
+
+
+def expand_location(value: str | None, aliases: str) -> str | None:
+    """`SF, Remote` -> `San Francisco, Remote` by `LOCATION_ALIASES`.
+
+    Each comma-separated part is matched whole, case-insensitively, so `sf`
+    and `SF` expand and `Safford` does not. Anything unmatched is kept as is.
+    """
+    if not value:
+        return value
+    table = {}
+    for pair in (aliases or "").split(","):
+        key, _, city = pair.partition("=")
+        if key.strip() and city.strip():
+            table[key.strip().lower()] = city.strip()
+    if not table:
+        return value
+    parts = [p.strip() for p in value.split(",")]
+    return ", ".join(table.get(p.lower(), p) for p in parts if p)
 
 
 def order_platforms(platforms: list[str], order: str) -> list[str]:

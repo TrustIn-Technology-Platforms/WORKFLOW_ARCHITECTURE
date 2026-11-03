@@ -56,6 +56,7 @@ to the same column even without an override.
 | `NOTES_TIMEZONE` | `Europe/London` | The clock the `Notes` lines are stamped in. Any IANA zone name; an unknown one falls back to UTC. |
 | `PROP_TITLE` | `Name` | Fallback title. The client also detects the real `title` column by type. |
 | `PROP_LOCATION` | `Location` | Fills `advert.location` when the document has none. Job boards (Wellfound) require it. |
+| `LOCATION_ALIASES` | `SF=San Francisco,NY=New York,LD=London,...` | Short forms the recruiters write for a location, expanded before any platform sees the value: `KEY=City` pairs, comma-separated, matched whole and case-insensitively on each comma-separated part (`SF, Remote` becomes `San Francisco, Remote`). Applies to the column and to a location the document carries. Unknown forms pass through. Added 2026-11-04. |
 | `PROP_SALARY` | `Salary` | Fills `advert.salary` when the document has none. Wellfound hides a post without one. |
 | `PROP_EMPLOYMENT_TYPE` | `Employment Type` | Fills `advert.employment_type` when the document has none. |
 | `PROP_SKILLS` | `Skills` | **Optional.** Comma-separated skills for Wellfound's Skills tag field. Blank means they are drafted from the advert (`app/platforms/skills.py`); no `ANTHROPIC_API_KEY` means the field is left empty. |

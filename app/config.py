@@ -71,6 +71,18 @@ class Settings(BaseSettings):
     # job boards (Wellfound) require both - so the orchestrator fills an empty
     # advert field from the column of the same name. See pipeline.enrich_advert.
     prop_location: str = "Location"
+    # Short forms the recruiters write for a location, in the filename and in
+    # the column (`SF`, `NY`, `LD`), expanded to the city Wellfound's
+    # autocomplete and noon's search know. `KEY=City` pairs, comma-separated,
+    # matched whole and case-insensitively on each comma-separated part of the
+    # value, so `SF, Remote` becomes `San Francisco, Remote`. Unknown forms
+    # pass through unchanged. Added 2026-11-04.
+    location_aliases: str = (
+        "SF=San Francisco,SFO=San Francisco,NY=New York,NYC=New York,LD=London,"
+        "LDN=London,LA=Los Angeles,SEA=Seattle,BOS=Boston,CHI=Chicago,AUS=Austin,"
+        "DEN=Denver,DC=Washington,TOR=Toronto,BER=Berlin,AMS=Amsterdam,PAR=Paris,"
+        "DUB=Dublin,SG=Singapore,HK=Hong Kong,SYD=Sydney,MIA=Miami,ATL=Atlanta"
+    )
     prop_salary: str = "Salary"
     prop_employment_type: str = "Employment Type"
     # Optional. Wellfound's advert form has a Skills tag field and the documents

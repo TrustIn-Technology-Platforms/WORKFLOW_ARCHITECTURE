@@ -5,17 +5,28 @@
 > generator the prompt block at the bottom.
 > **Audience** Whoever writes or generates sequence documents, and whoever
 > maintains the parser.
-> **Status** Matches the parser as of 2026-10-08. The Word template
+> **Status** Matches the parser as of 2026-11-03. The Word template
 > [sequence-document-template.docx](sequence-document-template.docx) is built by
-> [scripts/build_sequence_template.py](../../scripts/build_sequence_template.py)
-> and parses with zero warnings (`test_the_recruiter_template_parses_cleanly`).
+> [scripts/build_sequence_template.py](../../scripts/build_sequence_template.py);
+> `test_the_recruiter_template_filled_in_parses_cleanly` fills every slot and
+> checks it parses with zero warnings.
 
 ## Use the Word template
 
-[sequence-document-template.docx](sequence-document-template.docx) has every
-section in order, with its rules as Word comments in the margin. Comments are
-never read by the parser, so leaving them in posts nothing extra. Instructions
-typed into the body would be posted to every platform.
+[sequence-document-template.docx](sequence-document-template.docx) is every
+section heading in order with one `<< ... >>` slot under each, saying what to
+paste there. Replace every slot: a slot left in is ordinary text and is posted
+as written. The rules for each section are in this page, not in the file - the
+annotated version with margin comments was replaced on 2026-11-03 because
+nobody filling it in read them.
+
+**The headings are read by their words, not their look.** Heading 1, 2 or 3,
+bold or plain, any colour or size, capitals or not: `EMAIL2`, `InMail`,
+`Inmail`, `In Mail`, `Email 2 (wait 5 days)` and `Email2:` all work, and a
+document may mix styles. What matters is that the line holds the section's
+name and nothing else. `Candidate Background` and `Technical Skills` stay
+inside the Wellfound advert however they are styled, and everything below
+`Client JD` is kept exactly as pasted.
 
 ## The one rule that matters
 
@@ -51,6 +62,10 @@ the automation posts to, so the `Wellfound` section is the advert.
 LinkedIn Connection
 Hi {first_name},
 <note under 300 characters>
+
+If Accepted
+Hi {first_name},
+<the LinkedIn message sent 30 minutes after they accept - not the note again>
 
 Subject
 Founding Platform Engineer / Seed AI Startup / On-site / K8s, Cloud / up to $275k + equity
@@ -96,6 +111,7 @@ Client JD
 | # | Section | Becomes | Who reads it |
 |---|---|---|---|
 | 1 | `LinkedIn Connection` | noon's connection-request note, cut at 300 characters | noon; without it, noon sends Email 1's text |
+| 1a | `If Accepted` | noon's "if accepted" LinkedIn message, sent 30 minutes after the candidate accepts the connection request | noon; without it, noon sends Email 1's text there (never the note again) |
 | 2 | `Subject` | the subject of every email and the InMail | noon, Loxo, Juicebox |
 | 3 | `Email1`–`Email3` | the email steps, 3 days apart unless the heading says `(wait N days)` | noon (exactly three slots), Loxo and Juicebox (any number) |
 | 4 | `Inmail` | noon's InMail step | noon; without it, noon sends Email 1's text |
@@ -152,8 +168,9 @@ Two positions are fixed:
   Wellfound's minimum and maximum. `up to $260K` fills both with 260K. The body
   is never read for a salary, because adverts name funding rounds.
 - **`Location:` is a real place.** Wellfound accepts only a city from its own
-  list: `San Francisco`, not `SF` or `Remote`. For a remote role, use the
-  company's HQ city.
+  list. The usual short forms (`SF`, `NY`, `LD`, `LA`...) are expanded by the
+  service (`LOCATION_ALIASES`), so they are fine; `Remote` is not a city. For
+  a remote role, use the company's HQ city.
 - **Wellfound's experience box** is filled from the highest "N+ years" in the
   Wellfound section.
 - **`InMail` may open with its own `Subject:` line**; without one it uses the
@@ -170,7 +187,8 @@ Two positions are fixed:
 - **One message per section.** Two greetings under one heading raise a "two
   messages merged" warning on the row.
 - **Recognised channel headings:** `Email N`, `InMail`, `LinkedIn` /
-  `LinkedIn Connection` / `Connect`. Notes in parentheses or after `·` are
+  `LinkedIn Connection` / `Connect`, and `If Accepted` / `LinkedIn Accepted` /
+  `Connection Accepted`. Notes in parentheses or after `·` are
   fine: `InMail (Day 5)`, `Email 2 · Deeper`.
 - **No rhetorical questions, and no lines about TrustIn or the sender** in any
   message to a candidate or client.
@@ -223,6 +241,8 @@ Format the output exactly as follows, as a Word document.
    "Email 3 (wait N days)"
    "InMail"
    "LinkedIn Connection"     - under 300 characters, greeting included
+   "If Accepted"             - the LinkedIn message sent once they accept the
+                               connection request; a new message, not the note
    "Wellfound"               - the advert for Wellfound, anonymised; first
                                line is the title in the shape from step 1
    "Recruiter Notes"         - leave empty for the recruiter to fill
