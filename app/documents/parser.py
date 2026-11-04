@@ -34,6 +34,25 @@ _EMAIL_HEADING = re.compile(
 # posting an InMail into an email body is silently wrong, so the channel is
 # carried on the step rather than inferred later.
 _CHANNEL_HEADINGS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    # The LinkedIn message noon sends once a connection request is accepted
+    # ("If Accepted", "LinkedIn Accepted", "Connection Accepted"). Without a
+    # section of its own it used to repeat the connection note word for word,
+    # 30 minutes after the candidate had read it (2026-11-03). noon's own
+    # name for it is the "trigger", and a recruiter wrote exactly that as the
+    # heading on 2026-11-04 - unrecognised, the section merged into the InMail
+    # above it - so a bare "Trigger" is the same step.
+    (
+        "accepted",
+        re.compile(
+            r"^\s*(?:linked[\s-]?in\s+)?"
+            r"(?:(?:if\s+|once\s+|when\s+|after\s+)?"
+            r"(?:connection\s+|invite\s+|invitation\s+)?accept(?:ed|s|ing|ance)?"
+            r"(?:\s+(?:message|note|trigger))?"
+            r"|trigger(?:\s+(?:message|note))?)"
+            r"\s*[#:\-–]?\s*(\d+)?\s*$",
+            re.IGNORECASE,
+        ),
+    ),
     # InMail first: "LinkedIn InMail" matches the linkedin pattern too, and the
     # narrower reading is the correct one.
     (
@@ -246,25 +265,68 @@ def _names_a_section(text: str) -> bool:
     )
 
 
+# The sections a sequence document is made of, by the names the template and
+# its variants give them: "Email2", "INMAIL", "If Accepted", "Subject",
+# "Wellfound", "Recruiter Notes", "Client JD". Narrower than _names_a_section
+# on purpose - this list is promoted even below real headings, where "The
+# Role", "Notes" or "Job Description" are as likely to be a bold sub-heading
+# inside the Wellfound advert as a section of their own.
+_OWN_EMAIL = re.compile(r"^\s*e[-\s]?mail\s*[#:\-–]?\s*\d*\s*[:.]?\s*$", re.IGNORECASE)
+_OWN_NOTES = re.compile(r"^\s*(?:recruiter|sourcing)\s*notes?\s*[:\-–]?\s*$", re.IGNORECASE)
+
+
+def _names_own_section(text: str) -> bool:
+    line = text.strip()
+    if not line or len(line) > 60:
+        return False
+    bare = _HEADING_SUFFIX.sub("", line).strip()
+    return bool(
+        _OWN_EMAIL.match(bare)
+        or _channel_of(line)
+        or _platform_advert_of(line)
+        or _SHARED_SUBJECT_HEADING.match(bare)
+        or _JD_HEADING.match(bare)
+        or _OWN_NOTES.match(bare)
+    )
+
+
 def _promote_named_sections(blocks: list[Block]) -> None:
-    """Headings by meaning, for a document written with no formatting at all.
+    """Headings by meaning, whatever the formatting.
 
     The reader promotes by *formatting* - fully-bold lines, `=== fenced ===`
-    lines - and had nothing to hold onto when a real document arrived as 52
-    plain-body blocks: "Email 1", "Subject" and "LinkedIn Connection" were
-    ordinary paragraphs, zero email steps came out, and all three sequence
-    platforms failed at once (2026-09-01). The section names are still there,
-    they are just unformatted - so, with the same guard as the reader (only
-    when the document has no real headings anywhere), a short line that
-    ENTIRELY matches a section name the classifier already knows becomes one.
+    lines - and only above the first real heading. That left two holes:
+
+    - A document with no formatting at all: 52 plain-body blocks, "Email 1",
+      "Subject" and "LinkedIn Connection" ordinary paragraphs, zero email steps,
+      all three sequence platforms failed at once (2026-09-01). With no real
+      heading anywhere, every line that ENTIRELY matches a section name the
+      classifier knows becomes one.
+    - A document whose headings are styled inconsistently - some Word headings,
+      some bold or plain lines, as happens when one heading is restyled or
+      copied in from elsewhere. Every section after the first styled heading
+      merged into the one above it (measured 2026-11-03: emails 2 and 3 in one
+      step, the InMail, notes and JD gone). So a line naming one of the
+      document's own sections is promoted wherever it stands.
+
+    Never inside the Client JD: everything below its heading is the client's
+    text verbatim, headings and all.
     """
-    if any(b.style == "heading" for b in blocks):
-        return
+    has_headings = any(b.style == "heading" for b in blocks)
     for block in blocks:
-        if block.style == "body" and _names_a_section(block.text):
-            block.style = "heading"
-            block.level = 2
-            block.html = f"<h2>{_escape(block.text.strip())}</h2>"
+        if _JD_HEADING.match(_HEADING_SUFFIX.sub("", block.text or "").strip()):
+            if block.style == "body":
+                _make_heading(block)
+            return
+        if block.style != "body":
+            continue
+        if _names_own_section(block.text) or (not has_headings and _names_a_section(block.text)):
+            _make_heading(block)
+
+
+def _make_heading(block: Block) -> None:
+    block.style = "heading"
+    block.level = 2
+    block.html = f"<h2>{_escape(block.text.strip())}</h2>"
 
 
 def _escape(text: str) -> str:

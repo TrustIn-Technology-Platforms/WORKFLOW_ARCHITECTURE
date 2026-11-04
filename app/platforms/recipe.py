@@ -6,6 +6,8 @@ test suite rather than at 6am on a live row.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,7 +27,7 @@ KINDS = ("advert", "email_sequence")
 # list and `role_name` the resolved role/sequence name.
 CONTEXT_ROOTS = {
     "advert", "email", "emails", "email_count", "steps", "role_name",
-    "inmail", "connection_note", "row", "now",
+    "inmail", "connection_note", "accepted_message", "row", "now",
 }
 
 # What a `login.steps` expression may reach. The values come from the
@@ -52,9 +54,18 @@ class Step:
 
     @property
     def description(self) -> str:
+        """The step's first sentence - what it does, not why.
+
+        A recipe's description is written for whoever maintains the recipe and
+        can run to a paragraph of history; the first sentence is the part that
+        belongs in an error on a Notion row. Everything after it is kept in
+        the YAML, where it is read.
+        """
         described = self.params.get("description")
         if described:
-            return str(described)
+            text = " ".join(str(described).split())
+            first = re.split(r"(?<=[.!?])\s+(?=[A-Z`(\"'])", text, maxsplit=1)[0]
+            return first.rstrip(".")
         selector = self.params.get("selector")
         if isinstance(selector, list):
             selector = selector[0] if selector else None

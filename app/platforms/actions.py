@@ -141,6 +141,51 @@ def _short(exc: Exception) -> str:
     return text[0][:120] if text else exc.__class__.__name__
 
 
+def _is_detached(exc: Exception) -> bool:
+    """Playwright's wording when the node it resolved has since left the DOM."""
+    text = str(exc)
+    return "not attached to the DOM" in text or "detached from the DOM" in text
+
+
+async def act(
+    run: StepRun,
+    do: Callable[["Locator"], Awaitable[Any]],
+    *,
+    required: bool = True,
+    attempts: int = 3,
+) -> Any:
+    """Find the element, act on it, and find it again if the page swapped it out
+    in between.
+
+    A React app re-mounts a control whenever the data behind it changes. noon's
+    Create New Role modal replaces its Role Name input the moment the ATS role
+    list arrives - 130 ms after the modal opened, on a fast lookup - and the
+    fill step died with "Element is not attached to the DOM" on a node that no
+    longer existed (Railway, 2026-11-04). Playwright re-resolves a locator for
+    click, fill and check when that happens mid-action, but not for
+    scroll_into_view_if_needed, element_handle or the read calls, so every
+    handler that touches an element goes through here and a swap costs one
+    more lookup instead of the row.
+
+    Returns whatever `do` returns, or None when an optional element is absent.
+    """
+    for attempt in range(1, attempts + 1):
+        locator = await find(run, required=required)
+        if locator is None:
+            return None
+        try:
+            return await do(locator)
+        except Exception as exc:
+            if not _is_detached(exc) or attempt == attempts:
+                raise
+            log.info(
+                "element re-rendered under the step, finding it again",
+                extra={"attempt": attempt, "error": _short(exc)},
+            )
+            await run.page.wait_for_timeout(300)
+    return None  # pragma: no cover - the loop always returns or raises
+
+
 # ----------------------------------------------------------------------
 # navigation and clicking
 # ----------------------------------------------------------------------
@@ -198,14 +243,16 @@ async def action_goto_until(run: StepRun) -> None:
 
 
 async def action_click(run: StepRun) -> None:
-    locator = await find(run, required=not run.get("optional", False))
-    if locator is None:
-        return
-    await locator.scroll_into_view_if_needed(timeout=run.timeout_ms)
     # `force: true` skips Playwright's actionability checks. Needed when the
     # target sits under a floating panel or only reaches full opacity on hover -
-    # both true of noon's campaign editor.
-    await locator.click(timeout=run.timeout_ms, force=bool(run.get("force", False)))
+    # both true of noon's campaign editor. Scrolling into view is part of the
+    # click itself, force or not; the separate scroll call that used to sit
+    # here was the one thing Playwright does not retry when the node is swapped.
+    await act(
+        run,
+        lambda el: el.click(timeout=run.timeout_ms, force=bool(run.get("force", False))),
+        required=not run.get("optional", False),
+    )
 
 
 async def action_dismiss(run: StepRun) -> None:
@@ -224,10 +271,11 @@ async def action_press(run: StepRun) -> None:
     if not key:
         raise PlatformError("press needs a key")
     if _selector_list(run):
-        locator = await find(run, required=not run.get("optional", False))
-        if locator is None:
-            return
-        await locator.press(key, timeout=run.timeout_ms)
+        await act(
+            run,
+            lambda el: el.press(key, timeout=run.timeout_ms),
+            required=not run.get("optional", False),
+        )
     else:
         await run.page.keyboard.press(key)
 
@@ -243,11 +291,7 @@ async def action_fill(run: StepRun) -> None:
     if not value.strip() and optional:
         return
 
-    locator = await find(run, required=not optional)
-    if locator is None:
-        return
-    await locator.scroll_into_view_if_needed(timeout=run.timeout_ms)
-    await locator.fill(value, timeout=run.timeout_ms)
+    await act(run, lambda el: el.fill(value, timeout=run.timeout_ms), required=not optional)
 
 
 async def action_select(run: StepRun) -> None:
@@ -256,22 +300,23 @@ async def action_select(run: StepRun) -> None:
     if not value and optional:
         return
 
-    locator = await find(run, required=not optional)
-    if locator is None:
-        return
+    async def choose(locator: "Locator") -> None:
+        # A native <select> takes a value or a visible label, and which one the
+        # platform uses is rarely documented. Try both before giving up.
+        last: Exception | None = None
+        for attempt in ("value", "label"):
+            try:
+                await locator.select_option(**{attempt: value}, timeout=run.timeout_ms)
+                return
+            except Exception as exc:
+                if _is_detached(exc):
+                    raise
+                last = exc
+        raise PlatformError(
+            f"could not select {value!r}: {_short(last) if last else 'no option matched'}"
+        )
 
-    # A native <select> takes a value or a visible label, and which one the
-    # platform uses is rarely documented. Try both before giving up.
-    last: Exception | None = None
-    for attempt in ("value", "label"):
-        try:
-            await locator.select_option(**{attempt: value}, timeout=run.timeout_ms)
-            return
-        except Exception as exc:
-            last = exc
-    raise PlatformError(
-        f"could not select {value!r}: {_short(last) if last else 'no option matched'}"
-    )
+    await act(run, choose, required=not optional)
 
 
 async def action_combobox(run: StepRun) -> None:
@@ -295,16 +340,18 @@ async def action_combobox(run: StepRun) -> None:
             or "this field is required and the document and row both left it empty."
         )
 
-    locator = await find(run, required=not optional)
+    async def open_and_type(el: "Locator") -> "Locator":
+        # react-select lays its placeholder <div> over the real <input>, so an
+        # actionability-checked click is "intercepted" until it times out.
+        # `force` skips that check, exactly as it does for `click`.
+        await el.click(timeout=run.timeout_ms, force=bool(run.get("force", False)))
+        await el.fill("", timeout=run.timeout_ms)
+        await el.type(value, delay=40)
+        return el
+
+    locator = await act(run, open_and_type, required=not optional)
     if locator is None:
         return
-
-    # react-select lays its placeholder <div> over the real <input>, so an
-    # actionability-checked click is "intercepted" until it times out. `force`
-    # skips that check, exactly as it does for `click`.
-    await locator.click(timeout=run.timeout_ms, force=bool(run.get("force", False)))
-    await locator.fill("", timeout=run.timeout_ms)
-    await locator.type(value, delay=40)
 
     option_selector = run.params.get("option_selector")
     option_run = StepRun(
@@ -436,22 +483,22 @@ async def action_tags(run: StepRun) -> None:
 
 
 async def action_check(run: StepRun) -> None:
-    locator = await find(run, required=not run.get("optional", False))
-    if locator is None:
-        return
-    if run.get("value", True) in (False, "false", "0", "no"):
-        await locator.uncheck(timeout=run.timeout_ms)
-    else:
-        await locator.check(timeout=run.timeout_ms)
+    unticked = run.get("value", True) in (False, "false", "0", "no")
+
+    async def tick(el: "Locator") -> None:
+        if unticked:
+            await el.uncheck(timeout=run.timeout_ms)
+        else:
+            await el.check(timeout=run.timeout_ms)
+
+    await act(run, tick, required=not run.get("optional", False))
 
 
 async def action_upload(run: StepRun) -> None:
     path = run.text("path")
     if not path:
         raise PlatformError("upload needs a path")
-    locator = await find(run, required=True)
-    assert locator is not None
-    await locator.set_input_files(path, timeout=run.timeout_ms)
+    await act(run, lambda el: el.set_input_files(path, timeout=run.timeout_ms))
 
 
 def _mapped_value(run: StepRun) -> str:
@@ -548,12 +595,14 @@ async def action_fill_rich(run: StepRun) -> None:
             return
         raise PlatformError("fill_rich has nothing to write")
 
-    locator = await find(run, required=not optional)
-    if locator is None:
-        return
+    async def take_handle(el: "Locator") -> tuple["Locator", Any]:
+        await el.scroll_into_view_if_needed(timeout=run.timeout_ms)
+        return el, await el.element_handle(timeout=run.timeout_ms)
 
-    await locator.scroll_into_view_if_needed(timeout=run.timeout_ms)
-    handle = await locator.element_handle(timeout=run.timeout_ms)
+    found = await act(run, take_handle, required=not optional)
+    if found is None:
+        return
+    locator, handle = found
     if handle is None:
         raise PlatformError("could not take a handle on the editor")
 
@@ -684,9 +733,7 @@ async def action_wait(run: StepRun) -> None:
 
 async def action_assert_text(run: StepRun) -> None:
     expected = run.text("text")
-    locator = await find(run, required=True)
-    assert locator is not None
-    actual = (await locator.inner_text(timeout=run.timeout_ms)) or ""
+    actual = await act(run, lambda el: el.inner_text(timeout=run.timeout_ms)) or ""
     if expected.lower() not in actual.lower():
         raise PlatformError(f"expected {expected!r}, page said {actual.strip()[:160]!r}")
 
@@ -712,19 +759,24 @@ async def action_capture_url(run: StepRun) -> None:
 
 async def action_capture_text(run: StepRun) -> None:
     name = run.text("as", "captured")
-    locator = await find(run, required=not run.get("optional", False))
-    if locator is None:
+    text = await act(
+        run,
+        lambda el: el.inner_text(timeout=run.timeout_ms),
+        required=not run.get("optional", False),
+    )
+    if text is None:
         return
-    run.captures[name] = ((await locator.inner_text(timeout=run.timeout_ms)) or "").strip()
+    run.captures[name] = text.strip()
 
 
 async def action_capture_attribute(run: StepRun) -> None:
     name = run.text("as", "captured")
     attribute = run.text("attribute", "href")
-    locator = await find(run, required=not run.get("optional", False))
-    if locator is None:
-        return
-    value = await locator.get_attribute(attribute, timeout=run.timeout_ms)
+    value = await act(
+        run,
+        lambda el: el.get_attribute(attribute, timeout=run.timeout_ms),
+        required=not run.get("optional", False),
+    )
     if value:
         run.captures[name] = value
 

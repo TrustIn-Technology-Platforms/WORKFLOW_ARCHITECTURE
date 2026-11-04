@@ -149,6 +149,10 @@ def build_context(
         # documents keep posting exactly as before.
         "inmail": _channel_step(document, "inmail", email_steps),
         "connection_note": _channel_step(document, "linkedin", email_steps),
+        # noon's "if accepted" LinkedIn message. Its fallback is email 1, the
+        # pitch, as noon's own default sends - never the connection note,
+        # which the candidate has just read with the invitation.
+        "accepted_message": _channel_step(document, "accepted", email_steps),
         # The name a recipe should give the role/sequence: row title, else a
         # real advert title, else the first email's subject. See _role_name.
         "role_name": _role_name(document.source_name, row, advert, email_steps),

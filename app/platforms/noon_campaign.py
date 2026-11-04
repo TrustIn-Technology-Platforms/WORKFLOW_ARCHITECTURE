@@ -17,7 +17,8 @@ hand-built campaigns store it:
     3  email, same thread            2 days later, random time 9 AM-5 PM, recipient's time zone
     4  LinkedIn InMail               the same
     5  email, same thread            the same
-       if accepted                   on, 30 minutes, not after 60 days
+       if accepted                   on, 30 minutes, not after 60 days - the
+                                     document's `If Accepted` section, else email 1
 
 All of it from Marcus. noon would send as whoever is signed in - sohaib@,
 whose noon mailbox has no signature, which is why no email ever carried one.
@@ -67,8 +68,8 @@ def campaign_steps(context: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """The five steps and the accepted-message, from the recipe context.
 
     `context` is `engine.build_context`'s: `emails` holds the email-channel
-    steps only, `inmail` and `connection_note` fall back to email 1 when the
-    document has no such section.
+    steps only; `inmail`, `connection_note` and `accepted_message` fall back
+    to email 1 when the document has no such section.
     """
     emails = context.get("emails") or []
     if len(emails) < 3:
@@ -79,6 +80,7 @@ def campaign_steps(context: dict[str, Any]) -> tuple[dict[str, Any], str]:
         )
     inmail = context["inmail"]
     note = context["connection_note"]
+    accepted = context["accepted_message"]
     subject = _noon_tokens(emails[0]["subject"])
 
     def email(step: dict[str, Any], offset: int, schedule: dict[str, str], *, first: bool) -> dict[str, Any]:
@@ -121,7 +123,7 @@ def campaign_steps(context: dict[str, Any]) -> tuple[dict[str, Any], str]:
         },
         "outbound4": email(emails[2], FOLLOW_UP_DAYS, LATER, first=False),
     }
-    return steps, _noon_tokens(note["body_html"])
+    return steps, _noon_tokens(accepted["body_html"])
 
 
 def house_campaign(

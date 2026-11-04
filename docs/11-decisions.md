@@ -972,7 +972,7 @@ connection note, email 1, email 2, the InMail, email 3 — on the team's
 cadence (now / same time / +2 / +2 / +2 days, random 9-5 in the recipient's
 time zone), sets Marcus as the email and LinkedIn sender, the signature on
 the three emails, and the accepted-trigger on (30 minutes, 60-day window, the
-connection note, no generated nudges), saves it with the same
+document's `If Accepted` section else email 1, no generated nudges), saves it with the same
 `template_update` call the editor's own save makes, and reads it back. Any
 field noon did not keep fails the platform.
 
@@ -1001,7 +1001,7 @@ the document's `delay_days`).
 
 ## D-030 · A delete takes down the ticked platforms; `Notes` is the row's log; the trash sweep is off
 
-**Status** Accepted — built 2026-11-03, not yet proven live
+**Status** Accepted — built 2026-11-03; the first production delete on 2026-11-03 found two gaps, fixed 2026-11-04 (see Amendment)
 **Date** 2026-11-03
 **Where** `app/pipeline.py` (`delete_row`), `app/notion/client.py` (`add_note`, `mark_still_posted`), `app/config.py` — [05-notion-contract](05-notion-contract.md#status-lifecycle)
 

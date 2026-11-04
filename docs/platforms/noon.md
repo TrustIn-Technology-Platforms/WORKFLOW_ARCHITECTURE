@@ -102,6 +102,16 @@ writes fire: `create_project`, `create_role`, `template_update` (a default
 campaign: InMail now → Email +2d → Email +4d, placeholder copy) and
 `update_role`. The URL becomes `/portal/sourcing?role=<uuid>`.
 
+**The name box is re-mounted when the ATS list lands (2026-11-04).** The
+modal renders its input at once and replaces the node the moment
+`get_role_names` answers. On a fast lookup that is ~130 ms after the modal
+opens, inside the gap between the fill step finding the input and acting on
+it, and the production run at 17:16 UTC died there with `Element is not
+attached to the DOM` - modal open, box empty, role list loaded, nothing
+created (`artifacts/from-server/20261104-171610-noon-failed.*`). Every
+element action now re-finds a swapped node (`act` in `actions.py`), so the
+second lookup lands on the fresh input and the run carries on.
+
 ### The Submit that is not the modal's (fixed 2026-09-22, unproven live)
 
 On Railway, 2026-09-16, this step killed a row. The typed name already existed,
@@ -281,7 +291,7 @@ store it:
 | 3 | Email, same thread | email 2 | 2 days after, random 9 AM–5 PM, recipient's time zone | `offset 2`, `{time: random time, timezone: Recipient's Timezone}`, `newThread: false` |
 | 4 | LinkedIn InMail | the InMail section, else email 1; its own subject | the same | the same |
 | 5 | Email, same thread | email 3 | the same | the same |
-| trigger | If accepted → wait 30 min → send, don't send if accepted after 60 days | the connection note | **enabled** | `connectionAccepted {enabled: true, waitMinutes: 30, acceptanceWindowDays: 60, useFirstMessage: false, followups: []}` |
+| trigger | If accepted → wait 30 min → send, don't send if accepted after 60 days | the document's `If Accepted` section, else email 1 — never the connection note, which the candidate has just read | **enabled** | `connectionAccepted {enabled: true, waitMinutes: 30, acceptanceWindowDays: 60, useFirstMessage: false, followups: []}` |
 
 `senders.from` and `inmailSender` = `NOON_SENDER_EMAIL` / `NOON_SENDER_NAME`
 (Marcus) — `inmailSender` is the only LinkedIn sender field a campaign has, and

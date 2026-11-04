@@ -116,6 +116,48 @@ def test_channel_headings_become_steps_with_their_channel():
     assert channel_of("The Role") is None
 
 
+def test_the_if_accepted_message_is_its_own_channel():
+    """noon's "if accepted" LinkedIn message has a section of its own, so it is
+    not the connection note sent a second time (2026-11-03)."""
+    channel_of = parser._channel_of
+
+    for heading in ("If Accepted", "LinkedIn If Accepted", "LinkedIn Accepted",
+                    "Connection Accepted", "Accepted", "Once Accepted",
+                    "If Accepted (wait 30 min)", "Accepted message",
+                    # noon's own word for it; written as the heading on
+                    # 2026-11-04 and merged into the InMail above it.
+                    "Trigger", "Trigger message", "LinkedIn Trigger"):
+        assert channel_of(heading) == "accepted", heading
+    # The connection request itself is still the note.
+    assert channel_of("Connection Request") == "linkedin"
+    assert channel_of("Connect") == "linkedin"
+
+
+def test_an_accepted_section_is_a_step_not_part_of_the_note():
+    from app.models import Block
+
+    def heading(text: str) -> Block:
+        return Block("heading", 2, text, f"<h2>{text}</h2>")
+
+    def body(text: str) -> Block:
+        return Block("body", 0, text, f"<p>{text}</p>")
+
+    document = parser.parse_document([
+        heading("LinkedIn Connection"), body("Hi there, connecting."),
+        heading("If Accepted"), body("Hi there, thanks for connecting."),
+        heading("Subject"), body("A shared subject line"),
+        heading("Email1"), body("Hi there, first email."),
+    ])
+
+    assert [(e.channel, e.label) for e in document.emails] == [
+        ("linkedin", "LinkedIn Connection"), ("accepted", "If Accepted"), ("email", "Email1"),
+    ]
+    accepted = document.emails[1]
+    assert accepted.body_text == "Hi there, thanks for connecting."
+    # LinkedIn messages have no subject field.
+    assert accepted.subject == ""
+
+
 def test_email_heading_without_a_separator():
     """"Email1" is as common as "Email 1" and must still yield order 1."""
     assert parser._is_email_heading("Email1")
@@ -919,21 +961,61 @@ def test_an_unformatted_document_still_finds_its_sections():
     assert board.salary == "up to $250K"
 
 
-def test_promotion_by_meaning_never_runs_when_real_headings_exist():
-    """The same guard as the reader's bold rule: one real heading anywhere means
-    the author formats their sections, and a body line saying "Email 1" inside
-    prose is content, not a section break."""
+def test_a_section_name_on_its_own_line_is_a_section_even_beside_real_headings():
+    """Headings styled inconsistently - one a Word heading, the next a plain or
+    bold line - used to merge every later section into the one above it
+    (2026-11-03). A line that is a section name and nothing else is a section
+    however it is formatted; prose that mentions one is still prose."""
     document = parser.parse_document(
         [
             _block("Email 1", style="heading", level=2),
             _block("Subject: Hello"),
             _block("See Email 2 below for details."),
             _block("Email 2"),
-            _block("This line and the one above are one email body."),
+            _block("Hi there, the second email."),
+        ]
+    )
+    assert len(document.emails) == 2
+    assert "See Email 2 below for details." in document.emails[0].body_text
+    assert document.emails[1].body_text == "Hi there, the second email."
+
+
+def test_the_client_jd_keeps_lines_that_look_like_section_names():
+    """Everything below the Client JD heading is the client's text, verbatim -
+    a spec with its own "Subject" or "Email" line is not split."""
+    document = parser.parse_document(
+        [
+            _block("Email 1", style="heading", level=2),
+            _block("Hi there, the email."),
+            _block("Client JD"),
+            _block("About the role"),
+            _block("Email"),
+            _block("Subject"),
+            _block("Build the platform."),
         ]
     )
     assert len(document.emails) == 1
-    assert "Email 2" in document.emails[0].body_text
+    for line in ("About the role", "Email", "Subject", "Build the platform."):
+        assert line in document.client_jd
+
+
+def test_a_bold_sub_heading_inside_the_advert_stays_inside_it():
+    """Only the document's own section names are promoted below real headings:
+    "The Role" or "Requirements" in the Wellfound advert is the advert's."""
+    document = parser.parse_document(
+        [
+            _block("Wellfound", style="heading", level=2),
+            _block("Founding Engineer / Seed / SF / up to $200k + equity"),
+            _block("The Role"),
+            _block("Build the platform."),
+            _block("Requirements"),
+            _block("5+ years."),
+            _block("Client JD", style="heading", level=2),
+            _block("The spec."),
+        ]
+    )
+    body = document.advert_for("wellfound").body_text
+    assert "The Role" in body and "Requirements" in body and "5+ years." in body
 
 
 def test_prose_lines_are_not_promoted_in_an_unformatted_document():
@@ -950,38 +1032,108 @@ def test_prose_lines_are_not_promoted_in_an_unformatted_document():
     assert "Email me at" in body and "Touch base soon." in body
 
 
-def test_the_recruiter_template_parses_cleanly():
-    """The template handed to recruiters must parse with nothing to warn about.
+def _template_path() -> Path:
+    return Path(__file__).parent.parent / "docs" / "templates" / "sequence-document-template.docx"
+
+
+def test_the_recruiter_template_has_every_section_in_order():
+    """The template handed to recruiters: one heading per section, one paste
+    slot under each. Rebuild it with scripts/build_sequence_template.py.
+
+    Every slot holds a bracketed prompt ("[Email 1 body.]"), so the parser sees
+    a body under each heading and raises no warning. An unfilled template posts
+    those prompts verbatim - the prompts are what a recruiter reads, not a
+    parser check.
+    """
+    document = parser.parse_document(read_blocks(_template_path().read_bytes()))
+
+    assert [e.channel for e in document.emails] == [
+        "linkedin", "accepted", "email", "email", "email", "inmail",
+    ]
+    assert [e.label for e in document.emails] == [
+        "LinkedIn Connection", "If Accepted", "Email1", "Email2", "Email3", "Inmail",
+    ]
+    assert document.warnings == []
+    # TrustIn's shape has no general advert: Wellfound is the only board, so
+    # the Wellfound section is the advert.
+    assert document.advert is None
+    assert document.advert_for("wellfound") is not None
+    assert document.notes_fields.keys() == {"company", "skills"}
+    assert document.client_jd.startswith("[Paste the client's job description")
+
+
+# What a recruiter pastes over each bracketed prompt, keyed by the prompt's
+# opening words. The greeting and sign-off lines are already in the template.
+_TITLE = "Founding Platform Engineer / Seed / On-site SF / K8s / up to $275k + equity"
+_FILLED = {
+    "[Connection note": ["I place platform engineers in SF. Let's talk."],
+    "[The message sent once": ["Thanks for connecting."],
+    "[Role title]": [_TITLE],
+    "[Email 1 body.]": ["Email one."],
+    "[Email 2 body.]": ["Email two."],
+    "[Email 3 body.]": ["Email three."],
+    "[InMail body.]": ["The InMail."],
+    "[Opening paragraph": ["A seed-stage AI startup."],
+    "[What they need you to build.]": ["Build the platform."],
+    "[Background the client wants": ["5+ years of platform work."],
+    "[The stack and the kind": ["Kubernetes, Terraform."],
+    "[Closing line": ["Talk to us if that is you."],
+    "Company: [": ["Company: Acme"],
+    "Skills: [": ["Skills: Kubernetes, Terraform"],
+    "[Anything learned": ["The hiring manager stressed on-call."],
+    "[Paste the client's job description": ["About the role", "Build the platform."],
+}
+
+
+def test_the_recruiter_template_filled_in_parses_cleanly():
+    """Filled in, the template parses with nothing to warn about.
 
     The template it replaced did not: its advert sat after the messages, so the
     advert was titled "Ad · LinkedIn", emails 2 and 3 took that as their
     subject, and a sub-heading in the advert was appended to the connection
-    note. Rebuild it with scripts/build_sequence_template.py.
+    note.
     """
-    path = Path(__file__).parent.parent / "docs" / "templates" / "sequence-document-template.docx"
-    document = parser.parse_document(read_blocks(path.read_bytes()))
+    import io
+
+    import docx
+
+    template = docx.Document(str(_template_path()))
+    for paragraph in list(template.paragraphs):
+        lines = next((v for k, v in _FILLED.items() if paragraph.text.startswith(k)), None)
+        if lines is None:
+            continue
+        assert "[" in paragraph.text
+        for line in lines:
+            paragraph.insert_paragraph_before(line)
+        paragraph._p.getparent().remove(paragraph._p)
+    assert not any("[" in p.text for p in template.paragraphs), "a slot has no filling"
+    buffer = io.BytesIO()
+    template.save(buffer)
+
+    document = parser.parse_document(read_blocks(buffer.getvalue()))
 
     assert document.warnings == []
-
-    # TrustIn's shape has no general advert: Wellfound is the only board, so
-    # the Wellfound section is the advert.
-    assert document.advert is None
-    wellfound = document.advert_for("wellfound")
-    assert wellfound.title.startswith("[Role title] / [Stage")
-    assert "Candidate Background" in wellfound.body_text
-    assert "Technical Skills" in wellfound.body_text
-
-    assert [e.channel for e in document.emails] == [
-        "linkedin", "email", "email", "email", "inmail",
+    assert [(e.channel, e.body_text.splitlines()[-1]) for e in document.emails] == [
+        ("linkedin", "I place platform engineers in SF. Let's talk."),
+        ("accepted", "Yours Sincerely,"),
+        ("email", "Yours Sincerely,"),
+        ("email", "Yours Sincerely,"),
+        ("email", "Yours Sincerely,"),
+        ("inmail", "Yours Sincerely,"),
     ]
     subjects = {e.subject for e in document.emails if e.channel in ("email", "inmail")}
-    assert len(subjects) == 1 and next(iter(subjects)).startswith("[Role title] / [Stage")
-    assert document.emails[0].subject == ""
-    assert "{ai_intro}" in document.emails[1].body_text
+    assert subjects == {_TITLE}
+    # LinkedIn messages carry no subject.
+    assert document.emails[0].subject == "" and document.emails[1].subject == ""
+    assert "{ai_intro}" in document.emails[2].body_text
 
-    assert document.notes_fields.keys() == {"company", "skills"}
+    wellfound = document.advert_for("wellfound")
+    assert wellfound.title.startswith("Founding Platform Engineer / Seed")
+    assert "Candidate Background" in wellfound.body_text
+    assert "Technical Skills" in wellfound.body_text
+    assert document.notes_fields == {"company": "Acme", "skills": "Kubernetes, Terraform"}
     assert "Candidate Background" not in document.notes
-    assert document.client_jd.startswith("[Paste the client's job description")
+    assert document.client_jd.startswith("About the role")
 
 
 def _document_with_notes():

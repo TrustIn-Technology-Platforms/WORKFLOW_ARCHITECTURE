@@ -215,3 +215,57 @@ def test_find_skips_a_hidden_twin_and_returns_the_visible_match():
         )
     )
     assert href == "/recruit/dashboard"
+
+
+# ----------------------------------------------------------------------
+# act - an element swapped out mid-step is found again, not fatal
+# ----------------------------------------------------------------------
+
+
+async def _act_against_swapped_input(first_error: Exception | None) -> dict:
+    from app.platforms.actions import act
+
+    reset_settings_cache()
+    settings = get_settings()
+    async with BrowserRunner(settings, headless=True) as runner:
+        async with runner.context() as (_context, page):
+            await page.set_content("<input id='name' placeholder='Role name'>")
+            run = StepRun(page=page, params={"selector": "[placeholder='Role name']"}, timeout_ms=4_000)
+            calls = {"n": 0}
+
+            async def do(locator):
+                calls["n"] += 1
+                if calls["n"] == 1 and first_error is not None:
+                    # What noon did on 2026-11-04: the node resolved, then React
+                    # re-mounted the input before the action reached it.
+                    await page.evaluate(
+                        "() => { const old = document.querySelector('#name');"
+                        " const fresh = old.cloneNode(); old.replaceWith(fresh); }"
+                    )
+                    raise first_error
+                await locator.fill("Jani - Staff Backend Engineer - SF", timeout=4_000)
+
+            await act(run, do)
+            return {"calls": calls["n"], "value": await page.input_value("#name")}
+
+
+def test_act_finds_the_element_again_when_the_page_swapped_it_out():
+    state = asyncio.run(
+        _act_against_swapped_input(
+            Exception("Locator.scroll_into_view_if_needed: Element is not attached to the DOM")
+        )
+    )
+    assert state["calls"] == 2
+    assert state["value"] == "Jani - Staff Backend Engineer - SF"
+
+
+def test_act_does_not_retry_an_error_that_is_not_a_detached_node():
+    import pytest
+
+    with pytest.raises(Exception, match="intercepts pointer events"):
+        asyncio.run(_act_against_swapped_input(Exception("<div> intercepts pointer events")))
+
+
+def test_act_runs_once_when_nothing_goes_wrong():
+    state = asyncio.run(_act_against_swapped_input(None))
+    assert state["calls"] == 1

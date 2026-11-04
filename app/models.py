@@ -117,7 +117,7 @@ class EmailStep:
     body_text: str
     body_html: str
     delay_days: int | None = None
-    channel: str = "email"  # email | linkedin | inmail | wellfound
+    channel: str = "email"  # email | linkedin | inmail | accepted
     label: str = ""         # the document's own heading, for logs and diffing
 
     @property

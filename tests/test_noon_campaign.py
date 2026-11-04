@@ -53,10 +53,13 @@ def noon_generated(role: str = "role-1") -> dict:
     }
 
 
-def document(emails: int = 3) -> ParsedDocument:
+def document(emails: int = 3, *, accepted: bool = True) -> ParsedDocument:
     steps = [
         EmailStep(order=1, subject="", body_text="Hi {{name}}, open to a chat?",
                   body_html="<p>Hi {{name}}, open to a chat?</p>", channel="linkedin"),
+        *([EmailStep(order=1, subject="", body_text="Thanks for connecting",
+                     body_html="<p>Thanks for connecting, {{name}}</p>", channel="accepted")]
+          if accepted else []),
         *[
             EmailStep(order=i + 2, subject="Founding Engineer / SF" if i == 0 else "",
                       body_text=f"Email {i + 1}", body_html=f"<p>Hi {{{{name}}}}, email {i + 1}</p>")
@@ -122,13 +125,22 @@ def test_marcus_sends_with_his_signature_on_the_emails():
     assert out["ai_written"] is False
 
 
-def test_accepted_trigger_sends_the_note_after_30_minutes():
+def test_accepted_trigger_sends_the_if_accepted_section_after_30_minutes():
     accepted = apply()["triggers"]["connectionAccepted"]
     assert accepted == {
         "enabled": True, "waitMinutes": 30, "acceptanceWindowDays": 60,
-        "message": "<p>Hi {first_name}, open to a chat?</p>",
+        "message": "<p>Thanks for connecting, {first_name}</p>",
         "useFirstMessage": False, "followups": [],
     }
+    # The section is the trigger's, not a sixth step.
+    assert "Thanks for connecting" not in str(apply()["messages"])
+
+
+def test_without_an_if_accepted_section_the_trigger_sends_email_1_not_the_note():
+    out = apply(doc=document(accepted=False))
+    message = out["triggers"]["connectionAccepted"]["message"]
+    assert message == "<p>Hi {first_name}, email 1</p>"
+    assert message != out["messages"]["outbound0"]["text"]
 
 
 def test_the_input_is_untouched():

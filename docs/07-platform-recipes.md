@@ -223,7 +223,16 @@ finalise:                     # runs once, after every email
 
 Every action takes `selector` unless noted. Common optional keys:
 `optional` (skip on an empty value or a missing element rather than fail),
-`timeout_ms` (override the default), `description` (used in the error message).
+`timeout_ms` (override the default), `description` (its first sentence is
+used in the error message; the rest is for whoever maintains the recipe).
+
+Every action that touches an element finds it, acts, and finds it again if the
+page swapped the node out in between - up to three times. A React app re-mounts
+a control whenever the data behind it changes (noon's Create New Role modal
+replaces its name box the moment the ATS role list arrives, 2026-11-04), and
+Playwright only re-resolves a locator for some calls. The re-find is logged as
+`element re-rendered under the step, finding it again`; three swaps in a row
+fail the step with Playwright's own `not attached to the DOM`.
 
 | Action | Required keys | Does |
 |--------|---------------|------|
