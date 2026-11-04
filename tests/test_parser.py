@@ -507,6 +507,51 @@ def test_job_spec_above_the_sequence_is_still_the_advert():
     assert "Join a team that ships." in document.advert.body_text
 
 
+def test_a_job_description_sub_heading_stays_in_the_wellfound_advert_when_the_original_follows():
+    """The recruiters' template: `Wellfound`, then a `Job Description`
+    sub-heading inside it, then `Original Job Description` holding the client's
+    spec. The Wellfound post runs to the `Original Job Description` heading; the
+    bare `Job Description` is neither the client's JD nor a second advert
+    (2026-11-05).
+    """
+    document = parser.parse_document([
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+        _heading("Wellfound"),
+        _block("Platform Engineer / Seed / NY / up to $250K + equity"),
+        _block("Opening line of the advert."),
+        _heading("Job Description"),
+        _block("You will own the platform."),
+        _heading("Original Job Description"),
+        _block("8+ years of production Kubernetes."),
+        _heading("Requirements"),
+        _block("Manchester, no sponsorship."),
+    ])
+    wellfound = document.platform_adverts["wellfound"].body_text
+    assert "Opening line of the advert." in wellfound
+    assert "Job Description" in wellfound
+    assert "You will own the platform." in wellfound
+    assert "8+ years" not in wellfound
+    assert document.advert is None
+    assert document.client_jd.startswith("8+ years")
+    assert "Original Job Description" not in document.client_jd
+    assert "Requirements" in document.client_jd
+    assert not any("Move that section" in w for w in document.warnings)
+
+
+def test_a_bare_job_description_after_the_sequence_is_still_the_jd_when_nothing_explicit_follows():
+    document = parser.parse_document([
+        _heading("Email 1"),
+        _block("Hi {{first_name}}."),
+        _heading("Wellfound"),
+        _block("Opening line of the advert."),
+        _heading("Job Description"),
+        _block("8+ years of production Kubernetes."),
+    ])
+    assert document.client_jd.startswith("8+ years")
+    assert "8+ years" not in document.platform_adverts["wellfound"].body_text
+
+
 def test_a_client_jd_in_the_wrong_place_is_reported_not_guessed_at():
     """Read as the JD it would swallow the rest of the sequence, so it is not."""
     document = parser.parse_document([

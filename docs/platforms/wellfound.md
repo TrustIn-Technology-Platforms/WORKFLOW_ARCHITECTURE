@@ -370,3 +370,31 @@ listing that is already gone counts as deleted and is said so.
 `delete wellfound --record job=… --dry-run` line the post prints, read the
 title back, then `--live`. Record here which variable name Wellfound accepted
 and what its page answers for a deleted listing.
+
+## Updating a row (2026-11-05)
+
+> **Status** **BUILT, NEVER RUN.** `Ready to Update` with Wellfound ticked
+> ([D-031](../11-decisions.md#d-031), extended). [app/platforms/wellfound.py](../../app/platforms/wellfound.py)
+> `_update`, `find_listing`, `update_steps`; tests in
+> [tests/test_wellfound.py](../../tests/test_wellfound.py). Built for the
+> listings the parser had cut short at a `Job Description` sub-heading
+> (fixed the same day) so they can be rewritten from the document without
+> posting a second draft. The edit form has **not been seen**: the route and
+> the field ids are assumed from the New Job form and the recruiter URL
+> shape (`/recruit/jobs/<id>` with `/edit` for the form, mapped 2026-08-28).
+
+| What | How |
+|---|---|
+| Which listing | The ledger's newest Wellfound record for the row (the `job` URL the post captured), unless a delete has cleared the platform; else a `wellfound.com/recruit/jobs/<id>` link in the row's `Post URL` column. Nothing is looked up by title - the account carries fifty drafts and the Jobs list has never been read. |
+| Read first | the listing's own page, as the delete does: gone → "post the row again"; **published** (its page offers Unpublish) → left alone and named on the row, because an unattended run must not change a live advert. Unpublish it, set the status again, or edit it by hand. |
+| The form | `/recruit/jobs/<id>/edit`, then the posting steps of [wellfound.yaml](../../platforms/wellfound.yaml) run again. Text fields and single-value selects replace what is there: **title, description, type of position, primary role, years of experience, currency, salary min/max.** |
+| Left as posted | **Skills** and **Location** - their tag widgets add to what is there, so running them again would double the location. **Visa sponsorship** and **remote policy** - the document never set them, and a recruiter may have on the draft. Marked `on_update: skip` in the recipe. |
+| Save | the submit step's `update_selector`: `Save draft` first (expected on a draft's edit form), then guesses (`Save changes`, `Update`, a submit button reading `Save`). **The first live run decides**; pin the one that worked here. |
+| The row | `Notes` gets `wellfound: advert updated` with the listing's link; `Posted On` / `Failed On` and the ledger are not changed - the listing is the one already recorded, so a later delete still finds it once. |
+
+**To prove it:** post a ZZ TEST row to Wellfound, change the document's
+Wellfound section, set the row to `Ready to Update` with only Wellfound
+ticked (or `python -m app.cli update-row --page <id> --headed --live`), then
+open the draft on Wellfound and read the title and description back. Record
+the save button and anything the edit form does differently from the New Job
+form.

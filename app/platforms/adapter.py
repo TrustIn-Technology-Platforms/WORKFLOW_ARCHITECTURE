@@ -97,8 +97,8 @@ class RecipeAdapter:
         self, page: "Page", document: ParsedDocument, row: NotionRow | None
     ) -> "RunReport":
         raise PlatformError(
-            f"{self.recipe.label}: updating a posted row's sourcing is not built "
-            "for this platform yet - only Juicebox so far."
+            f"{self.recipe.label}: updating a posted row is not built for this "
+            "platform yet - only Juicebox (sourcing) and Wellfound (the advert) so far."
         )
 
     async def _run(

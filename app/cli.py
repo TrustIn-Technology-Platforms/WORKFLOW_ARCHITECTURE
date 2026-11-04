@@ -863,9 +863,9 @@ def update_row_command(
     headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Bring a posted row's sourcing up to its document on the ticked
-    platforms, posting nothing again - what setting its status to Ready to
-    Update does in the service. Juicebox only, so far.
+    """Bring a posted row up to its document on the ticked platforms,
+    posting nothing again - what setting its status to Ready to Update does
+    in the service. Juicebox (the sourcing) and Wellfound (the advert), so far.
     """
     from app.notion.client import NotionClient
     from app.pipeline import update_row

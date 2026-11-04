@@ -1130,3 +1130,10 @@ Two smaller decisions ride with it:
   what the row says is up.
 - Loxo and noon updates are not built. Their adapters report that, and the
   row says so.
+- **Extended 2026-11-05 to Wellfound**, where an update is the *advert*, not
+  the sourcing: the listing the row's post recorded (else a Wellfound link in
+  `Post URL`) is opened on its edit form and the posting steps run again
+  with the document's title, description, role, years and salary. Skills,
+  location and the radios stay as posted; a published listing is refused,
+  as the delete refuses it. Built, unproven live -
+  [platforms/wellfound](platforms/wellfound.md#updating-a-row-2026-11-05).

@@ -14,6 +14,13 @@
 #
 # Dry-run stops before Publish. Nothing autosaves on this form, so a dry run
 # leaves no draft behind (verified 2026-08-28).
+#
+# The same steps update a listing the row already made (`Ready to Update`,
+# D-031 extended 2026-11-05): the driver opens /recruit/jobs/<id>/edit instead
+# of /new and runs the steps again. A step marked `on_update: skip` is the
+# post's alone - the tag and autocomplete widgets ADD to what is there, and
+# the radios are not the document's to change. `update_selector` on the submit
+# step names the edit form's save button when it differs from the post's.
 
 key: wellfound
 label: Wellfound
@@ -195,6 +202,7 @@ steps:
     value: "{{ advert.tags }}"
     max: 10
     optional: true
+    on_update: skip
     description: skills (Wellfound's own vocabulary; unknown ones are dropped)
 
   # --- Location -------------------------------------------------------------
@@ -205,6 +213,7 @@ steps:
       - "input[placeholder='e.g. San Francisco']"
       - "#downshift-1-input"
     value: "{{ advert.location }}"
+    on_update: skip
     description: location (must be picked from Wellfound's list)
     # The Notion `Location` column is a multi-select of recruiter shorthand -
     # `NY`, `SF`, `RE` - and Wellfound's autocomplete only offers real places.
@@ -241,11 +250,13 @@ steps:
   # label is the click target - `check` on the input times out as "not visible".
   - action: click
     selector: "label[for='form-input--allowInternationalApplicants--{{ visa_sponsorship }}']"
+    on_update: skip
     description: visa sponsorship (required, no default)
 
   # --- Remote work details ---------------------------------------------------
   - action: click
     selector: "label[for='form-input--remoteConfigKind--{{ remote_kind }}']"
+    on_update: skip
     description: remote policy (required)
 
   # --- Salary & equity ------------------------------------------------------
@@ -278,6 +289,15 @@ steps:
     selector:
       - "button:has-text('Save draft')"
       - "button:has-text('Save Draft')"
+    # The edit form of a draft is expected to offer the same button; the
+    # rest are guesses at what it shows instead, UNPROVEN until the first
+    # live update (2026-11-05).
+    update_selector:
+      - "button:has-text('Save draft')"
+      - "button:has-text('Save Draft')"
+      - "button:has-text('Save changes')"
+      - "button:has-text('Update')"
+      - "button[type='submit']:has-text('Save')"
     submit: true
 
   - action: wait

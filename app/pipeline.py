@@ -823,7 +823,10 @@ async def update_sourcing(
                 if not adapter.supports_update:
                     await report(PostResult(
                         platform=name, outcome=Outcome.SKIPPED,
-                        detail=f"updating sourcing is not built for {name} yet - only Juicebox",
+                        detail=(
+                            f"updating is not built for {name} yet - only Juicebox "
+                            "(sourcing) and Wellfound (the advert)"
+                        ),
                         finished_at=datetime.now(timezone.utc),
                     ))
                     log.info("platform update skipped - not built", extra={"platform": name})
@@ -868,7 +871,8 @@ async def update_row(
 
     async def progress(result: PostResult) -> None:
         if result.outcome is Outcome.POSTED:
-            action = "sourcing updated"
+            # Juicebox refreshes a search; Wellfound rewrites the advert.
+            action = "advert updated" if result.platform == "wellfound" else "sourcing updated"
         elif result.outcome is Outcome.FAILED:
             action = "update failed"
         else:

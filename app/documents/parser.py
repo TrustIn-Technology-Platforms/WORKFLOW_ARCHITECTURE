@@ -550,6 +550,17 @@ def _classify(sections: list[Section]) -> _Classified:
             current_platform = None
             continue
 
+        if _ADVERT_HEADING.match(heading) and current_platform is not None and seen_email:
+            # "Job Description", "The Role", "About the role" below the sequence
+            # and inside a board's advert are that advert's sub-headings. The
+            # general advert, when there is one, sits above the messages; a
+            # second one opening here would cut the board's post short and post
+            # the rest of it nowhere (found 2026-11-05 on the Wellfound advert).
+            target = platform_sections[current_platform]
+            target[-1].blocks.extend(_heading_as_block(section))
+            target[-1].blocks.extend(section.blocks)
+            continue
+
         if _ADVERT_HEADING.match(heading) or _AD_SECTION.match(heading):
             advert_sections.append(section)
             seen_advert_heading = True
@@ -626,17 +637,38 @@ def _job_description_start(sections: list[Section], warnings: list[str]) -> int 
     ]
     last_step = max((i for i, step in enumerate(is_step) if step), default=-1)
 
+    # An explicit heading ("Client JD", "Original Job Description") beats a
+    # bare "Job Description" even when the bare one comes first. The recruiters'
+    # template puts a `Job Description` sub-heading inside the Wellfound advert
+    # and the client's spec under `Original Job Description` after it; reading
+    # the first as the JD cut the Wellfound post to its opening line and pasted
+    # the "Original Job Description" heading into the search text (2026-11-05).
+    explicit: int | None = None
+    late: int | None = None
     found: int | None = None
     for index, section in enumerate(sections):
         heading = section.heading.strip()
         if not heading:
             continue
+        if _JD_HEADING.match(heading):
+            if index > last_step:
+                if explicit is None:
+                    explicit = index
+            else:
+                found = index
         # `Job Spec` is only the client's when a sequence came before it; the
         # explicit headings stand on their own in an advert-only document.
-        if _JD_HEADING.match(heading) or (last_step >= 0 and _LATE_JD_HEADING.match(heading)):
+        elif last_step >= 0 and _LATE_JD_HEADING.match(heading):
             if index > last_step:
-                return index
-            found = index
+                if late is None:
+                    late = index
+            else:
+                found = index
+
+    if explicit is not None:
+        return explicit
+    if late is not None:
+        return late
 
     if found is not None:
         warnings.append(

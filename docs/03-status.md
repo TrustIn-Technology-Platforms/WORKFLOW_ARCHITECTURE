@@ -71,6 +71,15 @@ Juicebox ticked gets its project found or made, its search built, and its
 filters and criteria written, without posting again ([D-031](11-decisions.md#d-031)).
 The sourcing half of every post now writes its own `Notes` line. The
 Criteria dialog's rows and its 8-row cap are remapped and proven the same day.
+**2026-11-05: `Ready to Update` reaches Wellfound too** - the listing the row
+made is rewritten from the document (title, description, role, years, salary;
+a published listing is left alone). Built and tested against the shipped
+recipe, **not yet run against the edit form**
+([platforms/wellfound](platforms/wellfound.md#updating-a-row-2026-11-05)).
+Prompted by the parser reading a `Job Description` sub-heading inside the
+Wellfound section as the client's JD, which cut every such Wellfound draft to
+its opening line; fixed the same day (an explicit `Original Job Description`
+heading now wins, and the sub-heading stays in the advert).
 The next morning (2026-09-03) the same run gained the **Companies** filter —
 about twenty companies of the client's stage and kind, drafted by Claude and
 matched to Juicebox's index by exact name — and **Company Funding Stages**,

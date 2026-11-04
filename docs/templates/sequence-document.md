@@ -207,9 +207,16 @@ on every role until this section existed.
   says the things the advert deliberately does not.
 - **Last.** After the final message and after the board sections. Everything
   below the heading is treated as the JD, headings and all.
-- **Accepted headings:** `Client JD`, `Full JD`, `Original JD`, `Client Job
-  Description`, `JD`, and `Job Spec`. **Not** `Job Description` above the
-  messages — that one names the advert.
+- **Accepted headings:** `Client JD`, `Full JD`, `Original JD`, `Original Job
+  Description`, `Client Job Description`, `JD`, and `Job Spec`. **Not** `Job
+  Description` above the messages — that one names the advert.
+- **A bare `Job Description` inside the Wellfound section stays there** when
+  an explicit heading such as `Original Job Description` follows it: the
+  Wellfound post runs from `Wellfound` to that explicit heading. Only when no
+  explicit heading exists is a `Job Description` after the last message read
+  as the client's JD (fixed 2026-11-05; before that the Wellfound post stopped
+  at `Job Description` and the spec started with the words "Original Job
+  Description").
 - Put it earlier in the document and the parser will say so on the row instead
   of guessing.
 
