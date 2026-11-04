@@ -836,16 +836,32 @@ async def create_project(page: "Page", name: str) -> str:
     return f"{BASE}/project/{new_id}/home"
 
 
+def project_search_url(url: str) -> str:
+    """The project's search builder: `/project/<id>?mode=search`."""
+    match = _PROJECT_PATH.search(url)
+    return f"{BASE}{match.group(1)}?mode=search" if match else url.split("?")[0]
+
+
 async def open_project(page: "Page", project_url: str) -> str:
-    """Land on a project's home, where the JD search lives. Returns the URL used."""
-    home = project_home(project_url)
-    for candidate in dict.fromkeys((home, project_url.split("?")[0])):
-        await page.goto(candidate, wait_until="domcontentloaded", timeout=90_000)
-        if await _settled(page, "Job description", 30):
-            return candidate
+    """Land on the project's search builder, where the JD search lives.
+
+    Returns the URL used. Since Juicebox's 2026-10-08 redesign ("Agent 4.0")
+    the project's `/home` is an overview dashboard - charts, tasks, recents -
+    with no search controls on it. Every production run from then until
+    2026-11-04 waited there for a "Job description" button that never came
+    and left its project empty (artifact 20261104-175550). The builder is the
+    project's own page in search mode: the Search tab, with Find similar /
+    Job description / Boolean / Select manually under the prompt box. The
+    sidebar's "New search" is a link to the same place.
+    """
+    candidate = project_search_url(project_url)
+    await page.goto(candidate, wait_until="domcontentloaded", timeout=90_000)
+    if await _settled(page, "Job description", 30):
+        return candidate
     raise PlatformError(
-        f"{project_url} never offered the Job description search. Is it a "
-        "Juicebox project URL (app.juicebox.ai/project/<id>/...)?"
+        f"{candidate} never offered the Job description search. Is it a "
+        "Juicebox project URL (app.juicebox.ai/project/<id>/...), and is the "
+        "project still open?"
     )
 
 

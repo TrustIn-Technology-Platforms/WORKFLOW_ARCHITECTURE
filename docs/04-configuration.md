@@ -75,6 +75,8 @@ to the same column even without an override.
 | `STATUS_DELETE` | `Ready to Delete` | Set by a recruiter, with the platforms to take down ticked under `Platforms`: delete what the row posted there. Picked up like `STATUS_READY`. Optional on the board: a `Post Status` without this option is skipped with a log line, never a failed poll (2026-10-09). Was `Delete`, and took every platform down regardless of the ticks, until 2026-11-03. |
 | `STATUS_DELETING` | `Deleting` | Set on claim of a delete. A row left here by a restart is released by the stuck-row sweep. |
 | `STATUS_DELETED` | `Deleted` | Nothing the row posted is up anywhere. A delete that took the ticked platforms down and left others up ends on `STATUS_POSTED`, with `Posted On` naming them; one a platform refused ends on `STATUS_FAILED`, naming it. |
+| `STATUS_UPDATE` | `Ready to Update` | Set by a recruiter on a row that is already posted, with the platforms to refresh ticked under `Platforms`: bring each platform's sourcing up to the document without posting again - the project found (or made), the search built, the filters and criteria written. Juicebox only so far; other ticked platforms are skipped with a `Notes` line. Picked up like `STATUS_READY`. Optional on the board. Built 2026-11-04 ([D-031](11-decisions.md#d-031)) for the projects a month of posts had left empty. |
+| `STATUS_UPDATING` | `Updating` | Set on claim of an update. A row left here by a restart goes back to `Posted` by the stuck-row sweep, with `Error` saying so: its posts were never touched. |
 
 These must match the option names in the Notion database **exactly**, including
 capitalisation. Notion rejects an option name that does not already exist.

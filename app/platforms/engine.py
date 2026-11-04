@@ -39,6 +39,9 @@ class RunReport:
     warnings: list[str] = field(default_factory=list)
     # What the run created, for deleting it later: see PostResult.records.
     records: dict[str, str] = field(default_factory=dict)
+    # The sourcing half's outcome and search: see PostResult.sourcing.
+    sourcing: str | None = None
+    sourcing_url: str | None = None
 
     @property
     def post_url(self) -> str | None:

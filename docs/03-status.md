@@ -60,6 +60,17 @@ and the adapter turned the crash into one warning on the row. Fixed, and
 `python -m app.cli juicebox-sourcing --project <url>` finishes a project left
 in that state without re-posting the row. See
 [platforms/juicebox](platforms/juicebox.md#sourcing--project-jd-search-filters-2026-09-02).
+
+**Amended 2026-11-04: the Juicebox sourcing half was silently broken from
+2026-10-08 and is remapped; posted rows can be repaired with `Ready to
+Update`.** The redesign moved the Job description search to the project's
+search mode; every post in between left an empty project and the board
+never said so. Fixed and proven live (project, JD search, titles, location,
+skills, years, companies, scope). A posted row set to `Ready to Update` with
+Juicebox ticked gets its project found or made, its search built, and its
+filters and criteria written, without posting again ([D-031](11-decisions.md#d-031)).
+The sourcing half of every post now writes its own `Notes` line. The
+Criteria dialog's rows and its 8-row cap are remapped and proven the same day.
 The next morning (2026-09-03) the same run gained the **Companies** filter —
 about twenty companies of the client's stage and kind, drafted by Claude and
 matched to Juicebox's index by exact name — and **Company Funding Stages**,

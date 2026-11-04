@@ -90,8 +90,9 @@ hand:
       Without this the API returns 404 for a database that plainly exists.
 - [ ] Confirm `Status` option names match `STATUS_READY`, `STATUS_POSTING`,
       `STATUS_POSTED`, `STATUS_FAILED`, `STATUS_DELETE` (`Ready to Delete`),
-      `STATUS_DELETING` and `STATUS_DELETED` exactly. Notion rejects an option
-      name that has not already been created.
+      `STATUS_DELETING`, `STATUS_DELETED`, `STATUS_UPDATE` (`Ready to Update`)
+      and `STATUS_UPDATING` exactly. Notion rejects an option name that has not
+      already been created.
 - [ ] `Posted On` and `Failed On` are **multi-select** columns, with one option
       per platform; a `Notes` rich-text column exists.
 - [ ] Confirm each `Platforms` option name matches a recipe filename in `platforms/`.
@@ -145,6 +146,22 @@ Taking a row down is the same shape in reverse (2026-11-03):
 - **`Ready to Delete`** takes down only the platforms ticked under `Platforms`.
   Untick Loxo and Loxo keeps its campaign. Nothing ticked is a `Failed` row
   that says so.
+
+Bringing a posted row's sourcing up to its document, without posting again
+(2026-11-04, [D-031](11-decisions.md#d-031)):
+
+```
+   Ready to Update  --claimed-->  Updating  --done, or not-->  Posted
+   (platforms ticked)                           (Error says what the update could not do)
+```
+
+- **`Ready to Update`** finds or makes each ticked platform's sourcing
+  project, builds its search, writes the filters and criteria. Juicebox only
+  so far; other ticked platforms get a `Notes` line saying the update is not
+  built for them. The posts, `Posted On` and `Failed On` are not touched.
+- The row goes back to **`Posted`** whatever happened; `Notes` gets
+  `sourcing updated` with the search's link, or `update failed`, per
+  platform, and `Error` holds the reason for a failure.
 - `Posted On` loses each platform the moment its post is confirmed gone, and
   only then; `Failed On` gains any that refused. `Notes` gets a line per
   platform either way.

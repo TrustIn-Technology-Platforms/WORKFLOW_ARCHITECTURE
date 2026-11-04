@@ -410,3 +410,19 @@ def test_set_criteria_reports_the_button_it_could_not_find_and_saves_nothing(
     message, saved = _run(url, work)
     assert "no 'Add Criterion' button" in message
     assert saved is None
+
+
+def test_at_juicebox_s_own_cap_the_top_rows_are_written_and_the_rest_reported(page_url):
+    """The redesigned dialog (2026-10-08) stops at 8 rows and hides Add
+    Criterion there; a list cut to the 8 most important beats no list."""
+    ranked = [f"The candidate has trait {i}." for i in range(1, 11)]
+
+    async def work(page):
+        await jc._open_dialog(page)
+        rows, dropped = await jc._write_list(page, ranked)
+        return len(rows), dropped, await page.evaluate(jc.READ)
+
+    count, dropped, read = _run(_url(page_url, rows=8, cap=8), work)
+    assert count == 8
+    assert dropped == ranked[8:]
+    assert [r["value"] for r in read] == ranked[:8]

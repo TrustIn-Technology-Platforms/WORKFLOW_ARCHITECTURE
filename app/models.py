@@ -349,6 +349,14 @@ class PostResult:
     # column holds one link, and a row that posted to three platforms keeps
     # only the first. Only the adapter that wrote a record reads it back.
     records: dict[str, str] = field(default_factory=dict)
+    # The sourcing half's own outcome - "set", "failed" or "skipped" - and the
+    # search it built. A sequence that saved while its search was never
+    # built is a success with a hole in it, and until 2026-11-04 the hole was
+    # a warning the row never showed (every Juicebox project since the
+    # 2026-10-08 redesign was left empty, and nobody saw). It gets its own
+    # line in `Notes`.
+    sourcing: str | None = None
+    sourcing_url: str | None = None
 
     @property
     def ok(self) -> bool:

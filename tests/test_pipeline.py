@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.models import Advert, NotionRow, ParsedDocument
+from app.models import Advert, NotionRow, ParsedDocument, PipelineError
 from app.pipeline import enrich_advert
 
 
@@ -189,7 +189,7 @@ class _StuckClient:
         self.failed: dict[str, str] = {}
 
     async def query_rows_by_status(self, status, limit=None):
-        assert status in ("Posting", "Deleting")
+        assert status in ("Posting", "Deleting", "Updating")
         return [r for r in self.rows if r.status == status]
 
     async def query_rows_by_status_if_present(self, status, limit=None):
@@ -952,3 +952,150 @@ def test_a_failed_post_keeps_what_it_created_for_the_ledger(monkeypatch):
     assert juicebox.outcome is Outcome.FAILED
     assert juicebox.records == {"sequence": "SEQ123", "post_url": "https://jb/s/SEQ123"}
     assert [r.platform for r in results] == ["loxo", "juicebox"]
+
+
+# -- updating a posted row's sourcing (D-031) ---------------------------------
+
+
+class _FakeUpdateAdapter:
+    calls: list[str] = []
+
+    def __init__(self, name, outcome, supports=True):
+        self.name, self.outcome, self.supports_update = name, outcome, supports
+
+    async def update(self, document, row):
+        from app.models import Outcome, PostResult
+
+        _FakeUpdateAdapter.calls.append(self.name)
+        if self.outcome is Outcome.FAILED:
+            raise PipelineError(f"{self.name} could not find the project")
+        return PostResult(
+            platform=self.name, outcome=self.outcome,
+            post_url=f"https://{self.name}/search/1",
+            sourcing="set", sourcing_url=f"https://{self.name}/search/1",
+            records={"project": "pNEW", "search": f"https://{self.name}/search/1"},
+        )
+
+
+class _UpdateClient(_DeleteClient):
+    def __init__(self):
+        super().__init__()
+        self.updating: list[str] = []
+
+    async def mark_updating(self, page_id):
+        self.updating.append(page_id)
+
+
+def _update_setup(monkeypatch, tmp_path, outcomes, supports=None):
+    from app.config import Settings
+    from app.models import ParsedDocument
+
+    _FakeUpdateAdapter.calls = []
+    supports = supports or {}
+    settings = Settings(ledger_path=str(tmp_path / "posted-rows.json"))
+    recipes = {"noon": object(), "juicebox": object(), "loxo": object()}
+    monkeypatch.setattr("app.pipeline.load_recipes", lambda s: recipes)
+    monkeypatch.setattr("app.pipeline.resolve", lambda name, r: r.get(name.lower()))
+    monkeypatch.setattr("app.pipeline.BrowserRunner", _NoBrowser)
+    monkeypatch.setattr(
+        "app.pipeline.get_adapter",
+        lambda name, **k: _FakeUpdateAdapter(name, outcomes.get(name), supports.get(name, True)),
+    )
+
+    async def _load(url, settings):
+        return ParsedDocument(sections=[], advert=None, emails=[], warnings=[])
+
+    monkeypatch.setattr("app.pipeline.load_document", _load)
+    return settings
+
+
+def test_an_update_row_reruns_the_sourcing_and_goes_back_to_posted(monkeypatch, tmp_path):
+    import asyncio
+
+    from app.ledger import Ledger
+    from app.models import Outcome
+    from app.pipeline import update_row
+
+    settings = _update_setup(monkeypatch, tmp_path, {"juicebox": Outcome.POSTED, "loxo": None},
+                             supports={"loxo": False})
+    row = NotionRow(page_id="p1", title="Row", document_url="https://doc", status="Ready to Update",
+                    platforms=["loxo", "juicebox"], raw_properties={})
+    client = _UpdateClient()
+    report = asyncio.run(update_row(row, client, settings, dry_run=False))
+
+    assert report.ok and client.updating == ["p1"]
+    # Juicebox updated; Loxo, whose update is not built, skipped and said so.
+    assert _FakeUpdateAdapter.calls == ["juicebox"]
+    assert [(n[0], n[1]) for n in client.notes] == [
+        ("loxo", "update skipped"), ("juicebox", "sourcing updated"),
+    ]
+    assert client.notes[1][3] == "https://juicebox/search/1"
+    # Back to Posted with Error cleared: the posts were never touched.
+    assert client.still_posted == [("p1", None)]
+    # A project the update made is in the ledger for a later delete.
+    assert Ledger(settings.ledger_file).get("p1").records["juicebox"][0]["project"] == "pNEW"
+
+
+def test_a_failed_update_goes_back_to_posted_with_the_reason(monkeypatch, tmp_path):
+    import asyncio
+
+    from app.models import Outcome
+    from app.pipeline import update_row
+
+    settings = _update_setup(monkeypatch, tmp_path, {"juicebox": Outcome.FAILED})
+    row = NotionRow(page_id="p1", title="Row", document_url="https://doc", status="Ready to Update",
+                    platforms=["juicebox"], raw_properties={})
+    client = _UpdateClient()
+    report = asyncio.run(update_row(row, client, settings, dry_run=False))
+
+    assert not report.ok
+    assert [(n[0], n[1]) for n in client.notes] == [("juicebox", "update failed")]
+    page, error = client.still_posted[0]
+    assert "could not find the project" in error and "Ready to Update" in error
+    assert client.failed == []
+
+
+def test_an_update_with_no_platforms_ticked_is_refused(monkeypatch, tmp_path):
+    import asyncio
+
+    from app.pipeline import update_row
+
+    settings = _update_setup(monkeypatch, tmp_path, {})
+    row = NotionRow(page_id="p1", title="Row", document_url="https://doc", status="Ready to Update",
+                    platforms=[], raw_properties={})
+    client = _UpdateClient()
+    report = asyncio.run(update_row(row, client, settings, dry_run=False))
+    assert "nothing to update" in report.error
+    assert client.still_posted[0][0] == "p1"
+
+
+def test_a_posted_platform_with_sourcing_writes_a_second_note(monkeypatch, tmp_path):
+    """A sequence that saved while its search was never built was a clean
+    'posted' line until 2026-11-04; the sourcing half gets its own line."""
+    import asyncio
+
+    from app.config import Settings
+    from app.models import Outcome, PostResult
+    from app.pipeline import process_row
+
+    results = [PostResult(platform="juicebox", outcome=Outcome.POSTED, post_url="https://jb/x",
+                          sourcing="failed", sourcing_url=None)]
+
+    async def fake_load(url, settings=None):
+        return ParsedDocument(advert=Advert(title="T", body_text="b", body_html="<p>b</p>"), emails=[])
+
+    async def fake_post(doc, platforms, row=None, settings=None, dry_run=None, on_result=None):
+        for result in results:
+            await on_result(result)
+        return results
+
+    monkeypatch.setattr("app.pipeline.load_document", fake_load)
+    monkeypatch.setattr("app.pipeline.post_document", fake_post)
+    row = NotionRow(page_id="p1", title="Row", document_url="http://x/doc.docx",
+                    status="Ready to Post", platforms=["juicebox"], raw_properties={})
+    settings = Settings(ledger_path=str(tmp_path / "posted-rows.json"))
+    client = _WriteBackClient(fail_posted=False)
+    asyncio.run(process_row(row, client, settings, dry_run=False))
+    assert [(n[0], n[1]) for n in client.notes] == [
+        ("juicebox", "posted"), ("juicebox", "sourcing failed"),
+    ]

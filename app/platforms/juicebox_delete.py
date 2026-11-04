@@ -188,6 +188,25 @@ def _find(items: list[dict[str, Any]], wanted: str) -> dict[str, Any] | None:
     return None
 
 
+def find_open_project(projects: list[dict[str, Any]], title: str) -> dict[str, Any] | None:
+    """The newest open, non-agent project with exactly this title, or None.
+
+    An update reuses the project a posting run made and named; the name is
+    `project_title(role name)`, the same cut the post applied. Closed
+    projects and agent projects are never it.
+    """
+    wanted = title.strip()
+    matches = [
+        p for p in projects
+        if str(p.get("title") or "").strip() == wanted
+        and not p.get("closed")
+        and not (p.get("isAgenticProject") or p.get("agentStatus"))
+    ]
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    matches.sort(key=lambda p: _created_at(p) or floor, reverse=True)
+    return matches[0] if matches else None
+
+
 def _created_at(project: dict[str, Any]) -> datetime | None:
     stamp = project.get("dateAdded") or project.get("createdAt")
     if isinstance(stamp, dict) and isinstance(stamp.get("_seconds"), (int, float)):

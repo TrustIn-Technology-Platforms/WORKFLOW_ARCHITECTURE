@@ -72,3 +72,19 @@ def test_a_dry_run_does_not_call_a_missing_project_found():
     assert "already gone" in gone.summary and "found" not in gone.summary
     there = JuiceboxDeleteReport(project_id="p", sequence_id="s", dry_run=True)
     assert there.summary == "dry run: sequence s found; project p found"
+
+
+def test_an_update_reuses_the_newest_open_project_with_the_posts_name():
+    from app.platforms.juicebox_delete import find_open_project
+
+    projects = [
+        {"id": "old", "title": "Acme - Platform Engineer - SF", "dateAdded": {"_seconds": 1_000}},
+        {"id": "new", "title": "Acme - Platform Engineer - SF", "dateAdded": {"_seconds": 2_000}},
+        {"id": "closed", "title": "Acme - Platform Engineer - SF", "closed": True,
+         "dateAdded": {"_seconds": 3_000}},
+        {"id": "agent", "title": "Acme - Platform Engineer - SF", "isAgenticProject": True,
+         "dateAdded": {"_seconds": 4_000}},
+        {"id": "other", "title": "Acme - Platform Engineer - NY", "dateAdded": {"_seconds": 5_000}},
+    ]
+    assert find_open_project(projects, "Acme - Platform Engineer - SF")["id"] == "new"
+    assert find_open_project(projects, "Nobody - Nothing") is None

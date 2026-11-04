@@ -267,11 +267,17 @@ class JuiceboxAdapter(RecipeAdapter):
         document: ParsedDocument,
         row: NotionRow | None,
         report: RunReport,
+        *,
+        project_url: str | None = None,
+        search_url: str | None = None,
     ) -> str | None:
         """A sourcing project for the role: JD search plus real filters.
 
         Returns the URL of the search it built, for the criteria step; None
-        when it skipped, failed, or ran dry.
+        when it skipped, failed, or ran dry. `report.sourcing` says which
+        ("set", "failed", "skipped"), for the row's Notes. `project_url` and
+        `search_url` reuse what exists (an update, D-031); without them the
+        row's `Juicebox Project` column is the only reuse.
 
         This is the half Sohaib found missing entirely on 2026-09-01 ("not even
         20 percent configured"): a project, the JD pasted so Juicebox's AI
@@ -296,11 +302,11 @@ class JuiceboxAdapter(RecipeAdapter):
         # an earlier run created it and stopped short of the search. Creating
         # a second one beside it is the duplicate nobody asked for, and a value
         # that is not a URL is a question for the recruiter, not a guess.
-        project_url: str | None = None
-        if row is not None:
+        if row is not None and project_url is None and search_url is None:
             column = self.settings.prop_juicebox_project
             value = (_row_text(row, column) or "").strip()
             if value and not value.startswith("http"):
+                report.sourcing = "skipped"
                 report.warnings.append(
                     f"sourcing skipped: {column!r} should hold the project's "
                     f"full URL, not {value!r}"
@@ -329,6 +335,7 @@ class JuiceboxAdapter(RecipeAdapter):
             ),
         )
         if profile is None or profile.is_empty:
+            report.sourcing = "skipped"
             report.warnings.append(
                 "sourcing skipped: no titles or skills could be drafted "
                 "(is ANTHROPIC_API_KEY set here?)"
@@ -397,6 +404,7 @@ class JuiceboxAdapter(RecipeAdapter):
                 page,
                 project_name=name,
                 project_url=project_url,
+                search_url=search_url,
                 # The Client JD verbatim, else the profile's composed spec -
                 # never the raw advert while a spec exists. Juicebox's own AI
                 # builds the search from this paste, and on 2026-09-28 a search
@@ -416,6 +424,7 @@ class JuiceboxAdapter(RecipeAdapter):
             saved = await save_failure(
                 page.context, page, "juicebox-sourcing-failed", self.settings
             )
+            report.sourcing = "failed"
             report.warnings.append(
                 f"sourcing not set up: {exc}"
                 + (f" (screenshot: {saved[0]})" if saved else "")
@@ -445,7 +454,106 @@ class JuiceboxAdapter(RecipeAdapter):
         report.warnings.append(
             f"sourcing search: {result.search_url} ({result.summary})"
         )
+        report.sourcing = "set"
+        report.sourcing_url = result.search_url or None
+        # The search too, so an update of this row ranks the same search
+        # instead of building a second one beside it.
+        if result.search_url:
+            report.records["search"] = result.search_url
         return result.search_url or None
+
+    supports_update = True
+
+    async def _update(
+        self, page: "Page", document: ParsedDocument, row: NotionRow | None
+    ) -> RunReport:
+        """Bring this row's Juicebox sourcing up to the document, posting nothing.
+
+        The sequence is left alone. The project is the row's `Juicebox Project`
+        when set, else the one a run of this row recorded, else an open
+        project titled as a post would have named it, else a new one. The
+        search is the row's `Juicebox Search` when set, else the one a run
+        recorded, else it is built from the JD. Then the filters and the
+        criteria, exactly as on a post. Built 2026-11-04 (D-031) for the
+        projects a month of posts had left empty.
+        """
+        from app.ledger import Ledger
+        from app.pipeline import _row_text
+        from app.platforms.juicebox_delete import (
+            JuiceboxSession,
+            find_open_project,
+            list_projects,
+        )
+        from app.platforms.juicebox_sourcing import BASE, project_title
+
+        report = RunReport()
+        advert = document.advert or Advert(title="", body_text="", body_html="")
+        name = _role_name(
+            document.source_name, row, advert,
+            sorted(document.emails, key=lambda e: e.order),
+        )
+
+        project_url: str | None = None
+        search_url: str | None = None
+        recorded: dict[str, str] = {}
+        if row is not None:
+            value = (_row_text(row, self.settings.prop_juicebox_project) or "").strip()
+            project_url = value if value.startswith("http") else None
+            value = (_row_text(row, self.settings.prop_juicebox_search) or "").strip()
+            search_url = value if value.startswith("http") else None
+            entry = Ledger(self.settings.ledger_file).get(row.page_id)
+            for record in (entry.records.get("juicebox", []) if entry else []):
+                recorded.update({k: v for k, v in record.items() if v})
+
+        # The account's projects, through the app's own API: the token
+        # rides on its first calls after a page load.
+        tap = _ApiTap(page)
+        tap.attach()
+        try:
+            await page.goto(BASE + "/", wait_until="commit", timeout=60_000)
+            for _ in range(30):
+                if tap.token:
+                    break
+                await page.wait_for_timeout(1_000)
+            if not tap.token:
+                raise PlatformError(
+                    "Juicebox's session token was not seen, so its projects could "
+                    "not be listed; nothing was changed. Re-run the update."
+                )
+            projects = await list_projects(JuiceboxSession(page=page, token=tap.token))
+        finally:
+            tap.detach()
+        open_ids = {
+            str(p.get("id") or "") for p in projects if not p.get("closed")
+        }
+        if project_url is None and recorded.get("project") in open_ids:
+            project_url = f"{BASE}/project/{recorded['project']}/home"
+            report.warnings.append(f"project: the one this row's post made ({recorded['project']})")
+        if project_url is None and search_url is None:
+            found = find_open_project(projects, project_title(name))
+            if found:
+                project_url = f"{BASE}/project/{found['id']}/home"
+                report.warnings.append(f"project: found by name ({found['id']})")
+        if search_url is None and recorded.get("search"):
+            search_url = recorded["search"]
+            report.warnings.append("search: the one this row's post built")
+        log.info("juicebox update", extra={
+            "project_url": project_url, "search_url": search_url, "role": name,
+        })
+
+        built = await self._set_up_sourcing(
+            page, document, row, report, project_url=project_url, search_url=search_url
+        )
+        if report.sourcing != "set" and not self.dry_run:
+            raise PlatformError(
+                "; ".join(w for w in report.warnings if w.startswith("sourcing"))
+                or "the sourcing was not set up"
+            )
+        if self.settings.criteria_enabled:
+            await self._set_criteria(page, document, row, report, built_search=built)
+        report.submitted = True
+        report.captures["post_url"] = built or project_url or ""
+        return report
 
     async def _set_criteria(
         self,

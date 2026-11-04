@@ -28,6 +28,8 @@ from app.platforms.recipe import Recipe
 from app.sessions.store import SessionStore
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Awaitable, Callable
+
     from playwright.async_api import Page
 
 log = get_logger(__name__)
@@ -73,8 +75,37 @@ class RecipeAdapter:
     def name(self) -> str:
         return self.recipe.key
 
+    # A platform whose sourcing can be brought up to the document on a row
+    # that already posted (`status_update`, D-031) sets this and implements
+    # `_update`. The rest are skipped with a note, never opened.
+    supports_update = False
+
     async def post(
         self, document: ParsedDocument, row: NotionRow | None = None
+    ) -> PostResult:
+        return await self._run(document, row, self._drive)
+
+    async def update(
+        self, document: ParsedDocument, row: NotionRow | None = None
+    ) -> PostResult:
+        """Bring the platform's sourcing for this row up to the document,
+        without posting again. Same browser, login check and failure
+        handling as a post; the driver differs."""
+        return await self._run(document, row, self._update)
+
+    async def _update(
+        self, page: "Page", document: ParsedDocument, row: NotionRow | None
+    ) -> "RunReport":
+        raise PlatformError(
+            f"{self.recipe.label}: updating a posted row's sourcing is not built "
+            "for this platform yet - only Juicebox so far."
+        )
+
+    async def _run(
+        self,
+        document: ParsedDocument,
+        row: NotionRow | None,
+        drive: "Callable[[Page, ParsedDocument, NotionRow | None], Awaitable[RunReport]]",
     ) -> PostResult:
         recipe = self.recipe
 
@@ -134,7 +165,7 @@ class RecipeAdapter:
             async with opener as (context, page):
                 try:
                     await self.ensure_logged_in(page)
-                    report = await self._drive(page, document, row)
+                    report = await drive(page, document, row)
                 except (PlatformError, AuthenticationRequired) as exc:
                     artifacts = await save_failure(
                         context, page, f"{recipe.key}-failed", self.settings
@@ -180,6 +211,8 @@ class RecipeAdapter:
                     finished_at=datetime.now(timezone.utc),
                     # A dry run created nothing, so there is nothing to delete.
                     records={} if self.dry_run else self._records(report),
+                    sourcing=report.sourcing,
+                    sourcing_url=report.sourcing_url,
                 )
         except (PlatformError, AuthenticationRequired):
             raise

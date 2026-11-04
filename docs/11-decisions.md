@@ -1069,3 +1069,64 @@ attempts on 2026-11-03) took every platform down and still left the row
 
 `Deleted` also clears `Post URL` now: the link points at nothing, and `Notes`
 keeps every link with its line.
+
+## D-031 · A posted row can have its sourcing brought up to the document (`Ready to Update`)
+
+**Status** Accepted — built 2026-11-04, proven live on the ZZ TEST row the same day
+**Date** 2026-11-04
+**Where** `app/pipeline.py` (`update_row`, `update_sourcing`), `app/platforms/adapter.py` (`update`, `supports_update`), `app/platforms/juicebox.py` (`_update`), `app/config.py` — [04-configuration](04-configuration.md)
+
+### Context
+
+Juicebox's 2026-10-08 redesign moved the Job description search off the
+project home. The sequence driver was remapped on 2026-10-09; the sourcing
+half was not, and from then until 2026-11-04 every Juicebox post created and
+named a project, waited for a button that was no longer there, and left the
+project empty - as a warning the board never showed, because a board with a
+`Notes` column drops a successful run's warnings. Sohaib found the empty
+projects by hand on 2026-11-04 (HOAi, Jani, Basis) and asked for a way to
+fix the rows that had already posted, not only the rows still to come.
+
+Re-running a posted row was never the answer: it posts again, and the
+per-platform skip rests on `Posted On` being a multi-select, which the board
+has not got yet.
+
+### Decision
+
+A fourth trigger status, `Ready to Update`, beside `Ready to Post` and
+`Ready to Delete`. The service claims it as `Updating`, loads the row's
+document, and for each ticked platform whose adapter sets `supports_update`
+runs the adapter's `_update` in the same browser wrapper as a post. For
+Juicebox that is: find the project - the row's `Juicebox Project` column,
+else the one the row's post recorded in the ledger (if still open), else an
+open, non-agent project titled as the post would have named it, else a new
+one - then the search (`Juicebox Search` column, else the ledger's, else the
+JD search is built), then the filters and the criteria, exactly as a post
+would have. The sequence is never touched. Platforms without an update are
+skipped and say so in `Notes`.
+
+The row goes back to `Posted` either way, with `Error` holding what the
+update could not do; one `Notes` line per platform (`sourcing updated`,
+`update failed`, `update skipped`) with the search's link. A project the
+update makes is recorded in the ledger, so a later delete takes it down.
+
+Two smaller decisions ride with it:
+
+- A post's sourcing half now writes its own `Notes` line (`sourcing set` /
+  `sourcing failed` / `sourcing skipped`, with the search's link) so an empty
+  project is visible on the row the day it happens.
+- A post records its search in the ledger (`search`), so an update of that
+  row ranks the same search rather than standing a second one up.
+
+### Consequences
+
+- Rows posted between 2026-10-08 and 2026-11-04 are repaired by setting them
+  to `Ready to Update` with Juicebox ticked. Loxo and noon on the same row are
+  skipped, not re-posted.
+- Lookup by title reuses the newest open project with that exact name. Two
+  projects with the same name (a re-posted row) means the newer one is
+  updated; the older stays as it was.
+- `Posted On` / `Failed On` are not changed by an update; what is up stays
+  what the row says is up.
+- Loxo and noon updates are not built. Their adapters report that, and the
+  row says so.

@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     status_delete: str = "Ready to Delete"
     status_deleting: str = "Deleting"
     status_deleted: str = "Deleted"
+    # A posted row whose sourcing should be brought up to the document (D-031):
+    # the project found or made, the search built, the filters and criteria
+    # written. Juicebox only, so far. Claimed as `Updating`; back to Posted
+    # when done, with the outcome on the row's `Notes` log.
+    status_update: str = "Ready to Update"
+    status_updating: str = "Updating"
 
     # --- documents ----------------------------------------------------------
     document_timeout_seconds: float = 60.0

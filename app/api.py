@@ -81,7 +81,7 @@ async def _run_if_ready(page_id: str, dry_run: bool | None, *, source: str) -> N
     """Run one row, under the lock, only while it still reads Ready to Post -
     or Delete, which runs the row's delete instead."""
     from app.notion.client import NotionClient
-    from app.pipeline import delete_row, process_row
+    from app.pipeline import delete_row, process_row, update_row
 
     settings = get_settings()
     settings.ensure_dirs()
@@ -89,6 +89,13 @@ async def _run_if_ready(page_id: str, dry_run: bool | None, *, source: str) -> N
         async with NotionClient(settings) as client:
             row = await client.get_row(page_id)
             status = (row.status or "").strip()
+            if status == settings.status_update:
+                updated = await update_row(row, client, settings, dry_run)
+                log.info(
+                    f"{source} row update done",
+                    extra={"page_id": page_id, "ok": updated.ok, "detail": updated.detail[:500]},
+                )
+                return
             if status == settings.status_delete:
                 deleted = await delete_row(row, client, settings, dry_run)
                 log.info(
@@ -203,6 +210,7 @@ async def _poll_ready_rows(settings) -> None:
                 # died on this query (Notion 400: option not found) and the
                 # Ready to Post row beside it was never run.
                 rows += await client.query_rows_by_status_if_present(settings.status_delete)
+                rows += await client.query_rows_by_status_if_present(settings.status_update)
             for row in rows:
                 await _run_if_ready(row.page_id, None, source="poll")
         except Exception:  # noqa: BLE001 - the poll must never take the service down

@@ -389,6 +389,14 @@ async def process_row(
             "posted" if result.outcome is Outcome.POSTED else "failed",
             url=result.post_url,
         )
+        # The sourcing half is a second event: a sequence that saved while
+        # its search was never built read as a clean "posted" until
+        # 2026-11-04, and every Juicebox project for a month sat empty.
+        if result.sourcing:
+            await note(
+                client, row.page_id, result.platform,
+                f"sourcing {result.sourcing}", url=result.sourcing_url,
+            )
 
     if not dry_run:
         await client.mark_posting(row.page_id)
@@ -757,6 +765,163 @@ async def delete_row(
     return report
 
 
+@dataclass(slots=True)
+class UpdateReport:
+    page_id: str
+    title: str = ""
+    results: list[PostResult] = field(default_factory=list)
+    error: str | None = None
+    document: ParsedDocument | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and all(r.ok for r in self.results)
+
+    @property
+    def detail(self) -> str:
+        return " | ".join(f"{r.platform}: {r.detail or r.outcome.value}" for r in self.results)
+
+
+async def update_sourcing(
+    document: ParsedDocument,
+    platforms: list[str],
+    row: NotionRow | None = None,
+    settings: Settings | None = None,
+    dry_run: bool | None = None,
+    on_result: Callable[[PostResult], Awaitable[None]] | None = None,
+) -> list[PostResult]:
+    """Bring each platform's sourcing for a posted row up to the document.
+
+    The mirror of `post_document` for a row that is already up: nothing is
+    posted again. A platform whose update is not built is skipped and named,
+    so the row says which half it got. Sequential, for the same reason as
+    the posts.
+    """
+    settings = settings or get_settings()
+    recipes = load_recipes(settings)
+    results: list[PostResult] = []
+    enrich_advert(document, row, settings)
+
+    async def report(result: PostResult) -> None:
+        results.append(result)
+        if on_result is not None:
+            await on_result(result)
+
+    async with BrowserRunner(settings) as runner:
+        for name in order_platforms(platforms, settings.platform_order):
+            if resolve(name, recipes) is None:
+                await report(PostResult(
+                    platform=name, outcome=Outcome.SKIPPED,
+                    detail=f"no recipe for {name!r} - nothing to update",
+                    finished_at=datetime.now(timezone.utc),
+                ))
+                continue
+            try:
+                adapter = get_adapter(
+                    name, recipes=recipes, runner=runner, settings=settings, dry_run=dry_run
+                )
+                if not adapter.supports_update:
+                    await report(PostResult(
+                        platform=name, outcome=Outcome.SKIPPED,
+                        detail=f"updating sourcing is not built for {name} yet - only Juicebox",
+                        finished_at=datetime.now(timezone.utc),
+                    ))
+                    log.info("platform update skipped - not built", extra={"platform": name})
+                    continue
+                result = await adapter.update(document, row)
+            except PipelineError as exc:
+                result = PostResult(
+                    platform=name, outcome=Outcome.FAILED, detail=str(exc),
+                    artifacts=list(getattr(exc, "artifacts", []) or []),
+                    records=dict(getattr(exc, "records", None) or {}),
+                )
+                log.error("platform update failed", extra={"platform": name, "error": str(exc)})
+            except Exception as exc:  # noqa: BLE001 - one platform, never the row
+                log.exception("platform update crashed", extra={"platform": name})
+                first = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0]
+                result = PostResult(
+                    platform=name, outcome=Outcome.FAILED,
+                    detail=f"{name}: unexpected error - {exc.__class__.__name__}: {first[:300]}",
+                )
+            await report(result)
+    return results
+
+
+async def update_row(
+    row: NotionRow,
+    client: NotionClient,
+    settings: Settings | None = None,
+    dry_run: bool | None = None,
+) -> UpdateReport:
+    """A row set to Ready to Update: claim it, bring the ticked platforms'
+    sourcing up to the document, write the outcome back.
+
+    The row goes back to Posted either way - its posts are untouched - with
+    `Error` saying what the update could not do, and one `Notes` line per
+    platform. Built 2026-11-04 (D-031) for the Juicebox projects a month of
+    posts had left empty.
+    """
+    settings = settings or get_settings()
+    dry_run = settings.dry_run if dry_run is None else dry_run
+    log.info("row update started",
+             extra={"page_id": row.page_id, "title": row.title, "dry_run": dry_run})
+
+    async def progress(result: PostResult) -> None:
+        if result.outcome is Outcome.POSTED:
+            action = "sourcing updated"
+        elif result.outcome is Outcome.FAILED:
+            action = "update failed"
+        else:
+            action = "update skipped"
+        await note(client, row.page_id, result.platform, action,
+                   url=result.sourcing_url or result.post_url)
+
+    if not dry_run:
+        await client.mark_updating(row.page_id)
+    report = UpdateReport(page_id=row.page_id, title=row.title)
+    try:
+        if not row.document_url:
+            raise PipelineError("No document URL was provided on the row.")
+        if not row.platforms:
+            raise PipelineError(
+                f"No platforms are ticked under {settings.prop_platforms}, so there "
+                "is nothing to update. Tick the platforms and set the status to "
+                f"{settings.status_update} again."
+            )
+        document = await load_document(row.document_url, settings)
+        report.document = document
+        report.results = await update_sourcing(
+            document, row.platforms, row=row, settings=settings, dry_run=dry_run,
+            on_result=None if dry_run else progress,
+        )
+        if not dry_run:
+            # A project the update made must be in the ledger, or a later
+            # delete cannot take it down.
+            _record_posts(row, report.results, settings)
+        failures = [r for r in report.results if r.outcome is Outcome.FAILED]
+        if failures:
+            report.error = "; ".join(f"{r.platform}: {r.detail or 'failed'}" for r in failures)
+    except PipelineError as exc:
+        report.error = str(exc)
+    except Exception as exc:  # noqa: BLE001 - the row must not be left on Updating
+        log.exception("row update crashed", extra={"page_id": row.page_id})
+        report.error = f"Unexpected error: {exc.__class__.__name__}. Check the logs."
+    if dry_run:
+        log.info("dry run - Notion not updated", extra={"page_id": row.page_id, "detail": report.detail})
+        return report
+    if report.error:
+        await client.mark_still_posted(
+            row.page_id,
+            f"Update incomplete - {report.error}. The posts are untouched; set the "
+            f"status to {settings.status_update} to try again.",
+        )
+        log.warning("row update incomplete", extra={"page_id": row.page_id, "error": report.error})
+    else:
+        await client.mark_still_posted(row.page_id, None)
+        log.info("row updated", extra={"page_id": row.page_id, "detail": report.detail})
+    return report
+
+
 async def sweep_trashed_rows(
     client: NotionClient,
     settings: Settings | None = None,
@@ -823,6 +988,13 @@ STUCK_MESSAGE = (
 )
 
 
+STUCK_UPDATE_MESSAGE = (
+    "The run updating this row's sourcing never wrote back - the posting "
+    "service restarted mid-run - so the row was released. Its posts are "
+    "untouched; check the platform's search before setting the status back "
+    "to {status}."
+)
+
 STUCK_DELETE_MESSAGE = (
     "The run deleting this row never wrote back - the posting service "
     "restarted mid-run - so the row was released. Whatever was deleted stays "
@@ -852,8 +1024,9 @@ async def recover_stuck_rows(
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     rows = await client.query_rows_by_status(settings.status_posting)
     deleting = await client.query_rows_by_status_if_present(settings.status_deleting)
+    updating = await client.query_rows_by_status_if_present(settings.status_updating)
     stuck = [
-        r for r in [*rows, *deleting]
+        r for r in [*rows, *deleting, *updating]
         if r.last_edited is not None and r.last_edited <= cutoff
     ]
     for row in stuck:
@@ -867,6 +1040,14 @@ async def recover_stuck_rows(
             },
         )
         if not dry_run:
+            if (row.status or "").strip() == settings.status_updating:
+                await client.mark_still_posted(
+                    row.page_id,
+                    STUCK_UPDATE_MESSAGE.format(status=settings.status_update)
+                    + f" (claimed {row.last_edited:%Y-%m-%d %H:%M} UTC, "
+                    f"untouched for over {minutes} minutes.)",
+                )
+                continue
             message = (
                 STUCK_DELETE_MESSAGE.format(status=settings.status_delete)
                 if (row.status or "").strip() == settings.status_deleting
@@ -893,13 +1074,16 @@ async def run_once(
     async with NotionClient(settings) as client:
         rows = await client.query_ready_rows(limit)
         to_delete = await client.query_rows_by_status_if_present(settings.status_delete, limit)
-        if not rows and not to_delete:
+        to_update = await client.query_rows_by_status_if_present(settings.status_update, limit)
+        if not rows and not to_delete and not to_update:
             log.info("nothing to do")
             return reports
         for row in rows:
             reports.append(await process_row(row, client, settings, dry_run))
         for row in to_delete:
             await delete_row(row, client, settings, dry_run)
+        for row in to_update:
+            await update_row(row, client, settings, dry_run)
 
     posted = sum(1 for r in reports if r.ok)
     log.info("poll finished", extra={"rows": len(reports), "posted": posted})

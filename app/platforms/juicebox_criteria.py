@@ -61,6 +61,10 @@ APP = "https://app.juicebox.ai"
 MAX_CRITERIA = 10
 
 ADD_LABEL = "Add Criterion"
+# The redesigned dialog (2026-10-08) holds at most this many criteria and
+# hides `Add Criterion` once they exist. Below it, a missing or greyed button
+# is a fault to report, not a cap to work around.
+ROW_CAP = 8
 SAVE_LABEL = "Update"
 
 # Juicebox paints late enough that a fixed wait reads a half-mounted dialog as
@@ -75,9 +79,20 @@ ROW_POLL_MS = 250
 # Shared by every lookup below, so the module does not contradict itself about
 # how the dialog is recognised - which it did until 2026-09-22, when the button
 # lookup demanded an exact innerText the heading lookup already normalised.
+# A criterion row, in both dialogs Juicebox has shipped: `textarea#criterion_N`
+# until the 2026-10-08 redesign, `textarea[aria-label="Criterion N"]` since
+# (placeholder "Enter a criterion", with an aria-hidden twin textarea for
+# auto-sizing beside each one). The id-only lookup counted 0 rows on the new
+# dialog and reported "Add Criterion added nothing" (2026-11-04).
+ROW_SELECTOR = "textarea[id^=criterion_], textarea[aria-label^='Criterion ']"
+# What names a row for WRITE: its id on the old dialog, its aria-label on the new.
+ROW_KEY = "(el) => el.id || el.getAttribute('aria-label') || ''"
+
 JS_HELPERS = """
   const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
   const panes = () => [...document.querySelectorAll('[class*=MuiDialog-paper],[role=dialog]')];
+  const rowsIn = (el) => [...el.querySelectorAll(\"""" + ROW_SELECTOR + """\")]
+    .filter(t => !t.hasAttribute('aria-hidden'));
   const titleOf = (el) => {
     const h = el.querySelector('[class*=MuiDialogTitle],h1,h2,h3,h4,h5,h6');
     return norm(h ? h.innerText : norm(el.innerText).slice(0, 60));
@@ -85,7 +100,7 @@ JS_HELPERS = """
   // The rows are the one signal that cannot be renamed. A heading is checked
   // second because a search with no criteria yet has no rows, and Osano's
   // cookie banner - also role=dialog, also earlier in the DOM - has neither.
-  const isCriteria = (el) => !!el.querySelector('textarea[id^=criterion_]')
+  const isCriteria = (el) => rowsIn(el).length > 0
     || /criteri/i.test(titleOf(el))
     || norm(el.innerText).toLowerCase().startsWith('criteri');
   const criteriaDialog = () => panes().find(isCriteria) || null;
@@ -98,7 +113,7 @@ DIALOG_INFO = "() => {" + JS_HELPERS + """
   return {
     found: !!hit,
     title: hit ? titleOf(hit) : '',
-    rows: hit ? hit.querySelectorAll('textarea[id^=criterion_]').length : 0,
+    rows: hit ? rowsIn(hit).length : 0,
     // Buttons say the dialog has finished mounting, which matters for a search
     // whose criteria list is legitimately empty.
     ready: hit ? [...(hit.closest('[class*=MuiDialog-root]') || hit)
@@ -108,16 +123,16 @@ DIALOG_INFO = "() => {" + JS_HELPERS + """
   };
 }"""
 
-READ = """() => {
-  const rows = [...document.querySelectorAll('textarea[id^=criterion_]')]
-    .filter(el => !el.hasAttribute('aria-hidden'));
-  return rows.map(el => ({id: el.id, value: el.value || ''}));
+READ = "() => {" + JS_HELPERS + """
+  const key = """ + ROW_KEY + """;
+  return rowsIn(document).map(el => ({id: key(el), value: el.value || ''}));
 }"""
 
 # React ignores a plain `.value =`; the native setter plus an input event is
 # what its onChange actually listens to.
 WRITE = """([id, text]) => {
-  const el = document.getElementById(id);
+  const el = document.getElementById(id)
+    || [...document.querySelectorAll('textarea')].find(t => t.getAttribute('aria-label') === id);
   if (!el) return false;
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLTextAreaElement.prototype, 'value').set;
@@ -400,13 +415,20 @@ async def _add_row(page: "Page", have: int, wanted: int) -> list[dict]:
     )
 
 
-async def _write_list(page: "Page", ranked: list[str]) -> list[str]:
+async def _write_list(page: "Page", ranked: list[str]) -> tuple[list[dict], list[str]]:
     """Fill the dialog's rows with `ranked`, growing the list as it goes.
 
-    A row is filled before the next is added, not after all of them: Juicebox
-    greys Add Criterion out while the last row is blank, and a click that adds
+    Returns the rows written and the criteria that did not fit. A row is
+    filled before the next is added, not after all of them: Juicebox greys
+    Add Criterion out while the last row is blank, and a click that adds
     nothing then points at the row it stopped on rather than at a total that
     came up short much later.
+
+    The redesigned dialog (2026-10-08) caps a search at 8 criteria and hides
+    `Add Criterion` once the cap is reached. Ranked top-down, the rows that
+    exist take the most important criteria and the rest are reported
+    dropped - a list cut short beats no list at all, which is what raising
+    here left behind on 2026-11-04.
     """
     info = await page.evaluate(DIALOG_INFO)
     if not info.get("found"):
@@ -418,9 +440,19 @@ async def _write_list(page: "Page", ranked: list[str]) -> list[str]:
             "search by hand."
         )
     rows = await page.evaluate(READ)
+    dropped: list[str] = []
     for index, text in enumerate(ranked):
         if index >= len(rows):
-            rows = await _add_row(page, len(rows), len(ranked))
+            try:
+                rows = await _add_row(page, len(rows), len(ranked))
+            except PlatformError as exc:
+                if len(rows) < ROW_CAP:
+                    raise
+                log.warning("juicebox criteria capped",
+                            extra={"rows": len(rows), "drafted": len(ranked),
+                                   "why": str(exc)[:160]})
+                dropped = ranked[index:]
+                break
         row = rows[index]
         if not await page.evaluate(WRITE, [row["id"], text]):
             raise PlatformError(
@@ -429,7 +461,7 @@ async def _write_list(page: "Page", ranked: list[str]) -> list[str]:
                 "re-open the search and set the criteria there."
             )
         await page.wait_for_timeout(250)
-    return rows
+    return rows, dropped
 
 
 async def restore_criteria(page: "Page", search_url: str, backup_path: str) -> list[str]:
@@ -444,7 +476,13 @@ async def restore_criteria(page: "Page", search_url: str, backup_path: str) -> l
         raise PlatformError(f"{backup_path} holds no criteria to restore.")
 
     await read_criteria(page, search_url)  # opens the dialog
-    await _write_list(page, criteria)
+    _rows, dropped = await _write_list(page, criteria)
+    if dropped:
+        raise PlatformError(
+            f"Juicebox caps this search's criteria below the backup's "
+            f"{len(criteria)} rows; {len(dropped)} could not be put back. "
+            "Nothing was saved."
+        )
     saved = await page.evaluate(CLICK_IN_DIALOG, SAVE_LABEL)
     if not saved.get("ok"):
         raise PlatformError(_click_failure(saved))
@@ -514,7 +552,15 @@ async def set_criteria(
 
     # A row we do not write keeps whatever a recruiter put there: shrinking the
     # list is not this automation's call.
-    rows = await _write_list(page, ranked)
+    rows, dropped = await _write_list(page, ranked)
+    if dropped:
+        kept = len(ranked) - len(dropped)
+        report.after = ranked[:kept]
+        report.warnings.append(
+            f"Juicebox caps this search at {kept} criteria; {len(ranked)} were "
+            f"drafted, so the {len(dropped)} least important were dropped: "
+            + "; ".join(dropped)
+        )
 
     if len(rows) > len(ranked):
         report.warnings.append(

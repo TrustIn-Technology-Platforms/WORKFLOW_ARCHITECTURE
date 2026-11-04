@@ -853,6 +853,50 @@ def delete_row_command(
     _print_delete(report, dry_run)
 
 
+@app.command("update-row")
+def update_row_command(
+    page: str = typer.Option(..., "--page", help="The Notion page id or URL."),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run reads the document and says what it would set, changing nothing.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Bring a posted row's sourcing up to its document on the ticked
+    platforms, posting nothing again - what setting its status to Ready to
+    Update does in the service. Juicebox only, so far.
+    """
+    from app.notion.client import NotionClient
+    from app.pipeline import update_row
+
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+
+    async def _go() -> Any:
+        async with NotionClient(settings) as client:
+            row = await client.get_row(page)
+            return await update_row(row, client, settings, dry_run)
+
+    try:
+        report = asyncio.run(_go())
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+    console.print(f"\n[bold]{report.title}[/bold]")
+    for result in report.results:
+        colour = "green" if result.ok else "red"
+        console.print(f"  [{colour}]{result.platform}: {result.outcome.value}[/{colour}]  "
+                      f"{result.sourcing_url or ''}")
+        if result.detail:
+            console.print(f"    [dim]{result.detail[:600]}[/dim]")
+    if report.error:
+        console.print(f"\n[red]{report.error}[/red]")
+    if dry_run:
+        console.print("[dim]Dry run: nothing was changed, on the platforms or the row. Use --live.[/dim]")
+
+
 @app.command("delete")
 def delete_command(
     platform: str = typer.Argument(..., help="Recipe key: noon, juicebox, loxo, wellfound."),

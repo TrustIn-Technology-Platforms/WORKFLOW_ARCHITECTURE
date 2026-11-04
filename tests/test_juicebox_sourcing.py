@@ -385,3 +385,14 @@ def test_no_new_project_or_two_at_once_opens_nothing():
         {"id": "d" * 20, "title": "Someone's role"},
     ]
     assert new_project_id(before, others)[0] is None
+
+
+def test_the_search_builder_is_the_projects_search_mode_not_its_home():
+    # 2026-10-08: /home became an overview dashboard with no Job description
+    # button; the builder is the project's own page in search mode.
+    from app.platforms.juicebox_sourcing import project_search_url
+
+    want = "https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW?mode=search"
+    assert project_search_url("https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW/home") == want
+    assert project_search_url("https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW") == want
+    assert project_search_url("https://app.juicebox.ai/project/AXAaleEq2JfO29jIjBXW/search?search_id=9") == want

@@ -444,6 +444,11 @@ class NotionClient:
             page_id, {self.settings.prop_status: self.settings.status_deleting}
         )
 
+    async def mark_updating(self, page_id: str) -> None:
+        await self.update_properties(
+            page_id, {self.settings.prop_status: self.settings.status_updating}
+        )
+
     async def mark_deleted(self, page_id: str, detail: str | None = None) -> None:
         """Status Deleted, `Error` and `Post URL` cleared. What each platform
         said is already in the `Notes` log, line by line, links included;

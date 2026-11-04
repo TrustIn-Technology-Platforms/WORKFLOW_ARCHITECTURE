@@ -711,7 +711,70 @@ The card is the screen to recognise: a page with a `Project Closed` heading
 and a `Return Home` button is a closed project's URL, not an expired session
 and not a slow paint.
 
-## Unattended sign-in (2026-09-21)
+## The search builder moved, and `Ready to Update` (2026-11-04)
+
+Every Juicebox run since the 2026-10-08 redesign had left a
+`juicebox-sourcing-failed` artifact on the server (HOAi 2026-11-03 21:49,
+Dedalus, Jani and Basis on 2026-11-04). Each shows the same screen: the
+project created and renamed, and its `/home` now the Agent 4.0 **overview
+dashboard** - "Hello, Marcus", charts, "Your recents", "Your tasks" - with
+no search controls on it. `open_project` waited there for a `Job description`
+button, gave up after 60 s with "never offered the Job description search",
+and the run went on as a success with a warning the board dropped (a board
+with a `Notes` column never showed a successful run's warnings).
+
+**Where the search lives now.** The project's own page in search mode:
+`/project/<id>?mode=search`. It shows the Search tab selected, a prompt box
+("Describe who you're looking for..."), and under it **Find similar · Job
+description · Boolean · Select manually**. The sidebar's "New search" is a
+link to the same URL. `/project/<id>` with no query opens the **Agent** tab
+instead, where none of those exist. Clicking `Job description` opens the same
+dialog as before: "Search by job description", tabs Paste JD / Upload JD, a
+text area, **Search** and Close. From there the flow is unchanged - the
+search opens at `/project/<id>/search?search_id=<id>&kickoff=1`, the filter
+editor opens on "Edit filters", and the chips land as on 2026-09-08.
+
+**Proven live 2026-11-04** with `python -m app.cli juicebox-sourcing --doc
+"ZZ TEST inmail subject - delete me.docx" --name "ZZ TEST sourcing remap -
+delete me" --live --headed`: project `p7bAPm0AR8pV0uvPHjDY` created, search
+`Xu6ZJ4wQq1jXzkSrlStE` built, 12 titles, Location(s) New York + Atlanta (the
+candidate location from the JD), 16 skills, 26 companies (4 refused and
+named: Sure, Ascend, Unit, Middesk), Company Industries cleared, scope
+Current + Past, 6-12 years. Saved and run. **That project is a ZZ TEST
+leftover to delete.**
+
+**The Criteria dialog changed too.** Rows are `textarea[aria-label="Criterion
+N"]` (placeholder "Enter a criterion", an aria-hidden sizing twin beside each)
+instead of `textarea#criterion_N`; the id-only lookup counted 0 rows and
+reported "Add Criterion added nothing". The dialog holds at most **8**
+criteria and hides `Add Criterion` at that count (`ROW_CAP`). The writer now
+reads both shapes, fills the rows that exist with the most important criteria
+and names the ones that did not fit, rather than saving nothing. Proven live
+2026-11-05 on the ZZ TEST search above: 10 drafted, 8 written and saved, 2
+reported dropped. Below the cap a missing or greyed button is still a fault
+the row reports.
+
+**Two things the page shows that are not what they look like.** The URL's
+project id is not the project on screen: the "Current project" in the
+sidebar is app state, switched with "Switch project", and the heading
+follows it. And a sequence is created inside whichever project is current at
+the time - the previous row's - so Basis's sequence sits in Jani's project.
+The Sequences list shows them all regardless.
+
+**`Ready to Update`** ([D-031](../11-decisions.md#d-031)): a posted row set
+to this status with Juicebox ticked gets its sourcing brought up to the
+document without posting again. The driver (`JuiceboxAdapter._update`) lists
+the account's projects through `GET /api/projects`, takes the row's
+`Juicebox Project` column, else the project the row's post recorded (if
+open), else the newest open non-agent project titled `project_title(role
+name)`, else creates one; the search from `Juicebox Search`, else the one
+the post recorded, else the JD search; then `set_up_sourcing` and
+`set_criteria` as on a post. The row's `Notes` gets `sourcing updated` with
+the search's link, and the row goes back to Posted. Every post now also
+writes `sourcing set` / `sourcing failed` on its own line, so this cannot
+hide again.
+
+
 
 `platforms/juicebox.yaml` carries `login.steps` for an email + password form
 (`JUICEBOX_LOGIN_USERNAME` / `_PASSWORD`;
