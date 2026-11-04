@@ -222,6 +222,7 @@ _MAX_FIELD_VALUE_CHARS = 55
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "location": ("location", "based in", "where", "site", "office", "region"),
     "salary": ("salary", "rate", "package", "compensation", "pay", "salary range"),
+    "equity": ("equity", "equity range", "stock options"),
     "employment_type": (
         "type", "contract", "contract type", "employment type", "hours",
         "job type", "term",
@@ -369,6 +370,30 @@ def parse_document(blocks: list[Block]) -> ParsedDocument:
         key: _build_platform_advert(key, sections_for, advert, warnings)
         for key, sections_for in found.platform_adverts.items()
     }
+
+    # The client's JD is the last place a package is looked for, and only for
+    # an advert that states none: the title line and a `Salary:` line are the
+    # recruiter's own, anonymised number, and they win. Said on the row when
+    # it happens, because the client's real figure then goes on a public board
+    # (asked for 2026-11-05 - a title line without a salary left Wellfound's
+    # boxes empty while the JD stated the range).
+    adverts = [a for a in (advert, *platform_adverts.values()) if a is not None]
+    if client_jd:
+        jd_salary = _salary_in_jd(client_jd)
+        jd_equity = _equity_in(client_jd)
+        if jd_salary and any(not a.salary for a in adverts):
+            for each in adverts:
+                if not each.salary:
+                    each.salary = jd_salary
+            warnings.append(
+                f"The advert states no salary; {jd_salary!r} was taken from the "
+                "client's job description. Write the salary in the title line to "
+                "override it."
+            )
+        if jd_equity:
+            for each in adverts:
+                if not each.equity:
+                    each.equity = jd_equity
 
     # An email with no subject of its own goes out under the document's shared
     # Subject, else the role's title - which is what recruiters write by hand
@@ -997,6 +1022,7 @@ def _build_platform_advert(
         body_html=built.body_html,
         location=built.location or inherited.location,
         salary=built.salary or _salary_in(title) or inherited.salary,
+        equity=built.equity or _equity_in(title) or inherited.equity,
         employment_type=built.employment_type or inherited.employment_type,
         category=built.category or inherited.category,
         reference=built.reference or inherited.reference,
@@ -1091,6 +1117,124 @@ def _salary_in(title: str) -> str | None:
     return None
 
 
+# A line of a JD that is about money raised, not money paid. "$20M Series A",
+# "$5M ARR" and "valued at $400M" all fail _SALARY_SANITY on the figure alone
+# ("$20" clipped), but "raised $20,000,000" would not, so the line is skipped
+# outright.
+_FUNDING_LINE = re.compile(
+    r"\b(?:raised|raise|funding|round|series\s+[a-e]\b|seed|valuation|valued|"
+    r"arr|mrr|revenue|backed|investors?|ipo|burn|"
+    # ...and money the company takes in or spends: "our customers pay us
+    # $150,000" carries the word pay and is not the package.
+    r"customers?|clients?|contracts?|costs?|budget|spend|pricing|deals?)\b",
+    re.IGNORECASE,
+)
+# A line that names the package, so a single figure on it is a salary and not
+# a number that happens to carry a currency sign.
+_PACKAGE_LINE = re.compile(
+    r"\b(?:salary|salaries|compensation|comp|pay|base|package|ote|remuneration|"
+    r"wage|earn(?:ings)?|per\s+(?:year|annum))\b",
+    re.IGNORECASE,
+)
+_SALARY_RANGE_OR_CAP = re.compile(r"up\s+to|-|–|—|\bto\b", re.IGNORECASE)
+
+# A label a JD puts on a line of its own, above the value: "Salary", a blank,
+# "$180K - $250K". Short and without a figure, or it is prose of its own.
+_MAX_LABEL_LINE_CHARS = 40
+
+
+def _labelled_lines(text: str) -> list[str]:
+    """The JD's non-empty lines, each prefixed with the short label line above
+    it when there is one - so "Equity" over "0.1-0.3%" reads as "Equity:
+    0.1-0.3%" and the rules that need the word and the figure together see
+    both (the shape of the first real JD this was run on, 2026-11-05).
+    """
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    joined: list[str] = []
+    for index, line in enumerate(lines):
+        previous = lines[index - 1] if index else ""
+        if (
+            previous
+            and len(previous) <= _MAX_LABEL_LINE_CHARS
+            and not re.search(r"\d", previous)
+            and not previous.endswith((".", "!", "?"))
+        ):
+            joined.append(f"{previous.rstrip(':')}: {line}")
+        else:
+            joined.append(line)
+    return joined
+
+
+def _salary_in_jd(text: str) -> str | None:
+    """A salary a client's JD states, or None.
+
+    Stricter than the title rule, because a JD is prose: a figure only counts
+    as the package when it is a range or an `up to`, or sits on a line that
+    says it is one. A lone `$150,000` in a paragraph is left alone, and so is
+    every line about a round or the ARR. Prefers a range over a single figure
+    when the JD states both (the range fills both of Wellfound's boxes).
+    """
+    single: str | None = None
+    for line in _labelled_lines(text):
+        if _FUNDING_LINE.search(line):
+            continue
+        for match in _TITLE_SALARY.finditer(line):
+            # "$150,000." at the end of a sentence: the stop is not a figure.
+            snippet = match.group(0).strip().rstrip(".,;:")
+            if not _SALARY_SANITY.search(snippet):
+                continue
+            if _SALARY_RANGE_OR_CAP.search(snippet):
+                return snippet
+            if single is None and _PACKAGE_LINE.search(line):
+                single = snippet
+    return single
+
+
+# "0.1% - 0.5%", "0.25%", "up to 1% equity", "equity: 0.1-0.3%". A percentage
+# only counts on a line that says equity, so a 4% pension match, a 10% bonus
+# or "20% of your time" never reach Wellfound's equity boxes.
+_EQUITY_LINE = re.compile(r"\b(?:equity|stock\s*options?|options|ownership|esop|shares)\b", re.IGNORECASE)
+# A percentage in the same clause as the equity word that is plainly not the
+# grant: a pension match, a bonus, a discount, time.
+_NOT_EQUITY = re.compile(
+    r"401|pension|match|bonus|discount|of\s+(?:your|the)\s+time|remote|retention|tax",
+    re.IGNORECASE,
+)
+_EQUITY_RANGE = re.compile(
+    r"""(?:up\s+to\s+)?
+        (\d+(?:\.\d+)?)\s*%?
+        (?:\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?))?\s*%""",
+    re.IGNORECASE | re.VERBOSE,
+)
+# A full stop splits a clause only when it is not a decimal point: "0.1%"
+# must survive the split. Brackets do not split - "equity (0.25%)" is one
+# statement.
+_CLAUSE_BREAK = re.compile(r"[;,•|]|\.(?!\d)|\band\b", re.IGNORECASE)
+
+
+def _equity_in(text: str) -> str | None:
+    """The equity percentage(s) a text states, as written, or None.
+
+    Clause by clause, not line by line: "401(k) with a 4% match, and equity"
+    carries the word and a percentage on one line, and only splitting at the
+    comma keeps the 4% out of Wellfound's equity boxes.
+    """
+    for line in _labelled_lines(text):
+        if not _EQUITY_LINE.search(line):
+            continue
+        for clause in _CLAUSE_BREAK.split(line):
+            if not _EQUITY_LINE.search(clause) or _NOT_EQUITY.search(clause):
+                continue
+            for match in _EQUITY_RANGE.finditer(clause):
+                low = float(match.group(1))
+                high = float(match.group(2)) if match.group(2) else low
+                # Equity on offer is a fraction of a company; a figure past
+                # this is something else (a 100% remote role, say).
+                if 0 < low <= 25 and 0 < high <= 25:
+                    return match.group(0).strip()
+    return None
+
+
 def _finish_advert(
     title: str, body_blocks: list[Block], fields: dict[str, str], warnings: list[str]
 ) -> Advert:
@@ -1107,6 +1251,7 @@ def _finish_advert(
         body_html=body_html,
         location=known.get("location"),
         salary=known.get("salary") or _salary_in(title),
+        equity=known.get("equity") or _equity_in(f"{title}\n{body_text}"),
         employment_type=known.get("employment_type"),
         category=known.get("category"),
         reference=known.get("reference"),

@@ -86,6 +86,9 @@ class Advert:
     reference: str | None = None
     tags: list[str] = field(default_factory=list)
     fields: dict[str, str] = field(default_factory=dict)
+    # The equity on offer, as written ("0.1% - 0.5%", "up to 1% equity").
+    # Wellfound has a pair of percent boxes for it (2026-11-05).
+    equity: str | None = None
 
     def as_context(self) -> dict[str, Any]:
         return {
@@ -94,6 +97,7 @@ class Advert:
             "body_html": self.body_html,
             "location": self.location or "",
             "salary": self.salary or "",
+            "equity": self.equity or "",
             "employment_type": self.employment_type or "",
             "category": self.category or "",
             "reference": self.reference or "",

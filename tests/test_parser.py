@@ -796,6 +796,111 @@ def test_a_labelled_salary_line_beats_the_title():
     assert document.advert.salary == "$250,000 - $280,000"
 
 
+def _with_jd(title_line: str, *jd_lines: str) -> list:
+    blocks = [
+        _block(title_line),
+        _block("Email 1", style="heading", level=2),
+        _block("Hi {{first_name}}."),
+        _block("Wellfound", style="heading", level=2),
+        _block("Anonymised board copy."),
+        _block("Original Job Description", style="heading", level=2),
+    ]
+    blocks.extend(_block(line) for line in jd_lines)
+    return blocks
+
+
+@pytest.mark.parametrize(
+    "jd_lines, expected",
+    [
+        (("We pay well.", "Base salary $180,000 – $220,000 plus equity."), "$180,000 – $220,000"),
+        (("Compensation: up to $260K depending on experience.",), "up to $260K"),
+        (("Salary: $150,000.",), "$150,000"),
+        (("The range is $180K-$220K.",), "$180K-$220K"),
+        # The label on its own line above the figure - the first real JD's shape.
+        (("Salary", "$150,000"), "$150,000"),
+        (("Compensation", "$180K - $250K", "Equity", "0.1-0.3%"), "$180K - $250K"),
+    ],
+)
+def test_a_salary_the_client_jd_states_fills_an_advert_that_has_none(jd_lines, expected):
+    """Asked for 2026-11-05: a title line with no salary left Wellfound's
+    boxes empty while the Original Job Description stated the range."""
+    document = parser.parse_document(_with_jd("Platform Engineer / Seed / NY", *jd_lines))
+    assert document.advert_for("wellfound").salary == expected
+    assert any("taken from the client's job description" in w for w in document.warnings)
+
+
+@pytest.mark.parametrize(
+    "jd_lines",
+    [
+        ("We have raised $20,000,000 from top investors.",),
+        ("Backed by a $120M Series A.",),
+        ("Our customers pay us $150,000 a year on average.",),  # lone figure, no package word
+        ("Contracts worth $200,000 - that is not a salary line but has no currency range",),
+        ("Equity: 0.1% - 0.5%",),
+        ("Series A", "$20,000,000"),
+        ("We have shipped a lot this year.", "$150,000"),  # the line above is prose, not a label
+    ],
+)
+def test_money_in_a_jd_that_is_not_the_package_is_left_alone(jd_lines):
+    document = parser.parse_document(_with_jd("Platform Engineer / Seed / NY", *jd_lines))
+    assert document.advert_for("wellfound").salary is None
+    assert not any("taken from the client's job description" in w for w in document.warnings)
+
+
+def test_the_title_line_salary_beats_the_client_jd():
+    document = parser.parse_document(
+        _with_jd("Platform Engineer / Seed / NY / up to $250K + equity", "Salary: $300,000 - $350,000.")
+    )
+    assert document.advert_for("wellfound").salary == "up to $250K"
+    assert not any("taken from the client's job description" in w for w in document.warnings)
+
+
+@pytest.mark.parametrize(
+    "jd_lines, expected",
+    [
+        (("Equity: 0.1% - 0.5%",), "0.1% - 0.5%"),
+        (("Meaningful equity (0.25%) and a 401(k).",), "0.25%"),
+        (("Stock options of up to 1% depending on level.",), "up to 1%"),
+        (("Salary $200K plus 0.1–0.3% equity.",), "0.1–0.3%"),
+        # The label on its own line above the figure - the first real JD's shape.
+        (("Salary", "$180K - $250K", "Equity", "0.1-0.3%"), "0.1-0.3%"),
+        (("Series A", "$20,000,000", "Equity", "0.5%"), "0.5%"),
+    ],
+)
+def test_equity_the_client_jd_states_reaches_the_advert(jd_lines, expected):
+    document = parser.parse_document(_with_jd("Platform Engineer / Seed / NY", *jd_lines))
+    assert document.advert_for("wellfound").equity == expected
+
+
+@pytest.mark.parametrize(
+    "jd_lines",
+    [
+        ("401(k) with a 4% match, and equity.",),
+        ("100% remote; equity for everyone.",),
+        ("A 10% bonus and stock options.",),
+        ("We offer equity.",),
+        ("Up to 20% of your time on open source; options available.",),
+    ],
+)
+def test_a_percentage_that_is_not_equity_is_left_alone(jd_lines):
+    document = parser.parse_document(_with_jd("Platform Engineer / Seed / NY", *jd_lines))
+    assert document.advert_for("wellfound").equity is None
+
+
+def test_an_equity_line_in_the_advert_beats_the_jd():
+    document = parser.parse_document(
+        [
+            _block("Platform Engineer / Seed / NY"),
+            _block("Equity: 0.5%"),
+            _block("We are hiring."),
+            _block("Original Job Description", style="heading", level=2),
+            _block("Equity: 0.1% - 0.2%"),
+        ]
+    )
+    assert document.advert is not None
+    assert document.advert.equity == "0.5%"
+
+
 def test_a_board_advert_inherits_the_title_salary():
     """Wellfound reads its own advert; the salary lives in the document title."""
     document = parser.parse_document(

@@ -490,6 +490,41 @@ def _filter_salary_max(value: Any) -> str:
     return "" if bounds is None else str(bounds[1])
 
 
+# Wellfound's equity boxes take a percentage each, 0.0 to 1.0 by their own
+# placeholders but any fraction of a company is accepted (2026-11-05 probe).
+_EQUITY_NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*%?")
+
+
+def _equity_bounds(value: Any) -> tuple[float, float] | None:
+    text = _as_text(value)
+    if not text.strip():
+        return None
+    numbers = [float(m.group(1)) for m in _EQUITY_NUMBER.finditer(text)]
+    numbers = [n for n in numbers if 0 < n <= 100]
+    if not numbers:
+        return None
+    if len(numbers) == 1:
+        return numbers[0], numbers[0]
+    low, high = sorted(numbers[:2])
+    return low, high
+
+
+def _equity_text(number: float) -> str:
+    """`0.5` not `0.50`, `1` not `1.0` - what a person would type."""
+    text = f"{number:.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _filter_equity_min(value: Any) -> str:
+    bounds = _equity_bounds(value)
+    return "" if bounds is None else _equity_text(bounds[0])
+
+
+def _filter_equity_max(value: Any) -> str:
+    bounds = _equity_bounds(value)
+    return "" if bounds is None else _equity_text(bounds[1])
+
+
 _CURRENCY_SIGNS = (("£", "GBP"), ("€", "EUR"), ("$", "USD"))
 _CURRENCY_CODES = re.compile(r"\b(GBP|EUR|USD|CAD|AUD|CHF|INR|SGD)\b", re.IGNORECASE)
 
@@ -540,6 +575,8 @@ _FILTERS = {
     "salary_min": _filter_salary_min,
     "salary_max": _filter_salary_max,
     "salary_currency": _filter_salary_currency,
+    "equity_min": _filter_equity_min,
+    "equity_max": _filter_equity_max,
     "default": _filter_default,
     "noon_tokens": _filter_noon_tokens,
     "juicebox_tokens": juicebox_tokens,

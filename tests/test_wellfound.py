@@ -77,7 +77,8 @@ def test_the_update_runs_the_posting_steps_against_the_edit_form():
     assert "San Francisco" not in selectors, "a second location tag would be added"
     assert "allowInternationalApplicants" not in selectors
     assert "remoteConfigKind" not in selectors
-    for wanted in ("#form-input--title", ".CodeMirror", "#form-input--salaryMin", "yearsExperienceMin"):
+    for wanted in ("#form-input--title", ".CodeMirror", "#form-input--salaryMin",
+                   "#form-input--equityMin", "#form-input--equityMax", "yearsExperienceMin"):
         assert wanted in selectors
 
     submit = next(s for s in steps if s.submit)

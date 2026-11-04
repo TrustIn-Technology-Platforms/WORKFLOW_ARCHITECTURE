@@ -167,6 +167,17 @@ Two positions are fixed:
 - **The salary goes in the title as a range.** `$220K – $260K` fills
   Wellfound's minimum and maximum. `up to $260K` fills both with 260K. The body
   is never read for a salary, because adverts name funding rounds.
+- **A title line with no salary falls back to the `Original Job
+  Description`** (2026-11-05): a range or an `up to` anywhere in it, or a
+  single figure on a line that says salary / compensation / pay. Lines about
+  a round, ARR or investors are skipped. The row's `Notes` says when this
+  happened, because the client's real figure then goes on the board; write
+  the salary in the title line to override it.
+- **Equity**, when the client states a percentage, fills Wellfound's equity
+  boxes: an `Equity: 0.1% - 0.5%` line in the advert, a percentage next to
+  the word equity in the advert's text, else the same in the `Original Job
+  Description`. A pension match, a bonus or "100% remote" on the same line
+  is not read as equity.
 - **`Location:` is a real place.** Wellfound accepts only a city from its own
   list. The usual short forms (`SF`, `NY`, `LD`, `LA`...) are expanded by the
   service (`LOCATION_ALIASES`), so they are fine; `Remote` is not a city. For

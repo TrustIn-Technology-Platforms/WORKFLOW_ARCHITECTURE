@@ -79,7 +79,10 @@ recipe, **not yet run against the edit form**
 Prompted by the parser reading a `Job Description` sub-heading inside the
 Wellfound section as the client's JD, which cut every such Wellfound draft to
 its opening line; fixed the same day (an explicit `Original Job Description`
-heading now wins, and the sub-heading stays in the advert).
+heading now wins, and the sub-heading stays in the advert). The same day: an
+advert with no salary takes the client JD's range (said on the row), and a
+stated equity percentage fills Wellfound's equity boxes, mapped from the live
+form - unproven on a saved draft.
 The next morning (2026-09-03) the same run gained the **Companies** filter —
 about twenty companies of the client's stage and kind, drafted by Claude and
 matched to Juicebox's index by exact name — and **Company Funding Stages**,

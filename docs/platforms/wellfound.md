@@ -110,7 +110,8 @@ disabled until the required fields are in, then enable together.
 | Remote policy * | `label[for='form-input--remoteConfigKind--ONSITE']` (`ONSITE_OR_REMOTE`, `REMOTE`) | radio, hidden | `remote_kind` default `ONSITE`. The remote kinds reveal a required *Hiring regions* field the recipe does not fill. Choosing In office auto-ticks "Auto-skip applicants who cannot relocate" |
 | Currency | `#react-select-form-input--currencyCode-input`, default USD | react-select | only when `salary | salary_currency` is non-empty (£ → GBP) |
 | Salary | `#form-input--salaryMin`, `#form-input--salaryMax` | text | `salary_min` / `salary_max` filters split "$180k - $220k"; spread must be ≤ $80k (the filter narrows from the bottom) |
-| Equity / No Equity | `#form-input--noEquity--true` | checkbox | untouched — Publish enables without it |
+| Equity range | `#form-input--equityMin`, `#form-input--equityMax` | number, percent (placeholders `0.0` – `1.0`; read off the live form 2026-11-05, [probe](../../scripts/probe_wellfound_salary_equity.py)) | **filled** from `advert.equity` via `equity_min` / `equity_max`: an `Equity:` line, a percentage next to the word equity in the advert, else the client's JD. Empty leaves both alone |
+| No Equity | `#form-input--noEquity--true` | checkbox | untouched — Publish enables without it |
 | Recruiting contact, Subscribers, Coworkers, Company size | prefilled (Marcus; 1-10) | react-select | untouched |
 | Publish / **Save draft** | `button:has-text('Save draft')` | buttons, top right — **both confirmed present on the live form, 2026-08-31** (`Save draft`, `Publish`, alongside `Add another role`) | **Save draft is `submit: true`** (changed 2026-08-31). The recipe never publishes: an advert is client-facing, so an unattended run leaves it in drafts for a recruiter to read and publish. Publish is one click from a draft; an unpublish is not |
 

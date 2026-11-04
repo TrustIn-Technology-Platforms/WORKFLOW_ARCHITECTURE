@@ -84,6 +84,25 @@ def test_salary_bounds(text, low, high):
 
 
 @pytest.mark.parametrize(
+    "text, low, high",
+    [
+        ("0.1% - 0.5%", "0.1", "0.5"),
+        ("0.25%", "0.25", "0.25"),
+        ("up to 1%", "1", "1"),
+        ("0.1–0.3%", "0.1", "0.3"),
+        ("0.50% to 0.10%", "0.1", "0.5"),
+        ("", "", ""),
+        ("equity", "", ""),
+    ],
+)
+def test_equity_bounds(text, low, high):
+    """Wellfound's two percent boxes (2026-11-05 probe)."""
+    ctx = {"advert": {"equity": text}}
+    assert render("{{ advert.equity | equity_min }}", ctx) == low
+    assert render("{{ advert.equity | equity_max }}", ctx) == high
+
+
+@pytest.mark.parametrize(
     "text, code",
     [("£90k", "GBP"), ("$180k", "USD"), ("€70,000", "EUR"), ("180k gbp", "GBP"), ("180k", "")],
 )

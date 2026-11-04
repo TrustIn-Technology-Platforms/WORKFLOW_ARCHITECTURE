@@ -276,6 +276,19 @@ steps:
     value: "{{ advert.salary | salary_max }}"
     optional: true
 
+  # Equity range: two percent boxes beside the salary pair, read off the live
+  # form on 2026-11-05 (placeholders 0.0 and 1.0; `No Equity` is a checkbox
+  # the recipe never ticks). `advert.equity` comes from an `Equity:` line, the
+  # advert's own text, else the client's JD; empty leaves both boxes alone.
+  - action: fill
+    selector: "#form-input--equityMin"
+    value: "{{ advert.equity | equity_min }}"
+    optional: true
+  - action: fill
+    selector: "#form-input--equityMax"
+    value: "{{ advert.equity | equity_max }}"
+    optional: true
+
   - action: screenshot
     name: wellfound-filled
 
