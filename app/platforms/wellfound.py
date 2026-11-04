@@ -107,30 +107,35 @@ class WellfoundAdapter(RecipeAdapter):
     ) -> RunReport:
         """Write the document's advert over the listing this row already made.
 
-        Title, description, position type, primary role, years and salary -
-        the fields the document carries. Skills and location stay as posted
-        (their widgets add rather than replace), and so do the visa and remote
-        radios (the document never set them). A listing a recruiter has
+        Title, description, position type, primary role, years, salary and
+        equity - the fields the document carries. Skills and location stay as
+        posted (their widgets add rather than replace), and so do the visa and
+        remote radios (the document never set them). A listing a recruiter has
         published since is left alone: an unattended run must not change what
-        candidates can see, the same line the delete holds.
+        candidates can see, the same line the delete holds. A row with no
+        listing to rewrite - none recorded, or the recorded one deleted on
+        Wellfound - gets a fresh draft, as a post would make it.
         """
         from app.platforms.wellfound_delete import read_job
 
         found = find_listing(row, self.settings)
-        if found is None:
-            raise PlatformError(
-                "Wellfound: this row has no record of a listing to update - it was "
-                "posted before the ledger existed, or its post failed. Put the "
-                f"listing's link (wellfound.com/recruit/jobs/<id>) in the "
-                f"{self.settings.prop_post_url} column, or post the row again."
+        job = await read_job(page, found[0]) if found else None
+        if job is None or not job["exists"]:
+            # Nothing to rewrite, so the update posts: a fresh draft, exactly
+            # as Ready to Post would make it, recorded in the ledger as new.
+            # Said in the report (and on the row) because a recruiter reading
+            # "updated" would look for their old draft and find it unchanged
+            # - or, when it was deleted on Wellfound, not at all.
+            why = (
+                "no listing is recorded for this row"
+                if found is None
+                else f"the listing this row made ({found[0]}) is gone from Wellfound"
             )
+            log.info("wellfound update - creating a listing instead", extra={"why": why})
+            report = await self._drive(page, document, row)
+            report.warnings.insert(0, f"listing: {why} - a new draft was created, not updated")
+            return report
         job_id, how = found
-        job = await read_job(page, job_id)
-        if not job["exists"]:
-            raise PlatformError(
-                f"Wellfound: the listing this row made ({job_id}) is gone - it was "
-                "deleted on Wellfound. Post the row again instead."
-            )
         if job["published"]:
             raise PlatformError(
                 f"Wellfound: the listing {job.get('title')!r} ({job_id}) has been "

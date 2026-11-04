@@ -870,9 +870,13 @@ async def update_row(
              extra={"page_id": row.page_id, "title": row.title, "dry_run": dry_run})
 
     async def progress(result: PostResult) -> None:
-        if result.outcome is Outcome.POSTED:
-            # Juicebox refreshes a search; Wellfound rewrites the advert.
-            action = "advert updated" if result.platform == "wellfound" else "sourcing updated"
+        if result.outcome is Outcome.POSTED and result.platform == "wellfound":
+            # Wellfound rewrites the advert. A rewrite records nothing new in
+            # the ledger (the listing is already there); an update that found
+            # no listing posts a fresh draft, and its records are how it says so.
+            action = "advert created (none recorded to update)" if result.records else "advert updated"
+        elif result.outcome is Outcome.POSTED:
+            action = "sourcing updated"
         elif result.outcome is Outcome.FAILED:
             action = "update failed"
         else:

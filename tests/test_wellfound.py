@@ -155,14 +155,67 @@ def test_a_published_listing_is_left_alone(monkeypatch, tmp_path):
     assert _Engine.ran == []
 
 
-def test_a_listing_that_is_gone_says_to_post_again(monkeypatch, tmp_path):
+def _posting(monkeypatch):
+    """Stands in for the post path: a fresh draft with its records."""
+    from app.platforms.engine import RunReport
+
+    async def _drive(self, page, document, row):
+        report = RunReport(captures={"post_url": "https://wellfound.com/recruit/jobs/999"})
+        report.records["job"] = "https://wellfound.com/recruit/jobs/999"
+        report.submitted = True
+        return report
+
+    monkeypatch.setattr(wf.WellfoundAdapter, "_drive", _drive)
+
+
+def test_a_listing_that_is_gone_is_replaced_by_a_fresh_draft(monkeypatch, tmp_path):
     adapter = _adapter(monkeypatch, tmp_path, {"exists": False})
-    with pytest.raises(PlatformError, match="Post the row again"):
-        asyncio.run(adapter._update(object(), _document(), _row()))
+    _posting(monkeypatch)
+    report = asyncio.run(adapter._update(object(), _document(), _row()))
+    assert _Engine.ran == [], "the edit form was never opened"
+    assert report.post_url == "https://wellfound.com/recruit/jobs/999"
+    assert adapter._records(report)["job"] == "https://wellfound.com/recruit/jobs/999"
+    assert report.warnings[0].startswith("listing: the listing this row made (4656911) is gone")
+    assert "created, not updated" in report.warnings[0]
 
 
-def test_a_row_with_no_listing_says_where_to_put_the_link(monkeypatch, tmp_path):
+def test_a_row_with_no_listing_gets_a_fresh_draft(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
     adapter = wf.WellfoundAdapter(load_recipe(WELLFOUND_YAML), settings=settings, dry_run=False)
-    with pytest.raises(PlatformError, match="Post URL"):
-        asyncio.run(adapter._update(object(), _document(), _row()))
+    _posting(monkeypatch)
+    report = asyncio.run(adapter._update(object(), _document(), _row()))
+    assert report.post_url == "https://wellfound.com/recruit/jobs/999"
+    assert report.warnings[0].startswith("listing: no listing is recorded for this row")
+
+
+def test_the_notes_line_says_created_when_an_update_posted(monkeypatch, tmp_path):
+    """The row must not read 'advert updated' when the old draft is untouched."""
+    import asyncio as _asyncio
+    from app.models import Outcome, PostResult
+    from app.pipeline import update_row
+    from tests.test_pipeline import _UpdateClient, _update_setup
+
+    settings = _update_setup(monkeypatch, tmp_path, {})
+    outcomes = iter([
+        PostResult(platform="wellfound", outcome=Outcome.POSTED,
+                   post_url="https://wellfound.com/recruit/jobs/999",
+                   records={"job": "https://wellfound.com/recruit/jobs/999"}),
+        PostResult(platform="wellfound", outcome=Outcome.POSTED,
+                   sourcing_url="https://wellfound.com/recruit/jobs/1"),
+    ])
+
+    class _Adapter:
+        supports_update = True
+
+        async def update(self, document, row):
+            return next(outcomes)
+
+    monkeypatch.setattr("app.pipeline.load_recipes", lambda s: {"wellfound": object()})
+    monkeypatch.setattr("app.pipeline.get_adapter", lambda name, **k: _Adapter())
+    client = _UpdateClient()
+    row = NotionRow(page_id="p1", title="ZZ TEST", document_url="x", status="Ready to Update",
+                    platforms=["wellfound"])
+    _asyncio.run(update_row(row, client, settings, dry_run=False))
+    _asyncio.run(update_row(row, client, settings, dry_run=False))
+    actions = [action for _platform, action, _detail, _url in client.notes]
+    assert actions == ["advert created (none recorded to update)", "advert updated"]
