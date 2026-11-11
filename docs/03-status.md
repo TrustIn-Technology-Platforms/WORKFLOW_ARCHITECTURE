@@ -3,7 +3,7 @@
 > **Purpose** What is built, what is next, and where the risk sits.
 > **Audience** Whoever is deciding what to work on.
 > **Status** Living document — update it in the same change that moves a stage.
-> **Last reviewed** 2026-10-09 (Loxo delete built; see "Deleting a row")
+> **Last reviewed** 2026-11-12 (Wellfound pitch template and saved search)
 > **Related** [02-architecture](02-architecture.md) · [platforms/noon](platforms/noon.md)
 
 ## Headline
@@ -20,6 +20,20 @@ this repo. Rows the Notion door posted before (Axl Insurance, FOMO, Arca
 Wealth, Reducto, Thunder Compute) stay up; taking one down is now by hand on
 the platform, or by reopening the door for one `Delete` cycle. Everything
 below describes the service with the door open.
+
+**Amended 2026-11-12: Wellfound gains its recruiter half - a pitch template
+and a saved search per role. Built and proven on ZZ TEST records; not
+deployed.** After the draft advert saves, the run writes the document's
+InMail as the role's pitch template (Settings → Templates) and creates a
+saved search under Find Talent from the shared sourcing profile - role,
+location, three must-have skills, minimum years - with the template attached
+to it. Neither contacts a candidate. Created, read back, rewritten and
+deleted live through `python -m app.cli wellfound-sourcing` and `delete
+wellfound`; `post wellfound --dry-run` runs the half after the form. **Not
+yet run behind a live Save draft, and not on Railway.** The mapping probe
+unlinked one real saved search (2869922) from its job; Sohaib relinked it by
+hand the same day ([platforms/wellfound](platforms/wellfound.md#pitch-template-and-saved-search-2026-11-12),
+[D-032](11-decisions.md#d-032--wellfounds-outreach-is-a-pitch-template-and-its-sourcing-a-saved-search)).
 
 **The full chain runs in production (2026-08-28).** A Notion row set to
 `Ready to Post` is picked up by n8n, POSTed to the Railway-deployed webhook,
@@ -229,6 +243,7 @@ write endpoints have been observed.
 | 5e | Loxo Source filters — titles, skills, years, past companies | **TITLES + SKILLS PROVEN LIVE 2026-09-02; YEARS + COMPANIES BUILT, UNRUN** | [loxo_source.py](../app/platforms/loxo_source.py) writes the Source screen (`/jobs/<id>/source`) and saves a team-shared search; titles and skills proven on job 3658508 and again from Railway on the Axle row 2026-09-02. Years of Experience (five bands) and Past Company (exact company match, list from the client's funding stage — [D-020](11-decisions.md#d-020--past-company-filters-follow-the-clients-funding-stage)) added 2026-09-02 from Loxo's bundle because the session had died; unit-tested, **one `loxo-source --live --headed` run away**. Drafting in [targeting_ai.py](../app/platforms/targeting_ai.py). The Longlist Agent's own panel (`agentJobLinkIds`) is still unopened; [scripts/probe_loxo_longlist.py](../scripts/probe_loxo_longlist.py) maps it. See [platforms/loxo](platforms/loxo.md#the-source-screen---similar-titles-and-skills-2026-09-02) |
 | 5f | Juicebox sourcing — project, JD search, filters | **BUILT AND PROVEN LIVE 2026-09-02** | [juicebox_sourcing.py](../app/platforms/juicebox_sourcing.py), wired into [juicebox.py](../app/platforms/juicebox.py) after the sequence saves — creates the project (or reuses the row's `Juicebox Project`), pastes the Client JD into the Job description search, adds titles / location / skills / min–max years in the filter editor, Save Changes, Run search, reload and read back. Headed run on "ZZ TEST 3 DELETE ME": 9 titles, 12 skills, New York + Atlanta, 6–12 years, 775 matches. Runner `python -m app.cli juicebox-sourcing`; [tests](../tests/test_juicebox_sourcing.py). The first production run (Axle) died on a reserved LogRecord key — see [platforms/juicebox](platforms/juicebox.md#sourcing--project-jd-search-filters-2026-09-02). **Amended 2026-09-03:** two more filters — **Companies** (~20 same-stage companies from `draft_companies`, exact-name matched against Juicebox's autocomplete) and **Company Funding Stages** (every stage from Seed up to the client's own, on a MUI multi-select); `--search <url>` sets the filters on an existing search. **Amended 2026-09-28:** titles / skills / years / companies now come from the shared profile (5g), and the JD pasted is `search_jd` — the Client JD or the composed spec, never the raw advert. See [companies and funding stages](platforms/juicebox.md#companies-and-funding-stages-2026-09-03) |
 | 5g | Shared sourcing profile — one draft for every platform | **BUILT 2026-09-28, NOT YET RUN LIVE** | [sourcing_profile.py](../app/platforms/sourcing_profile.py), `SourcingProfile` + `ParsedDocument.search_jd` in [models.py](../app/models.py) — one Claude draft per document (role reading, similar titles, **must-have and nice-to-have skills including what the role entails unnamed**, years, candidate location, boolean search string), plus the same-stage companies through `draft_companies`; saved as JSON under `artifacts/sourcing/` and reused while the document is unchanged, so noon, Juicebox, Loxo and both CLI sourcing commands configure their searches from one answer ([D-024](11-decisions.md#d-024--one-sourcing-profile-per-document-drafted-once-saved-read-by-every-platform)). A document with no `Client JD` gets a **composed spec** for the platforms' own JD boxes — the raw advert is no longer pasted as a JD (the 2026-09-28 review found a Juicebox search built from the pitch). noon's preamble now carries the whole brief and falls back to the profile's essentials when its extractor reads nothing. [tests/test_sourcing_profile.py](../tests/test_sourcing_profile.py) |
+| 5h | Wellfound pitch template + saved search | **BUILT, PROVEN LIVE ON ZZ TEST 2026-11-12, NOT DEPLOYED** | [wellfound_pitch.py](../app/platforms/wellfound_pitch.py), [wellfound_search.py](../app/platforms/wellfound_search.py), [wellfound_api.py](../app/platforms/wellfound_api.py), `_pitch_and_search` in [wellfound.py](../app/platforms/wellfound.py) - the document's InMail as the role's pitch template; a saved search under Find Talent (role, location, up to `WELLFOUND_SEARCH_MAX_SKILLS` must-have skills, minimum years) with the template attached; both recorded in the ledger, rewritten by `Ready to Update`, removed by a delete. Template 34345 and search 2870017 created and read back, template 34346 rewritten from a second document, all three deleted. Runner `python -m app.cli wellfound-sourcing`. Not yet run behind a live post; the search cannot be linked to a draft job. [tests/test_wellfound_pitch.py](../tests/test_wellfound_pitch.py), [tests/test_wellfound_search.py](../tests/test_wellfound_search.py); [D-032](11-decisions.md#d-032--wellfounds-outreach-is-a-pitch-template-and-its-sourcing-a-saved-search) |
 | 6 | Write back to Notion | **BUILT** | [client.py](../app/notion/client.py) |
 | — | Orchestration | **BUILT** | [pipeline.py](../app/pipeline.py) |
 | — | Sessions / login capture | **BUILT and verified live** | [store.py](../app/sessions/store.py), `capture_login` — the saved noon profile opened `/portal` logged in, headless, on 2026-08-26 |

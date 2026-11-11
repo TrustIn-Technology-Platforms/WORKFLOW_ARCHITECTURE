@@ -11,6 +11,8 @@
 > 2026-09-01; `/health` reports `anthropic_key_set`); without it the skills
 > step skips and, since v9, says so on the row.
 > **Delete built 2026-10-09, never run** - see [Deleting a row](#deleting-a-row-2026-10-09).
+> **Pitch template and saved search built and proven on ZZ TEST records
+> 2026-11-12, not deployed** - see [Pitch template and saved search](#pitch-template-and-saved-search-2026-11-12).
 >
 > Previously: **LIVE — proven 2026-08-31.** `post wellfound --doc <advert.docx> --set Location=… --set Salary=… --live` filled the real *New Job Posting* form and saved job **4656911** as a draft; every field was verified by reading the saved job back through its own `/edit` page, and `Active (7)` was unchanged while `Drafts` went 51 → 53. The recipe submits **Save draft**, never Publish — see [Draft, not publish](#draft-not-publish). Sohaib's decision (2026-08-28): TrustIn posts anonymised adverts from its own account, as the recruiters already do by hand; the [policy risk](#the-policy-problem) is accepted, not removed.
 > **Related** [07-platform-recipes](../07-platform-recipes.md) · [platforms/noon](noon.md) · [platforms/loxo](loxo.md)
@@ -400,3 +402,103 @@ ticked (or `python -m app.cli update-row --page <id> --headed --live`), then
 open the draft on Wellfound and read the title and description back. Record
 the save button and anything the edit form does differently from the New Job
 form.
+
+## Pitch template and saved search (2026-11-12)
+
+> **Status** **BUILT AND PROVEN LIVE on ZZ TEST records, 2026-11-12; not yet
+> deployed, and not yet run behind a real post.** `python -m app.cli
+> wellfound-sourcing --doc … --name "ZZ TEST …" --live` created pitch
+> template 34345 and saved search 2870017, read both back, rewrote a second
+> template (34346) from a different document, and `delete wellfound --record …
+> --live` removed all three. `post wellfound --dry-run` runs the half after
+> the form and reports what it would create. Code:
+> [wellfound_pitch.py](../../app/platforms/wellfound_pitch.py),
+> [wellfound_search.py](../../app/platforms/wellfound_search.py),
+> [wellfound_api.py](../../app/platforms/wellfound_api.py), wired in
+> [wellfound.py](../../app/platforms/wellfound.py) `_pitch_and_search`.
+> Decision: [D-032](../11-decisions.md#d-032--wellfounds-outreach-is-a-pitch-template-and-its-sourcing-a-saved-search).
+
+The recruiter side of Wellfound, beyond the job form. Nav: Dashboard · Jobs ·
+Applicants · **Find Talent** (`/recruit/source`) · **Messages**
+(`/recruit/conversations`) · ATS (`/recruit/track`); Settings holds
+**Templates** (`/recruit/account/templates`). Wellfound has no sequence: a
+candidate is pitched once from a search with *Request to chat*, and the note
+comes from a pitch template. **Neither thing built here contacts anyone.**
+
+### The pitch template
+
+| What | How |
+|---|---|
+| Where | Settings → Templates → *Create new template* → **Pitch template** (`[data-test='CreateDropdown-Item--Pitch template']`; the other kinds are Accept and Reject, for inbound applicants) |
+| Form | `#form-input--title`, `#form-input--recruiterDescription` ("Introduce yourself"), `--cta`, `--companyDescription`, `--teamDescription`, `--companyAchievements`, `--footer` (prefilled `Best,\n<recruiter>`), `--schedulingUrl`; submit `Save pitch template`, disabled until the form changes. Edit is `[data-test='PitchRecipes-Edit--<id>']` and opens the same form |
+| What the team writes | title = the job's title; **the whole message in the first box**, the rest empty, footer as prefilled (all sixteen pitch templates on the account, 900–1,700 characters) |
+| What the run writes | title = the Wellfound advert's title; first box = the document's **InMail** with its greeting line and sign-off removed (no InMail → LinkedIn message → Email 1, warned on the row); the other four boxes cleared on a new template; footer and scheduling link untouched |
+| Found again by | the ledger's `pitch_template` id, else the newest pitch-kind template with exactly that title - so a second run rewrites, and identical text is left alone (`unchanged`) |
+| Read back | `PitchRecipes {startupId}` → `startup.recruit.pitchRecipes[]` (`id, title, kind, recruiterDescription, cta, footer, …`); a save Wellfound did not keep fails the half |
+| Merge tokens | Wellfound's box has none. A `{company}`-style token left in the message is warned about on the row |
+| Delete | `[data-test='PitchRecipes-Delete--<id>']`, confirmed by the **browser's own `confirm()`** - no dialog in the page, no call until it is answered, and Playwright answers an unhandled one with Cancel. The delete accepts that one prompt |
+
+### The saved search
+
+| What | How |
+|---|---|
+| Where | Find Talent → *+ New Search* (`/recruit/search/new`): `#form-input--title`, a function radio (Engineering, Design, Sales, Product, Operations, Marketing, Management, Other), then **a role checklist that only appears once a function is chosen and is required** ("Please select a role"), `Create search` → `/recruit/source/<id>` |
+| Filters | a column of sections, each header `[data-test='toggle control']`: Keyword (boolean box), Role, Location (office select + place picker + "Authorized to work in the US"), Skill, Experience (three sliders, two ticks), Diversity Boost, Education, Preferences. The pickers are Downshift inputs (`Find a role` / `Find a location` / `Find a skill`) offering `[role=option]` rows from Wellfound's own lists |
+| How filters save | **there is no save.** Every change re-runs `RecruitSearchResult` with `configurationInput {filterConfiguration, keyword, savedSearchId, bucket, sort, page, perPage}` and the server keeps the configuration. `SearchFilters {savedSearchId, startupId}` reads it back as `searchCriteria[]` |
+| What the run sets | **role** (ticked at creation: the advert's category, else `Software Engineer`), **location** (the JD's candidate location, else the row's, through the recipe's shorthand map), **skills** (the profile's must-haves in order until `WELLFOUND_SEARCH_MAX_SKILLS` = 3 are accepted - every skill is a required filter), **minimum years** (clamped to the slider's 10) |
+| Years | not the slider: the stored filters are rebuilt into a `filterConfiguration`, `totalExperience` set, and the search call sent from inside the tab. Proven: 6+ read back |
+| Skill names | Wellfound spells them out: typing `AWS` offers only `AWS CloudFormation`. A short alias table maps `AWS` → `Amazon Web Services` and a few like it; a skill is never matched by prefix. `CI/CD` is not on the list |
+| The pitch template | attached with `SavedSearchPreferredPitchRecipeUpdate {input: {pitchRecipeId, savedSearchId}}`, so it is the one offered when pitching from the search |
+| Not set | similar titles, target companies, the boolean keyword (each narrows a search that is already an AND of everything), and the **job link** - see below |
+| Found again by | the ledger's `saved_search` id, else a search with exactly that name in the sidebar's *All Searches* tab (first page only) |
+| Delete | `SavedSearchDelete {input: {savedSearchId}}`, after reading the search's heading back against the recorded name. Proven |
+
+**The "Linked to <job>" button is not to be touched.** Its dropdown offers
+published listings only (`jobListings(public: true)`), so a draft cannot be
+linked anyway - and opening it and pressing Escape clears the selection and
+saves at once. The mapping probe did exactly that on 2026-11-12 and
+**unlinked saved search 2869922 (*Senior Engineering Manager / Backend, APIs
+/ Fraud and Identity / Remote*) from its job.** Relinking was not done by the
+automation: on that search press *Link to job* and choose the job of the
+same name.
+
+**When a job is published, Wellfound makes a saved search itself**, named as
+the job and filled from it (role, location, skills, years). A role posted by
+the automation and then published by a recruiter therefore has two; the
+second is the linked one.
+
+### The calls
+
+Persisted operations, as for the delete. **The registry is no longer
+reachable through `window.webpackChunkangellist`** - the app ships Next.js
+style chunks now (`4943-<hash>.js` holds the table, 657 operations), so
+[wellfound_delete.py](../../app/platforms/wellfound_delete.py)'s live lookup
+finds nothing and it runs on its shipped hash (unchanged on 2026-11-12:
+`DestroyJobListing` is still `bc24373b…`). The new code learns each
+operation's id, the request headers and the company's `startupId` from the
+page's own traffic ([wellfound_api.py](../../app/platforms/wellfound_api.py)).
+Probes, all read-only: [probe_wellfound_recruit.py](../../scripts/probe_wellfound_recruit.py)
+(the pages), [probe_wellfound_forms.py](../../scripts/probe_wellfound_forms.py)
+(the template form and filter sections), [probe_wellfound_operations.py](../../scripts/probe_wellfound_operations.py)
+(the operations and their GraphQL text).
+
+### The row
+
+Each half adds lines to the run's notes (`pitch template created: … (id)`,
+`saved search created: … (role …; location …; skills …; years …)`), records
+`pitch_template` / `pitch_title` / `saved_search` / `search_title` in the
+ledger beside `job`, and the search's link is the row's sourcing link.
+`Ready to Update` rewrites both; `Ready to Delete` removes both, each only
+while it still carries the recorded name.
+
+### Still open
+
+- [x] ~~Relink saved search 2869922 to its job by hand (above).~~ Done by Sohaib, 2026-11-12.
+- [ ] One real post with the half on, read back on Wellfound - the standalone
+  command and the dry-run post are proven, the two together after a live
+  Save draft are not.
+- [ ] Deploy. Until then production posts the advert only.
+- [ ] A non-engineering role: the function is guessed from the title and the
+  role checklist differs per function; a role the checklist does not offer
+  stops the search with the list of what it does offer.
+- [ ] `find_search` reads the first page of the sidebar only.

@@ -215,6 +215,18 @@ class Settings(BaseSettings):
     noon_sender_email: str = "marcus@trust-in.co.uk"
     noon_sender_name: str = "Marcus Gardiner-hill"
 
+    # Wellfound's recruiter half (2026-11-12): a pitch template per role, from
+    # the document's InMail, and a saved search under Find Talent, from the
+    # shared sourcing profile. Each was created, rewritten, read back and
+    # deleted on ZZ TEST records on 2026-11-12. Neither contacts a candidate.
+    # The search also needs CRITERIA_ENABLED, the switch for every platform's
+    # sourcing half.
+    wellfound_pitch_enabled: bool = True
+    wellfound_search_enabled: bool = True
+    # Every skill on a Wellfound search is a required filter, so the list is
+    # the essentials only and short; more than a few returns nobody.
+    wellfound_search_max_skills: int = 3
+
     # --- criteria drafting --------------------------------------------------
     # A platform's own generator (Loxo's "Write with AI") does not always fill
     # every criteria bucket. The advert says what the role needs, so the gaps

@@ -1138,3 +1138,62 @@ Two smaller decisions ride with it:
   refused, as the delete refuses it; a row with nothing to rewrite gets a
   fresh draft, named as created on the row. Built, unproven live -
   [platforms/wellfound](platforms/wellfound.md#updating-a-row-2026-11-05).
+
+## D-032 · Wellfound's outreach is a pitch template, and its sourcing a saved search
+
+**Status** Accepted — built and proven live on ZZ TEST records 2026-11-12
+**Date** 2026-11-12
+**Where** `app/platforms/wellfound_pitch.py`, `app/platforms/wellfound_search.py`, `app/platforms/wellfound_api.py`, `app/platforms/wellfound.py` (`_pitch_and_search`), `app/config.py` — [04-configuration](04-configuration.md), [platforms/wellfound](platforms/wellfound.md#pitch-template-and-saved-search-2026-11-12)
+
+### Context
+
+Wellfound was a job board to this system: one advert, saved as a draft. Its
+recruiter side has two more things the team builds by hand for every role
+(read off the account 2026-11-12: sixteen pitch templates, about forty saved
+searches) - a *pitch template* under Settings → Templates, and a *saved
+search* under Find Talent. Sohaib asked for both to be made with the post.
+
+Wellfound has no sequence. A candidate is pitched once, from a search, with
+one note; replies continue in Messages. So "post the sequence" cannot mean
+what it means on noon, Loxo or Juicebox.
+
+### Decision
+
+- **The pitch is the document's InMail step.** It is the one complete cold
+  message with no thread behind it. No InMail: the LinkedIn message, then
+  Email 1, with a warning on the row. The greeting and sign-off are dropped
+  (Wellfound adds the name above and the template's footer below); the
+  follow-up emails are not used anywhere on Wellfound.
+- **One template and one search per role, named as the Wellfound advert's
+  title**, found again by the ledger's ids or by that exact name, so a
+  re-post or a `Ready to Update` rewrites rather than duplicates.
+- **The template form and the filter pickers are driven in the page; reads,
+  the years filter, the template-to-search link and the search delete go
+  through Wellfound's own GraphQL calls** from inside the tab. The pickers
+  are the only way to turn a word into Wellfound's criterion id; the years
+  control is a slider, and the page saves filters by re-running its search
+  call, so that call is sent with the years in it.
+- **Few skills.** Every skill on a Wellfound search is a required filter.
+  The must-have list is tried in order until three are accepted
+  (`WELLFOUND_SEARCH_MAX_SKILLS`). Similar titles, target companies and the
+  boolean string from the shared profile are not set: each narrows further.
+- **Nothing is sent.** A template and a search contact nobody; pitching
+  stays a recruiter pressing *Request to chat*.
+- **A failure is a warning, not a failed post.** The draft advert is already
+  saved by the time this half runs.
+
+### Consequences
+
+- The search cannot be linked to its job: Wellfound's link dropdown offers
+  published listings only, and the listing is a draft. Publishing the job
+  makes Wellfound create a second, linked search of its own; the recruiter
+  keeps whichever they prefer.
+- Wellfound's Code of Conduct bans contacting candidates on behalf of other
+  companies as well as posting for them. This half makes that easier to do
+  at volume; the accepted risk recorded in the platform brief now covers
+  sourcing as well as posting.
+- Deleting a row removes the template and the search it recorded, each
+  checked by name first; one a recruiter has renamed is left and named.
+- The persisted-operation ids are learned from the page's own traffic, with
+  a shipped table as the fallback, because the webpack global the older
+  delete read them from is gone (see the platform brief).

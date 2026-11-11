@@ -20,7 +20,14 @@ WELLFOUND_YAML = Path(__file__).resolve().parents[1] / "platforms" / "wellfound.
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(_env_file=None, ledger_path=str(tmp_path / "posted-rows.json"))
+    # These tests are about the advert; the pitch template and saved search
+    # need a live page and have their own tests.
+    return Settings(
+        _env_file=None,
+        ledger_path=str(tmp_path / "posted-rows.json"),
+        wellfound_pitch_enabled=False,
+        wellfound_search_enabled=False,
+    )
 
 
 def _row(**props) -> NotionRow:

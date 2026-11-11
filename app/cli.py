@@ -982,6 +982,104 @@ def _print_delete(report: Any, dry_run: bool) -> None:
         console.print("[dim]Dry run: nothing was deleted and the row was not changed. Use --live.[/dim]")
 
 
+@app.command("wellfound-sourcing")
+def wellfound_sourcing(
+    doc: str = typer.Option(
+        ..., "--doc",
+        help="A .docx path or share link. Its InMail is the pitch; its Client "
+             "JD (else the advert) is what the search's filters are drafted from.",
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live",
+        help="A dry run opens Wellfound, says what it would create or rewrite, "
+             "and saves nothing.",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name",
+        help="Name the template and the search this instead of the advert's "
+             "title - 'ZZ TEST delete me ...' for a proving run.",
+    ),
+    pitch: bool = typer.Option(True, "--pitch/--no-pitch", help="The role's pitch template."),
+    search: bool = typer.Option(True, "--search/--no-search", help="The role's saved search."),
+    set_: list[str] = typer.Option(
+        [], "--set", metavar="COLUMN=VALUE",
+        help="Stand in for a Notion column, e.g. --set 'Location=NY'. Repeatable.",
+    ),
+    headed: bool = typer.Option(False, "--headed", help="Watch the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Wellfound's recruiter half on its own: the role's pitch template and
+    its saved search under Find Talent, with no advert posted.
+
+    What `post wellfound` does after the draft saves, once
+    WELLFOUND_PITCH_ENABLED / WELLFOUND_SEARCH_ENABLED are on - and how each
+    is proven on a ZZ TEST document first. Nothing contacts a candidate. See
+    docs/platforms/wellfound.md#pitch-template-and-saved-search-2026-11-12.
+    """
+    settings = _setup(verbose)
+    if headed:
+        settings.headless = False
+    # The command is the switch; the settings gate only the unattended run.
+    settings.wellfound_pitch_enabled = pitch
+    settings.wellfound_search_enabled = search
+    settings.criteria_enabled = True
+    row = _stand_in_row(set_) if set_ else None
+
+    try:
+        report = asyncio.run(_wellfound_sourcing(doc, settings, dry_run, row, name))
+    except PipelineError as exc:
+        _fail(str(exc))
+        return
+
+    for line in report.warnings:
+        colour = "yellow" if line.startswith(("pitch:", "search:", "search skipped", "pitch/search stopped")) else "white"
+        console.print(f"  [{colour}]{line}[/{colour}]")
+    for key, value in report.records.items():
+        console.print(f"  [dim]{key}: {value}[/dim]")
+    if report.sourcing_url:
+        console.print(f"\n[bold]search[/bold]  {report.sourcing_url}")
+    if dry_run:
+        console.print("\n[dim]Dry run: nothing was saved on Wellfound. Use --live.[/dim]")
+    elif report.records:
+        fields = " ".join(f"--record {k}={v!r}" for k, v in report.records.items())
+        console.print(f"\n[dim]To remove these: python -m app.cli delete wellfound {fields} --dry-run[/dim]")
+
+
+async def _wellfound_sourcing(
+    doc: str, settings: Any, dry_run: bool, row: Any, name: str | None = None
+) -> Any:
+    from app.models import Advert
+    from app.pipeline import enrich_advert, load_document
+    from app.platforms import BrowserRunner, SessionStore, get_adapter, load_recipes, resolve
+    from app.platforms.engine import RunReport
+
+    recipe = resolve("wellfound", load_recipes(settings))
+    if recipe is None:
+        raise PipelineError("No recipe named 'wellfound'.")
+    document = await load_document(doc, settings)
+    for filled in enrich_advert(document, row, settings):
+        console.print(f"[dim]from --set: {filled}[/dim]")
+    if name:
+        # Both halves are named after the Wellfound advert's title.
+        advert = document.advert_for(recipe.key) or document.advert
+        if advert is None:
+            document.advert = Advert(title=name, body_text="", body_html="")
+        else:
+            advert.title = name
+    SessionStore(settings).require_profile(recipe.key, recipe.label)
+
+    async with BrowserRunner(settings) as runner:
+        adapter = get_adapter("wellfound", runner=runner, settings=settings, dry_run=dry_run)
+        async with runner.profile_context(
+            recipe.key, trace_name="wellfound-sourcing", channel=recipe.browser_channel
+        ) as (context, page):
+            # Raises with the "run login" message when the session has gone.
+            await adapter.ensure_logged_in(page)
+            report = RunReport()
+            await adapter._pitch_and_search(page, document, row, report)
+            return report
+
+
 @app.command("juicebox-sourcing")
 def juicebox_sourcing(
     doc: str = typer.Option(

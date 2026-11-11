@@ -57,6 +57,25 @@ def find_listing(row: NotionRow | None, settings: Settings) -> tuple[str, str] |
     return None
 
 
+def recorded_ids(row: NotionRow | None, settings: Settings) -> dict[str, str]:
+    """The pitch template and saved search this row's newest post recorded,
+    for an update to rewrite rather than duplicate. Empty when the ledger
+    has none (a post from before 2026-11-12, or the half was off)."""
+    if row is None:
+        return {}
+    from app.ledger import Ledger
+
+    entry = Ledger(settings.ledger_file).get(row.page_id)
+    if not entry or "wellfound" in entry.deleted:
+        return {}
+    found: dict[str, str] = {}
+    for record in reversed(entry.records.get("wellfound", [])):
+        for key in ("pitch_template", "saved_search"):
+            if record.get(key) and key not in found:
+                found[key] = str(record[key])
+    return found
+
+
 def update_steps(steps: list[Step], job_id: str) -> list[Step]:
     """The posting steps, re-aimed at an existing listing's edit form.
 
@@ -100,7 +119,142 @@ class WellfoundAdapter(RecipeAdapter):
             advert = document.advert_for(self.recipe.key)
             if advert is not None and advert.title.strip():
                 report.records.setdefault("job_title", advert.title.strip()[:150])
+        await self._pitch_and_search(page, document, row, report)
         return report
+
+    async def _pitch_and_search(
+        self,
+        page: "Page",
+        document: ParsedDocument,
+        row: NotionRow | None,
+        report: RunReport,
+        *,
+        template_id: str = "",
+        search_id: str = "",
+    ) -> None:
+        """The recruiter half of a Wellfound role: its pitch template and its
+        saved search (2026-11-12).
+
+        The advert is what candidates find; these are what a recruiter uses
+        to go and find candidates - the note they pitch with
+        ([wellfound_pitch](wellfound_pitch.py)) and the filtered search they
+        pitch from ([wellfound_search](wellfound_search.py)). Neither
+        contacts anyone. `WELLFOUND_PITCH_ENABLED` / `WELLFOUND_SEARCH_ENABLED`
+        switch each off.
+
+        Same containment as every other sourcing half: the advert is already
+        saved, so a failure here is a warning on the row and a screenshot,
+        never a failed post.
+        """
+        settings = self.settings
+        want_pitch = bool(settings.wellfound_pitch_enabled)
+        want_search = bool(settings.wellfound_search_enabled and settings.criteria_enabled)
+        if not (want_pitch or want_search):
+            return
+        from app.platforms.browser import save_failure
+        from app.platforms.wellfound_api import WellfoundTap
+
+        advert = document.advert_for(self.recipe.key) or document.advert
+        title = (advert.title.strip() if advert is not None and advert.title else "")[:150]
+        tap = None
+        try:
+            tap = WellfoundTap(page)
+            if want_pitch:
+                template_id = await self._pitch(page, tap, document, report, title, template_id)
+            if want_search:
+                await self._search(page, tap, document, row, report, title, search_id, template_id)
+        except Exception as exc:  # contained: the advert is saved either way
+            if want_search and report.sourcing is None:
+                report.sourcing = "failed"
+            first_line = (str(exc).strip().splitlines() or [exc.__class__.__name__])[0][:300]
+            report.warnings.append(f"pitch/search stopped: {first_line}")
+            log.warning("wellfound pitch/search failed", extra={"error": first_line})
+            try:
+                await save_failure(page.context, page, "wellfound-sourcing-failed", settings)
+            except Exception:
+                pass
+        finally:
+            if tap is not None:
+                tap.detach()
+
+    async def _pitch(self, page, tap, document, report, title: str, template_id: str) -> str:
+        from app.platforms.wellfound_pitch import pitch_from, save_pitch
+
+        pitch = pitch_from(document, title=title)
+        if pitch is None:
+            report.warnings.append(
+                "pitch: the document has no InMail, LinkedIn or email message to make a "
+                "Wellfound pitch template from - none was created"
+            )
+            return template_id
+        result = await save_pitch(page, tap, pitch, dry_run=self.dry_run, template_id=template_id)
+        report.warnings.extend(result.warnings)
+        report.warnings.append(f"{result.summary}, from the document's {pitch.source}")
+        if result.template_id and not self.dry_run:
+            report.records["pitch_template"] = result.template_id
+            report.records["pitch_title"] = result.title
+        return result.template_id or template_id
+
+    async def _search(
+        self, page, tap, document, row, report, title: str, search_id: str, template_id: str
+    ) -> None:
+        from app.pipeline import _row_text
+        from app.platforms.juicebox_sourcing import split_locations
+        from app.platforms.sourcing_profile import ensure_sourcing
+        from app.platforms.targeting_ai import sourcing_location
+        from app.platforms.wellfound_search import SearchPlan, function_for, set_up_search
+
+        advert = document.advert_for(self.recipe.key) or document.advert
+        row_location = _row_text(row, self.settings.prop_location) if row is not None else None
+        advert_location = advert.location if advert is not None else None
+        profile = await ensure_sourcing(
+            document, self.settings, role_title=title, location=row_location or advert_location or ""
+        )
+        if profile is None or profile.is_empty:
+            report.sourcing = "skipped"
+            report.warnings.append(
+                "search skipped: no skills could be drafted for it (is ANTHROPIC_API_KEY set here?)"
+            )
+            return
+        if not title:
+            report.sourcing = "skipped"
+            report.warnings.append("search skipped: the advert has no title to name it by")
+            return
+        places = split_locations(sourcing_location(profile.candidate_location, row_location, advert_location))
+        # The recipe's own shorthand table (NY -> New York City): Wellfound's
+        # location list is the same one the job form uses.
+        shorthand = next(
+            (s.params.get("map") or {} for s in self.recipe.steps
+             if s.action == "combobox" and "location" in str(s.params.get("description") or "")),
+            {},
+        )
+        location = places[0] if places else ""
+        function = function_for(title)
+        category = (advert.category or "").strip() if advert is not None else ""
+        plan = SearchPlan(
+            title=title,
+            function=function,
+            # Wellfound's role list is its own; the recipe's default is the
+            # one engineering role known to be on it.
+            role=category or (str(self.recipe.defaults.get("default_role") or "") if function == "Engineering" else ""),
+            location=str(shorthand.get(location, location)),
+            # Every skill on a Wellfound search is required, so each one
+            # narrows it: the essentials only, and few of them kept.
+            skills=list(profile.must_have_skills),
+            max_skills=self.settings.wellfound_search_max_skills,
+            min_years=profile.min_years,
+        )
+        result = await set_up_search(
+            page, tap, plan, dry_run=self.dry_run, search_id=search_id, template_id=template_id
+        )
+        report.warnings.extend(result.warnings)
+        report.warnings.append(result.summary)
+        report.sourcing = "set" if not self.dry_run else report.sourcing
+        if result.url and not self.dry_run:
+            report.records["saved_search"] = result.search_id
+            report.records["search_title"] = result.title
+            if not report.sourcing_url:
+                report.sourcing_url = result.url
 
     async def _update(
         self, page: "Page", document: ParsedDocument, row: NotionRow | None
@@ -163,6 +317,14 @@ class WellfoundAdapter(RecipeAdapter):
         # something new to delete, and this listing is already there.
         report.sourcing_url = f"{APP}/recruit/jobs/{job_id}"
         report.captures.pop("post_url", None)
+        # The pitch template and saved search follow the document too: the
+        # ones the post recorded are rewritten, else found by the role's name.
+        recorded = recorded_ids(row, self.settings)
+        await self._pitch_and_search(
+            page, document, row, report,
+            template_id=recorded.get("pitch_template", ""),
+            search_id=recorded.get("saved_search", ""),
+        )
         return report
 
     async def _delete(
@@ -174,6 +336,13 @@ class WellfoundAdapter(RecipeAdapter):
 
         done, notes = True, []
         for record in records:
+            # What the recruiter half made for this post, when it ran.
+            if record.get("pitch_template") or record.get("saved_search"):
+                gone, extra = await self._delete_pitch_and_search(page, record)
+                notes.extend(extra)
+                done = done and gone
+                if not (record.get("job") or record.get("post_url")):
+                    continue
             if not job_id_from(record.get("job") or record.get("post_url")):
                 done = False
                 notes.append(
@@ -190,4 +359,33 @@ class WellfoundAdapter(RecipeAdapter):
                 done = False
             elif self.dry_run and report.refused:
                 done = False
+        return done, notes
+
+    async def _delete_pitch_and_search(self, page: "Page", record: dict[str, str]) -> tuple[bool, list[str]]:
+        """Remove a post's pitch template and saved search. Each is read back
+        by the name the post recorded first; one a recruiter has renamed is
+        left alone and named."""
+        from app.platforms.wellfound_api import WellfoundTap
+        from app.platforms.wellfound_pitch import delete_pitch
+        from app.platforms.wellfound_search import delete_search
+
+        done, notes = True, []
+        tap = WellfoundTap(page)
+        try:
+            for key, title_key, remove in (
+                ("saved_search", "search_title", delete_search),
+                ("pitch_template", "pitch_title", delete_pitch),
+            ):
+                if not record.get(key):
+                    continue
+                try:
+                    gone, note = await remove(
+                        page, tap, record[key], expect_title=record.get(title_key, ""), dry_run=self.dry_run
+                    )
+                except PlatformError as exc:
+                    gone, note = False, f"{key.replace('_', ' ')} {record[key]}: {exc}"
+                notes.append(note)
+                done = done and gone
+        finally:
+            tap.detach()
         return done, notes

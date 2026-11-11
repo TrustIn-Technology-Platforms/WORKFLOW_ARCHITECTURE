@@ -132,6 +132,9 @@ supported state: the gaps stay empty and the run says which ones did.
 | `CRITERIA_MODEL` | `claude-opus-5` | Model used for that drafting. |
 | `SOURCING_MAX_TITLES` | `15` | How many similar job titles Claude drafts for a search's title filter (Loxo Source, Juicebox). Raised from 10 on 2026-09-03. |
 | `SOURCING_MAX_SKILLS` | `20` | How many hard skills Claude drafts for the skills filter. Raised from 12 on 2026-09-03. |
+| `WELLFOUND_PITCH_ENABLED` | `true` | After a Wellfound draft saves, write the role's pitch template (Settings → Templates) from the document's InMail. Contacts nobody. `false` leaves templates to the recruiters. ([D-032](11-decisions.md#d-032--wellfounds-outreach-is-a-pitch-template-and-its-sourcing-a-saved-search)) |
+| `WELLFOUND_SEARCH_ENABLED` | `true` | After a Wellfound draft saves, create the role's saved search under Find Talent from the sourcing profile. Also needs `CRITERIA_ENABLED`. Contacts nobody. |
+| `WELLFOUND_SEARCH_MAX_SKILLS` | `3` | How many skill filters the saved search gets. Every skill on a Wellfound search is required, so each one narrows it; the must-have list is tried in order until this many are accepted. |
 | `SOURCING_MAX_COMPANIES` | `30` | How many same-stage companies Claude drafts for Loxo's Past Company and Juicebox's Companies filters. Raised from 15 and 20 on 2026-09-03. Every extra chip is one autocomplete round trip, about 6s on Juicebox. |
 | `STUCK_POSTING_MINUTES` | `45` | A row untouched on `Posting` this long is taken as orphaned by a dead process (a redeploy) and marked Failed with a note. Longer than any live run on three platforms takes. |
 | `STUCK_SWEEP_MINUTES` | `10` | How often the deployed service sweeps for such rows (also once at startup). |
