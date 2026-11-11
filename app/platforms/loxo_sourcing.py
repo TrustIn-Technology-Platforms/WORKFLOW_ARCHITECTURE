@@ -1,7 +1,7 @@
 """Write a Loxo job's candidate criteria — the browser half of the Skill DNA.
 
 `loxo_criteria` reads and rewrites the criteria; `criteria_ai` drafts whatever
-came back empty. This is what puts the result back on the job: open `Manage`,
+came back empty. This is what puts the result back on the job: open `Setup`,
 replace the Job Description, press Save.
 
 That field is the only place Loxo keeps criteria, so writing it means rewriting
@@ -49,6 +49,7 @@ APP = "https://app.loxo.co"
 # (internal notes, empty) cannot be mistaken for it.
 DESCRIPTION = "[class*=AgenticJobDescriptionField] [class*=FakeTextAreaContent]"
 QUILL = ".ql-editor"
+SETUP_TAB = "[data-testid=job_header__detailsTab]"
 
 READ_DESCRIPTION = """() => {
   let box = document.querySelector('[class*=AgenticJobDescriptionField] [class*=FakeTextAreaContent]');
@@ -109,8 +110,15 @@ def _backup_dir(settings: Settings) -> Path:
     return directory
 
 
-async def _open_manage(page: "Page", job_id: str, agency_id: str) -> None:
-    url = f"{APP}/agencies/{agency_id}/jobs/{job_id}/overview"
+async def _open_setup(page: "Page", job_id: str, agency_id: str) -> None:
+    """Open the job's Setup tab, where the description lives.
+
+    Until November 2026 this was a `Manage` button on the job overview. Loxo
+    replaced it with a tab row (Setup / Candidates / Activity / Analytics /
+    Settings); `/overview` now lands on Activity and there is no `Manage` to
+    click. Setup is `/details`, and it holds the same description component.
+    """
+    url = f"{APP}/agencies/{agency_id}/jobs/{job_id}/details"
     await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
     # The app renders nothing for 10-20s on a cold load; this is not a failure.
     await page.wait_for_timeout(16_000)
@@ -119,15 +127,67 @@ async def _open_manage(page: "Page", job_id: str, agency_id: str) -> None:
             f"Loxo did not open job {job_id} - landed on {page.url}. The session "
             "may have expired: python -m app.cli login loxo"
         )
-    await page.get_by_text("Manage", exact=True).first.click(timeout=15_000)
-    await page.wait_for_timeout(15_000)
+    if "/details" not in page.url:
+        # Loxo sent the deep link to another tab; the tab itself still works.
+        await page.locator(SETUP_TAB).first.click(timeout=15_000)
+    try:
+        await page.locator(DESCRIPTION).first.wait_for(state="attached", timeout=45_000)
+    except Exception as exc:
+        raise PlatformError(
+            f"Loxo's Setup tab for job {job_id} did not show a Job Description "
+            "field. Loxo may have changed the job page again - open the job by "
+            "hand and check where the description is."
+        ) from exc
+    await page.wait_for_timeout(2_000)
+
+
+async def _commit(page: "Page", expected_html: str, job_id: str, agency_id: str) -> None:
+    """Save the open editor, then prove the job kept it.
+
+    The old Manage panel had its own Save behind the editor's. The Setup tab
+    shows none while idle, so it is pressed when present and otherwise the tab
+    is trusted to save on its own - and because either can fail silently, the
+    stored description is read back from a fresh load before anything is
+    reported as saved.
+    """
+    if not await page.evaluate(CLICK_SAVE, "modal"):
+        raise PlatformError(
+            "The description editor's own Save button was not found, so the new "
+            "text was never committed to the form."
+        )
+    await page.wait_for_timeout(4_000)
+    await page.evaluate(CLICK_SAVE, "panel")
+    await page.wait_for_timeout(8_000)
+
+    await _open_setup(page, job_id, agency_id)
+    stored = await _read_description(page)
+    if _squash(stored["text"]) != _squash(await _text_of(page, expected_html)):
+        raise PlatformError(
+            f"Loxo did not keep the new description on job {job_id}: after "
+            "saving, the job still shows different text. Nothing else was "
+            "changed; the description from before the run is in the backup file."
+        )
+
+
+def _squash(text: str) -> str:
+    return "".join(text.split())
+
+
+async def _text_of(page: "Page", html: str) -> str:
+    # The browser's own reading of the HTML, so entities and nesting compare
+    # the way the stored description's text does.
+    return await page.evaluate(
+        "(html) => { const d = document.createElement('div'); d.innerHTML = html;"
+        " return d.textContent || ''; }",
+        html,
+    )
 
 
 async def _read_description(page: "Page") -> dict[str, str]:
     found = await page.evaluate(READ_DESCRIPTION)
     if not found:
         raise PlatformError(
-            "Could not find the Job Description field in Loxo's Manage panel."
+            "Could not find the Job Description field on Loxo's Setup tab."
         )
     return found
 
@@ -152,7 +212,7 @@ async def set_criteria(
     settings = settings or get_settings()
     report = CriteriaReport(job_id=job_id)
 
-    await _open_manage(page, job_id, agency_id)
+    await _open_setup(page, job_id, agency_id)
     current = await _read_description(page)
 
     if GENERATING in current["text"]:
@@ -217,19 +277,7 @@ async def set_criteria(
     await action_fill_rich(run)
     await page.wait_for_timeout(2_000)
 
-    if not await page.evaluate(CLICK_SAVE, "modal"):
-        raise PlatformError(
-            "The description editor's own Save button was not found, so the new "
-            "text was never committed to the form."
-        )
-    await page.wait_for_timeout(4_000)
-
-    if not await page.evaluate(CLICK_SAVE, "panel"):
-        raise PlatformError(
-            "The Manage panel's Save button was not found, so the description "
-            "was edited but not saved to the job."
-        )
-    await page.wait_for_timeout(8_000)
+    await _commit(page, html, job_id, agency_id)
     report.saved = True
 
     log.info(
@@ -242,8 +290,8 @@ async def set_criteria(
 async def read_description(
     page: "Page", job_id: str, *, agency_id: str = "28356"
 ) -> dict[str, str]:
-    """The job's current description, as the Manage panel shows it."""
-    await _open_manage(page, job_id, agency_id)
+    """The job's current description, as the Setup tab shows it."""
+    await _open_setup(page, job_id, agency_id)
     return await _read_description(page)
 
 
@@ -260,7 +308,7 @@ async def restore_description(
     if not html.strip():
         raise PlatformError(f"{backup_path} holds no description to restore.")
 
-    await _open_manage(page, job_id, agency_id)
+    await _open_setup(page, job_id, agency_id)
     await page.locator(DESCRIPTION).first.click(timeout=20_000, force=True)
     await page.wait_for_timeout(3_000)
 
@@ -271,12 +319,7 @@ async def restore_description(
     )
     await action_fill_rich(run)
     await page.wait_for_timeout(2_000)
-    if not await page.evaluate(CLICK_SAVE, "modal"):
-        raise PlatformError("Could not commit the restored text in the editor.")
-    await page.wait_for_timeout(4_000)
-    if not await page.evaluate(CLICK_SAVE, "panel"):
-        raise PlatformError("Could not save the restored description to the job.")
-    await page.wait_for_timeout(8_000)
+    await _commit(page, html, job_id, agency_id)
 
     log.info("loxo description restored", extra={"job": job_id, "from": backup_path})
     return True

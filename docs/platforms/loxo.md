@@ -474,6 +474,32 @@ Two traps, both found by watching it run rather than by reading the DOM:
   over the list as rendered instead, so a job on a later page can be missed —
   which surfaces as "0 jobs match" and a skip, never as the wrong job.
 
+### The job page redesign: `Manage` became the Setup tab (2026-11-11)
+
+Between 4 and 11 November 2026 Loxo replaced the job overview's `Manage` button
+with a tab row: **Setup · Candidates · Activity · Analytics · Settings**
+(`data-testid=job_header__detailsTab` and siblings). `/jobs/<id>/overview` now
+redirects to `/activity`, and every criteria run failed with `TimeoutError:
+Locator.click` waiting for a `Manage` that no longer exists. Seen live on job
+3709763, read-only:
+
+- **Setup is `/jobs/<id>/details`.** It carries Role Title, Hiring Company,
+  Location, the Job Description, and a new structured **Candidate Criteria**
+  block (Years of Experience, Skills, Company Stages, `Show All Criteria`) plus
+  Ideal Candidate Profiles. The left card scores the setup ("5 of 6 Complete").
+- **The description is the same component** (`AgenticJobDescriptionField`, a
+  fake text area), and clicking it opens the same Quill modal with `close ·
+  HTML · Cancel · Save`.
+- **There is no second Save on the tab** while the editor is open or idle, so
+  the tab appears to save on its own once the modal's Save is pressed.
+  `_commit` presses a page-level Save if one shows, then reloads Setup and
+  compares the stored text with what it wrote.
+
+**Status: the open and read path is proven live; the write and the read-back
+comparison are NOT** - no description has been saved through the new tab yet.
+The structured Candidate Criteria block is unmapped and nothing writes to it.
+The section below describes the old Manage panel and is kept for the history.
+
 ### Writing the description: there are two Save buttons
 
 Clicking the read-only description field opens a **Quill editor inside a modal**
